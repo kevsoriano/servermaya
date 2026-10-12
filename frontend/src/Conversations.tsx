@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
+import Draft, { type Order } from './Draft'
 import { api } from './firebase'
 
 type Conversation = { id: string; updated_time: string; snippet: string; customer: { name: string } | null }
 type Message = { id: string; text: string; from_page: boolean; from_name: string; created_time: string; attachments: number }
 
-async function load<T>(path: string): Promise<T> {
-  const r = await api(path)
+async function load<T>(path: string, init?: RequestInit): Promise<T> {
+  const r = await api(path, init)
   if (!r.ok) throw new Error((await r.json().catch(() => null))?.detail ?? `Backend returned ${r.status}`)
   return r.json()
 }
@@ -15,6 +16,8 @@ export default function Conversations() {
   const [openId, setOpenId] = useState<string>()
   const [messages, setMessages] = useState<Message[]>()
   const [error, setError] = useState('')
+  const [order, setOrder] = useState<Order>()
+  const [drafting, setDrafting] = useState(false)
 
   useEffect(() => {
     load<Conversation[]>('/conversations').then(setList, (e) => setError(e.message))
@@ -23,8 +26,17 @@ export default function Conversations() {
   const open = (id: string) => {
     setOpenId(id)
     setMessages(undefined)
+    setOrder(undefined)
     setError('')
     load<Message[]>(`/conversations/${id}`).then(setMessages, (e) => setError(e.message))
+  }
+
+  const createDraft = () => {
+    setDrafting(true)
+    setError('')
+    load<Order>(`/conversations/${openId}/draft-order`, { method: 'POST' })
+      .then(setOrder, (e) => setError(e.message))
+      .finally(() => setDrafting(false))
   }
 
   return (
@@ -58,6 +70,12 @@ export default function Conversations() {
           </li>
         ))}
       </ol>
+      {messages && messages.length > 0 && !order && (
+        <button onClick={createDraft} disabled={drafting}>
+          {drafting ? 'Reading the conversation…' : 'Create draft order'}
+        </button>
+      )}
+      {order && <Draft order={order} />}
     </section>
   )
 }

@@ -1,10 +1,15 @@
 import os
 import re
+from functools import lru_cache
 
 import requests
 from fastapi import Depends, FastAPI, Header, HTTPException
+from google import genai
+from google.cloud import firestore
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
+
+import extraction
 
 PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "servermaya-ai-builder-cup")
 # Comma-separated. Empty means nobody gets in.
@@ -12,6 +17,9 @@ ALLOWLIST = {e.strip().lower() for e in os.environ.get("ALLOWLIST_EMAIL", "").sp
 PAGE_ID = os.environ.get("MESSENGER_PAGE_ID", "")
 PAGE_TOKEN = os.environ.get("MESSENGER_PAGE_TOKEN", "")
 GRAPH = "https://graph.facebook.com"
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+# ponytail: one store, add real store ids when a second seller onboards
+STORE = "main"
 
 app = FastAPI()
 _http = google_requests.Request()
@@ -78,6 +86,10 @@ def conversation(conversation_id: str, user: dict = Depends(current_user)):
     # The id goes into a Graph URL sent with the Page token, so only accept the thread-id shape.
     if not re.fullmatch(r"t_\d+", conversation_id):
         raise HTTPException(400, "Invalid conversation id")
+    return fetch_messages(conversation_id)
+
+
+def fetch_messages(conversation_id: str) -> list[dict]:
     data = graph(f"{conversation_id}/messages", fields="id,message,from,created_time,attachments", limit=50)
     return [
         {
@@ -90,3 +102,44 @@ def conversation(conversation_id: str, user: dict = Depends(current_user)):
         }
         for m in reversed(data.get("data", []))  # Graph returns newest first
     ]
+
+
+@lru_cache
+def clients():
+    """Created on first use so tests and Messenger-only routes need no Google credentials."""
+    return genai.Client(vertexai=True, project=PROJECT_ID, location="global"), firestore.Client(project=PROJECT_ID)
+
+
+def orders():
+    return clients()[1].collection("stores").document(STORE).collection("orders")
+
+
+@app.post("/api/conversations/{conversation_id}/draft-order")
+def draft_order(conversation_id: str, user: dict = Depends(current_user)):
+    messages = conversation(conversation_id, user)
+    if not messages:
+        raise HTTPException(400, "Conversation has no messages")
+    try:
+        draft = extraction.extract(clients()[0], GEMINI_MODEL, messages)
+    except Exception:
+        raise HTTPException(502, "Could not extract an order from this conversation")
+    # ponytail: draft lives on the order doc, move to a versions subcollection when editing/confirmation lands
+    order = {
+        "status": "draft",
+        "version": 1,
+        "source": {"type": "messenger", "conversation_id": conversation_id},
+        "messages": messages,  # snapshot of the evidence the draft was built from
+        "draft": draft,
+        "model": GEMINI_MODEL,
+        "created_by": user["email"],
+        "created_at": firestore.SERVER_TIMESTAMP,
+    }
+    ref = orders().document()
+    ref.set(order)
+    return {**ref.get().to_dict(), "id": ref.id}
+
+
+@app.get("/api/orders")
+def list_orders(user: dict = Depends(current_user)):
+    docs = orders().order_by("created_at", direction=firestore.Query.DESCENDING).limit(25).stream()
+    return [{**d.to_dict(), "id": d.id} for d in docs]

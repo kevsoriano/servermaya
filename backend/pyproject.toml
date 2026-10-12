@@ -5,6 +5,8 @@ requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.143.0",
     "google-auth>=2.61.0",
+    "google-cloud-firestore>=2.34.1",
+    "google-genai>=2.29.0",
     "requests>=2.34.2",
     "uvicorn>=0.54.0",
 ]

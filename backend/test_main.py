@@ -59,3 +59,32 @@ def test_conversations(monkeypatch):
         assert len(calls) == 1
     finally:
         main.app.dependency_overrides.clear()
+
+
+def test_finalize_computes_totals_and_drops_bad_citations():
+    from extraction import Claim, Extraction, Item, Text, finalize
+
+    msgs = [{"id": "m1"}, {"id": "m2"}]
+    none = Text(value=None, sources=[])
+    raw = Extraction(
+        items=[
+            Item(name="mug", variant="blue", quantity=3, unit_price_php=180, sources=[1, 1, 2]),
+            Item(name="tumbler", variant=None, quantity=1, unit_price_php=349.99, sources=[2]),
+            Item(name="invented", variant=None, quantity=1, unit_price_php=1, sources=[9]),
+        ],
+        recipient_name=Text(value="Ana", sources=[2]),
+        phone=Text(value="0917", sources=[7]),
+        address=none,
+        delivery_instructions=none,
+        claims=[Claim(kind="payment", text="paid", amount_php=890, reference="r", pressure=True, sources=[2])],
+        clarification_questions=[],
+    )
+    d = finalize(raw, msgs)
+    assert [i["name"] for i in d["items"]] == ["mug", "tumbler"]  # uncited item dropped
+    assert d["items"][0]["sources"] == ["m1", "m2"]
+    assert d["total"] == 3 * 18000 + 34999
+    assert d["recipient_name"]["value"] == "Ana" and d["phone"]["value"] is None  # bad citation withheld
+    assert d["claims"][0]["status"] == "unverified" and d["claims"][0]["amount"] == 89000
+
+    raw.items[0].unit_price_php = None
+    assert finalize(raw, msgs)["total"] is None  # no total when any price is unknown

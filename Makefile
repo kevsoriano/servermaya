@@ -42,4 +42,4 @@ deploy-backend: backend/.env
 
 deploy-frontend:
 	cd frontend && npm run build
-	npx firebase-tools deploy --only hosting --project $(PROJECT)
+	npx firebase-tools deploy --only hosting,firestore:rules --project $(PROJECT)

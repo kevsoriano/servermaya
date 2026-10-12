@@ -56,3 +56,34 @@ button {
   margin: 0;
   overflow-wrap: anywhere;
 }
+
+.draft table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.draft th,
+.draft td {
+  padding: 0.25rem 0.5rem 0.25rem 0;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+}
+
+.draft dt {
+  font-weight: 600;
+  margin-top: 0.5rem;
+}
+
+.draft dd {
+  margin: 0;
+}
+
+.draft abbr {
+  text-decoration: none;
+  cursor: help;
+}
+
+.claim {
+  border-left: 4px solid orange;
+  padding-left: 0.75rem;
+}
