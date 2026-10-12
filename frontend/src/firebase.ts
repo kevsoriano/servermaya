@@ -1,0 +1,21 @@
+import { initializeApp } from 'firebase/app'
+import { getAuth } from 'firebase/auth'
+
+// Public identifiers, not secrets.
+const app = initializeApp({
+  apiKey: 'AIzaSyCpPVizoaE1xP_l2dr8QjK68zTJStKX6fk',
+  authDomain: 'servermaya-ai-builder-cup.firebaseapp.com',
+  projectId: 'servermaya-ai-builder-cup',
+  appId: '1:628763008062:web:a4072a64c9eb3f0ba0c56f',
+})
+
+export const auth = getAuth(app)
+
+/** fetch() against the backend with the signed-in user's ID token attached. */
+export async function api(path: string, init: RequestInit = {}) {
+  const token = await auth.currentUser?.getIdToken()
+  return fetch(`/api${path}`, {
+    ...init,
+    headers: { ...init.headers, Authorization: `Bearer ${token}` },
+  })
+}
