@@ -32,3 +32,30 @@ def test_rejections(monkeypatch):
     assert fake_token(monkeypatch, email="other@example.com").status_code == 403
     assert fake_token(monkeypatch, email_verified=False).status_code == 403
     assert fake_token(monkeypatch, iss="https://securetoken.google.com/other").status_code == 401
+
+
+def test_conversations(monkeypatch):
+    main.app.dependency_overrides[main.current_user] = lambda: {"uid": "u1"}
+    monkeypatch.setattr(main, "PAGE_ID", "99")
+    monkeypatch.setattr(main, "PAGE_TOKEN", "tok")
+    calls = []
+
+    class Resp:
+        ok = True
+
+        def json(self):
+            return {"data": [
+                {"id": "m2", "message": "magkano po?", "from": {"id": "7", "name": "Ana"}},
+                {"id": "m1", "message": "hello", "from": {"id": "99", "name": "Shop"}},
+            ]}
+
+    monkeypatch.setattr(main.requests, "get", lambda url, **k: calls.append((url, k)) or Resp())
+    try:
+        msgs = client.get("/api/conversations/t_123").json()
+        assert [m["id"] for m in msgs] == ["m1", "m2"]  # oldest first
+        assert [m["from_page"] for m in msgs] == [True, False]
+        assert "tok" not in calls[0][0]  # token is not in the URL
+        assert client.get("/api/conversations/me%3Ffields=access_token").status_code == 400
+        assert len(calls) == 1
+    finally:
+        main.app.dependency_overrides.clear()

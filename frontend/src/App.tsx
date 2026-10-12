@@ -1,5 +1,6 @@
 import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth'
 import { useEffect, useState } from 'react'
+import Conversations from './Conversations'
 import { api, auth } from './firebase'
 
 type Me = { uid: string; email: string; name: string | null }
@@ -39,6 +40,7 @@ export default function App() {
       {!user && <button onClick={signIn}>Sign in with Google</button>}
       {me && <p>Signed in as {me.name ?? me.email} ({me.email}), verified by the backend.</p>}
       {error && <p role="alert">{error}</p>}
+      {me && <Conversations />}
       {user && <button onClick={() => signOut(auth)}>Sign out</button>}
     </main>
   )

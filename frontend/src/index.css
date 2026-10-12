@@ -9,7 +9,7 @@ body {
 
 main {
   max-width: 32rem;
-  margin: 20vh auto 0;
+  margin: 10vh auto 2rem;
   padding: 0 1rem;
 }
 
@@ -17,4 +17,42 @@ button {
   font: inherit;
   padding: 0.5rem 1rem;
   cursor: pointer;
+}
+
+.threads,
+.messages {
+  list-style: none;
+  padding: 0;
+}
+
+.threads button {
+  display: grid;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 0.25rem;
+}
+
+.threads button[aria-current='true'] {
+  outline: 2px solid;
+}
+
+.threads span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messages li {
+  margin: 0.5rem 0;
+  max-width: 85%;
+}
+
+.messages li.page {
+  margin-left: auto;
+  text-align: right;
+}
+
+.messages p {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
