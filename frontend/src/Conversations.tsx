@@ -1,15 +1,9 @@
 import { useEffect, useState } from 'react'
-import Draft, { type Order } from './Draft'
-import { api } from './firebase'
+import { load } from './firebase'
+import OrderView, { type Order } from './OrderView'
 
 type Conversation = { id: string; updated_time: string; snippet: string; customer: { name: string } | null }
 type Message = { id: string; text: string; from_page: boolean; from_name: string; created_time: string; attachments: number }
-
-async function load<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await api(path, init)
-  if (!r.ok) throw new Error((await r.json().catch(() => null))?.detail ?? `Backend returned ${r.status}`)
-  return r.json()
-}
 
 export default function Conversations() {
   const [list, setList] = useState<Conversation[]>()
@@ -75,7 +69,7 @@ export default function Conversations() {
           {drafting ? 'Reading the conversation…' : 'Create draft order'}
         </button>
       )}
-      {order && <Draft order={order} />}
+      {order && <OrderView order={order} onChange={setOrder} />}
     </section>
   )
 }

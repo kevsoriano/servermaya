@@ -1,6 +1,7 @@
 import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth'
 import { useEffect, useState } from 'react'
 import Conversations from './Conversations'
+import Orders from './Orders'
 import { api, auth } from './firebase'
 
 type Me = { uid: string; email: string; name: string | null }
@@ -10,6 +11,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>()
   const [me, setMe] = useState<Me>()
   const [error, setError] = useState('')
+  const [tab, setTab] = useState<'conversations' | 'orders'>('conversations')
 
   useEffect(
     () =>
@@ -40,7 +42,17 @@ export default function App() {
       {!user && <button onClick={signIn}>Sign in with Google</button>}
       {me && <p>Signed in as {me.name ?? me.email} ({me.email}), verified by the backend.</p>}
       {error && <p role="alert">{error}</p>}
-      {me && <Conversations />}
+      {me && (
+        <nav>
+          <button onClick={() => setTab('conversations')} aria-current={tab === 'conversations'}>
+            Conversations
+          </button>{' '}
+          <button onClick={() => setTab('orders')} aria-current={tab === 'orders'}>
+            Orders
+          </button>
+        </nav>
+      )}
+      {me && (tab === 'conversations' ? <Conversations /> : <Orders />)}
       {user && <button onClick={() => signOut(auth)}>Sign out</button>}
     </main>
   )

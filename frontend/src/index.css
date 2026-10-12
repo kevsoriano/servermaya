@@ -32,7 +32,7 @@ button {
   margin-bottom: 0.25rem;
 }
 
-.threads button[aria-current='true'] {
+button[aria-current='true'] {
   outline: 2px solid;
 }
 
@@ -57,28 +57,28 @@ button {
   overflow-wrap: anywhere;
 }
 
-.draft table {
+.order table {
   width: 100%;
   border-collapse: collapse;
   text-align: left;
 }
 
-.draft th,
-.draft td {
+.order th,
+.order td {
   padding: 0.25rem 0.5rem 0.25rem 0;
   border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
 }
 
-.draft dt {
+.order dt {
   font-weight: 600;
   margin-top: 0.5rem;
 }
 
-.draft dd {
+.order dd {
   margin: 0;
 }
 
-.draft abbr {
+.order abbr {
   text-decoration: none;
   cursor: help;
 }
@@ -86,4 +86,26 @@ button {
 .claim {
   border-left: 4px solid orange;
   padding-left: 0.75rem;
+}
+
+.order label {
+  display: grid;
+  margin: 0.5rem 0;
+}
+
+.order input {
+  font: inherit;
+  padding: 0.25rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.order fieldset {
+  margin-bottom: 0.5rem;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }

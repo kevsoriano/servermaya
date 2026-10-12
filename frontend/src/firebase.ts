@@ -11,6 +11,20 @@ const app = initializeApp({
 
 export const auth = getAuth(app)
 
+export const peso = (centavos: number | null) =>
+  centavos === null ? 'not stated' : (centavos / 100).toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })
+
+async function json<T>(r: Response): Promise<T> {
+  if (!r.ok) throw new Error((await r.json().catch(() => null))?.detail ?? `Backend returned ${r.status}`)
+  return r.json()
+}
+
+/** JSON from an authenticated backend route; throws with the backend's message on failure. */
+export const load = <T,>(path: string, init?: RequestInit) => api(path, init).then((r) => json<T>(r))
+
+/** JSON from a customer-link route, which needs no sign-in. */
+export const loadPublic = <T,>(path: string, init?: RequestInit) => fetch(`/api/public${path}`, init).then((r) => json<T>(r))
+
 /** fetch() against the backend with the signed-in user's ID token attached. */
 export async function api(path: string, init: RequestInit = {}) {
   const token = await auth.currentUser?.getIdToken()
@@ -18,4 +32,11 @@ export async function api(path: string, init: RequestInit = {}) {
     ...init,
     headers: { ...init.headers, Authorization: `Bearer ${token}` },
   })
+}
+
+export const STATUS = {
+  draft: 'Draft',
+  awaiting_confirmation: 'Waiting for customer to confirm',
+  confirmed: 'Confirmed',
+  cancelled: 'Cancelled',
 }
