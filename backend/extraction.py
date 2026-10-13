@@ -106,7 +106,7 @@ def finalize(raw: Extraction, messages: list[dict]) -> dict:
 def extract(client, model: str, messages: list[dict]) -> dict:
     chat = "\n".join(
         f"[{n}] {'SELLER' if m['from_page'] else 'CUSTOMER'}: {m['text']}"
-        + (f" [{m['attachments']} attachment(s), not shown]" if m["attachments"] else "")
+        + (f" [sent {', '.join(a['kind'] for a in m['attachments'])}, not shown to you]" if m["attachments"] else "")
         for n, m in enumerate(messages, 1)
     )
     response = client.models.generate_content(

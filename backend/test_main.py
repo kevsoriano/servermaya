@@ -212,3 +212,24 @@ def test_webhook_signature():
     assert not main.valid_signature(f"t=1700000000,te={sig},li=", raw + b" ", "whsk")
     assert not main.valid_signature(f"t=1700000001,te={sig},li=", raw, "whsk")
     assert not main.valid_signature("", raw, "whsk") and not main.valid_signature("t=1,te=,li=", raw, "whsk")
+
+
+def test_attachments_are_normalised():
+    msg = {
+        "sticker": "https://cdn/sticker.png",
+        "attachments": {"data": [
+            {"mime_type": "image/jpeg", "name": "a.jpg", "image_data": {"url": "https://cdn/a.jpg", "preview_url": "https://cdn/a_p.jpg"}},
+            {"mime_type": "video/mp4", "name": "v.mp4", "video_data": {"url": "https://cdn/v.mp4", "preview_url": "https://cdn/v.jpg"}},
+            {"mime_type": "audio/mp4", "name": "voice.mp4", "file_url": "https://cdn/voice.mp4"},
+            {"mime_type": "application/pdf", "name": "r.pdf", "file_url": "https://cdn/r.pdf"},
+            {"mime_type": "image/png", "name": "bad", "image_data": {"url": "javascript:alert(1)"}},
+            {"mime_type": "image/png", "name": "missing"},
+        ]},
+    }
+    got = main.attachments(msg)
+    assert [(a["kind"], a["url"]) for a in got] == [
+        ("image", "https://cdn/a.jpg"), ("video", "https://cdn/v.mp4"), ("audio", "https://cdn/voice.mp4"),
+        ("file", "https://cdn/r.pdf"), ("image", "https://cdn/sticker.png"),
+    ]
+    assert got[0]["preview_url"] == "https://cdn/a_p.jpg"
+    assert main.attachments({"message": "text only"}) == []

@@ -3,7 +3,25 @@ import { load } from './firebase'
 import OrderView, { type Order } from './OrderView'
 
 type Conversation = { id: string; updated_time: string; snippet: string; customer: { name: string } | null }
-type Message = { id: string; text: string; from_page: boolean; from_name: string; created_time: string; attachments: number }
+type Message = { id: string; text: string; from_page: boolean; from_name: string; created_time: string; attachments: Attachment[] }
+type Attachment = { kind: 'image' | 'video' | 'audio' | 'file'; name: string | null; url: string; preview_url: string | null }
+
+// Links come from Meta and expire, so an old thread may show broken media until it is reloaded.
+function Media({ a }: { a: Attachment }) {
+  if (a.kind === 'image')
+    return (
+      <a href={a.url} target="_blank" rel="noreferrer">
+        <img src={a.preview_url ?? a.url} alt={a.name ?? 'Image from the conversation'} loading="lazy" />
+      </a>
+    )
+  if (a.kind === 'video') return <video src={a.url} poster={a.preview_url ?? undefined} controls preload="metadata" />
+  if (a.kind === 'audio') return <audio src={a.url} controls preload="metadata" />
+  return (
+    <a href={a.url} target="_blank" rel="noreferrer">
+      {a.name ?? 'Attached file'}
+    </a>
+  )
+}
 
 export default function Conversations() {
   const [list, setList] = useState<Conversation[]>()
@@ -59,8 +77,10 @@ export default function Conversations() {
             </small>
             <p>
               {m.text}
-              {m.attachments > 0 && <em> [{m.attachments} attachment{m.attachments > 1 ? 's' : ''}]</em>}
             </p>
+            {m.attachments.map((a, n) => (
+              <Media key={n} a={a} />
+            ))}
           </li>
         ))}
       </ol>

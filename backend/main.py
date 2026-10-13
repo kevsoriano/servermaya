@@ -100,8 +100,24 @@ def conversation(conversation_id: str, user: dict = Depends(current_user)):
     return fetch_messages(conversation_id)
 
 
+def attachments(message: dict) -> list[dict]:
+    """Normalise Messenger attachments to {kind, mime_type, name, url, preview_url}. Anything without an https link is dropped."""
+    out = []
+    for a in message.get("attachments", {}).get("data", []):
+        mime = a.get("mime_type") or ""
+        media = a.get("image_data") or a.get("video_data") or {}
+        kind = mime.split("/")[0] if mime.split("/")[0] in ("image", "video", "audio") else "file"
+        out.append({"kind": kind, "mime_type": mime, "name": a.get("name"), "url": media.get("url") or a.get("file_url"), "preview_url": media.get("preview_url")})
+    if message.get("sticker"):
+        out.append({"kind": "image", "mime_type": "", "name": "sticker", "url": message["sticker"], "preview_url": None})
+    # ponytail: these are Meta's temporary links; copy the files into our own storage (with hashes) when evidence retention lands
+    return [a for a in out if str(a["url"]).startswith("https://")]
+
+
 def fetch_messages(conversation_id: str) -> list[dict]:
-    data = graph(f"{conversation_id}/messages", fields="id,message,from,created_time,attachments", limit=50)
+    data = graph(f"{conversation_id}/messages", fields="id,message,from,created_time,sticker,attachments{id,mime_type,name,size,file_url,image_data,video_data}",
+        limit=50,
+    )
     return [
         {
             "id": m["id"],
@@ -109,7 +125,7 @@ def fetch_messages(conversation_id: str) -> list[dict]:
             "from_page": m.get("from", {}).get("id") == PAGE_ID,
             "from_name": m.get("from", {}).get("name"),
             "created_time": m.get("created_time"),
-            "attachments": len(m.get("attachments", {}).get("data", [])),
+            "attachments": attachments(m),
         }
         for m in reversed(data.get("data", []))  # Graph returns newest first
     ]

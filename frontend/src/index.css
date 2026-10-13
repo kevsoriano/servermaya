@@ -109,3 +109,23 @@ button[aria-current='true'] {
   flex-wrap: wrap;
   gap: 0.5rem;
 }
+
+.messages img,
+.messages video {
+  display: block;
+  max-width: 100%;
+  max-height: 20rem;
+  margin-top: 0.25rem;
+  border-radius: 0.5rem;
+}
+
+.messages li.page img,
+.messages li.page video {
+  margin-left: auto;
+}
+
+.messages audio {
+  display: block;
+  max-width: 100%;
+  margin-top: 0.25rem;
+}
