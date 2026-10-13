@@ -29,6 +29,7 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 STORE = "main"
 PAYMONGO_KEY = os.environ.get("PAYMONGO_SECRET_KEY", "")
 PAYMONGO_WEBHOOK_SECRET = os.environ.get("PAYMONGO_WEBHOOK_SECRET", "")
+LALAMOVE_KEY = os.environ.get("LALAMOVE_API_KEY", "")
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "https://servermaya-ai-builder-cup.web.app")
 
 app = FastAPI()
@@ -380,4 +381,26 @@ async def paymongo_webhook(request: Request):
     if event.get("type") == "checkout_session.payment.paid":
         # The event only tells us where to look; the session we fetch is what counts. Duplicates are harmless.
         await run_in_threadpool(reconcile_session, session_id)
+    return {"received": True}
+
+
+@app.post("/api/webhooks/lalamove")
+async def lalamove_webhook(request: Request):
+    """Capture only: stores the raw event so we can see what the sandbox sends. Nothing acts on these yet.
+
+    Always answers 200, because Lalamove pings the URL when it is registered.
+    """
+    # ponytail: filtered by apiKey only; verify the signature before any order state depends on these events
+    raw = await request.body()
+    try:
+        event = json.loads(raw)
+    except ValueError:
+        event = None
+    if LALAMOVE_KEY and isinstance(event, dict) and event.get("apiKey") == LALAMOVE_KEY and len(raw) < 65536:
+        doc = {"provider": "lalamove", "raw": raw.decode(), "path": request.url.path, "received_at": firestore.SERVER_TIMESTAMP}
+        ref = clients()[1].collection("webhookEvents").document(f"lalamove_{event.get('eventId') or secrets.token_hex(8)}")
+        try:
+            await run_in_threadpool(ref.create, doc)
+        except Exception:
+            pass  # duplicate delivery of an event we already have
     return {"received": True}
