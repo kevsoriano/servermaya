@@ -1,4 +1,4 @@
-"""Order versioning and confirmation rules. Pure functions: each takes the stored order and returns the fields to update."""
+"""Order versioning, confirmation and payment rules. Pure functions: each takes the stored order and returns the fields to update."""
 
 from datetime import datetime
 
@@ -21,6 +21,10 @@ class Edit(BaseModel):
     phone: str | None = Field(default=None, max_length=50)
     address: str | None = Field(default=None, max_length=500)
     delivery_instructions: str | None = Field(default=None, max_length=500)
+
+
+class Cancel(BaseModel):
+    reason: str = Field(default="", max_length=500)
 
 
 class Refused(Exception):
@@ -59,7 +63,10 @@ def edit(order: dict, body: Edit) -> dict:
     draft = {**old, "items": items, "total": total(items), **fields}
     if draft == old:
         return {}
-    return {"draft": draft, "version": order["version"] + 1, "status": "draft", "confirm_token": None}
+    updates = {"draft": draft, "version": order["version"] + 1, "status": "draft", "confirm_token": None}
+    if (order.get("payment") or {}).get("status") == "pending":
+        updates["payment"] = None  # the unpaid request was for the old version; the caller expires it at PayMongo
+    return updates
 
 
 def send(order: dict, token: str) -> dict:
@@ -72,7 +79,7 @@ def send(order: dict, token: str) -> dict:
     return {"status": "awaiting_confirmation", "confirm_token": token}
 
 
-def confirm(order: dict, kind: str, by: str, now: datetime) -> dict:
+def confirm(order: dict, kind: str, by: str, now: datetime, token: str | None = None) -> dict:
     """kind is 'customer' (they pressed Confirm on the link) or 'seller_asserted' (seller says they agreed)."""
     if order["status"] == "confirmed":
         return {}
@@ -83,4 +90,81 @@ def confirm(order: dict, kind: str, by: str, now: datetime) -> dict:
         raise Refused("Fill in first: " + ", ".join(gaps))
     record = {"version": order["version"], "kind": kind, "by": by, "at": now}
     # Appended, never replaced: earlier agreements stay on record.
-    return {"status": "confirmed", "confirmations": order.get("confirmations", []) + [record]}
+    updates = {"status": "confirmed", "confirmations": order.get("confirmations", []) + [record]}
+    if not order.get("confirm_token") and token:
+        updates["confirm_token"] = token  # the customer still needs a link to pay
+    return updates
+
+
+def cancel(order: dict, by: str, reason: str, now: datetime) -> dict:
+    """Cancelling keeps the whole record, including any received payment, and kills the customer link."""
+    if order["status"] == "cancelled":
+        return {}
+    cancelled = {"by": by, "at": now, "reason": reason.strip() or None, "previous_status": order["status"]}
+    updates = {"status": "cancelled", "confirm_token": None, "cancelled": cancelled}
+    if (order.get("payment") or {}).get("status") == "pending":
+        updates["payment"] = None
+    return updates
+
+
+# Payment. order["payment"] is the current request; order["payment_review"] collects money that arrived unexpectedly.
+# ponytail: one payment request on the order doc, split into a payments collection when partial payments or refunds land
+
+
+def reusable_payment(order: dict) -> dict | None:
+    """The existing request to send the customer back to, or None if a new one is needed. Refuses when neither applies."""
+    if order["status"] != "confirmed":
+        raise Refused("The order must be confirmed before payment")
+    payment = order.get("payment")
+    if payment and payment["status"] == "verified":
+        raise Refused("This order is already paid")
+    if payment and payment["status"] == "mismatched":
+        raise Refused("A payment for this order needs the seller's review")
+    return payment if payment and payment["status"] == "pending" else None
+
+
+def request_payment(order: dict, session_id: str, checkout_url: str, livemode: bool, now: datetime) -> dict:
+    if reusable_payment(order):
+        return {}  # another request won the race; the caller expires the spare session
+    return {
+        "payment": {
+            "status": "pending",
+            "session_id": session_id,
+            "checkout_url": checkout_url,
+            "amount": order["draft"]["total"],
+            "version": order["version"],
+            "livemode": livemode,
+            "requested_at": now,
+        }
+    }
+
+
+def reconcile(order: dict, session_id: str, session_status: str, paid: list[dict], now: datetime) -> dict:
+    """Apply what PayMongo reports for one checkout session. `paid` are its successful payments: id, amount, currency, paid_at.
+
+    Safe to call any number of times and in any order: a payment already recorded changes nothing,
+    and a verified payment is never downgraded.
+    """
+    payment = order.get("payment")
+    review = list(order.get("payment_review", []))
+    current = bool(payment) and payment["session_id"] == session_id
+    seen = {r["payment_id"] for r in review} | ({payment.get("payment_id")} if payment else set())
+    updates = {}
+    for p in paid:
+        if p["id"] in seen:
+            continue
+        seen.add(p["id"])
+        received = {"payment_id": p["id"], "paid_amount": p["amount"], "currency": p["currency"], "paid_at": p["paid_at"]}
+        if not current or payment["status"] != "pending":
+            reason = "Payment received on a request that was replaced or cancelled" if not current else "Second payment on the same request"
+            review.append({**received, "session_id": session_id, "reason": reason, "recorded_at": now})
+            updates["payment_review"] = review
+        elif p["amount"] == payment["amount"] and p["currency"] == "PHP":
+            payment = {**payment, **received, "status": "verified"}
+        else:
+            payment = {**payment, **received, "status": "mismatched", "problem": "Paid amount differs from the order total"}
+    if current:
+        if payment["status"] == "pending" and session_status == "expired":
+            payment = {**payment, "status": "expired"}
+        updates["payment"] = {**payment, "checked_at": now}  # freshness of the last successful check
+    return updates

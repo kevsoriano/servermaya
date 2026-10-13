@@ -11,6 +11,18 @@ export type Order = {
   confirm_token: string | null
   confirmations: { version: number; kind: 'customer' | 'seller_asserted'; by: string; at: string }[]
   missing: string[]
+  cancelled?: { by: string; at: string; reason: string | null }
+  payment?: {
+    status: 'pending' | 'verified' | 'mismatched' | 'expired'
+    amount: number
+    version: number
+    livemode: boolean
+    payment_id?: string
+    paid_amount?: number
+    checked_at?: string
+    problem?: string
+  } | null
+  payment_review?: { payment_id: string; paid_amount: number; reason: string }[]
   messages: { id: string; text: string; from_page: boolean }[]
   draft: {
     items: Item[]
@@ -50,11 +62,21 @@ export default function OrderView({ order, onChange }: { order: Order; onChange:
   const [form, setForm] = useState<Form>()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState<'link' | 'details'>()
   const { draft, messages } = order
   const confirmation = order.status === 'confirmed' ? order.confirmations.at(-1) : undefined
   const earlier = order.confirmations.filter((c) => c !== confirmation)
   const link = order.confirm_token && `${location.origin}/c/${order.confirm_token}`
+  const { payment } = order
+  const paymentClaim = draft.claims.find((c) => c.kind === 'payment')
+
+  const details = [
+    ...draft.items.map((i) => `${i.quantity} × ${i.name}${i.variant ? ` (${i.variant})` : ''} - ${peso(i.unit_price === null ? null : i.unit_price * i.quantity)}`),
+    `Total: ${draft.total === null ? 'to be confirmed' : peso(draft.total)}`,
+    '',
+    `Deliver to: ${[draft.recipient_name.value, draft.phone.value, draft.address.value].filter(Boolean).join(', ')}`,
+    ...(draft.delivery_instructions.value ? [`Note: ${draft.delivery_instructions.value}`] : []),
+  ].join('\n')
 
   const call = (path: string, init: RequestInit) => {
     setBusy(true)
@@ -63,7 +85,7 @@ export default function OrderView({ order, onChange }: { order: Order; onChange:
       .then((o) => {
         onChange(o)
         setForm(undefined)
-        setCopied(false)
+        setCopied(undefined)
       })
       .catch((e) => setError(e.message))
       .finally(() => setBusy(false))
@@ -104,6 +126,12 @@ export default function OrderView({ order, onChange }: { order: Order; onChange:
       </sup>
     )
 
+  const cancel = () => {
+    const reason = prompt('Cancel this order? The record is kept. Reason (optional):')
+    if (reason === null) return
+    call('/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }) })
+  }
+
   const setItem = (n: number, patch: Partial<Form['items'][number]>) =>
     setForm((f) => f && { ...f, items: f.items.map((i, k) => (k === n ? { ...i, ...patch } : i)) })
 
@@ -113,6 +141,12 @@ export default function OrderView({ order, onChange }: { order: Order; onChange:
         Order · version {order.version} · {STATUS[order.status]}
       </h2>
 
+      {order.cancelled && (
+        <p role="status">
+          Cancelled by {order.cancelled.by} on {new Date(order.cancelled.at).toLocaleString()}.
+          {order.cancelled.reason && <> Reason: {order.cancelled.reason}</>}
+        </p>
+      )}
       {confirmation?.kind === 'customer' && (
         <p role="status">Customer confirmed version {confirmation.version} through the link on {new Date(confirmation.at).toLocaleString()}.</p>
       )}
@@ -234,16 +268,56 @@ export default function OrderView({ order, onChange }: { order: Order; onChange:
       {!form && order.status !== 'cancelled' && (
         <>
           {order.missing.length > 0 && <p>Before asking the customer to confirm, fill in: {order.missing.join(', ')}.</p>}
-          {link && order.status === 'awaiting_confirmation' && (
+          {(order.status === 'confirmed' || payment) && (
+            <div className={payment?.status === 'verified' ? undefined : 'claim'}>
+              <h3>Payment {payment?.livemode === false && <mark>TEST</mark>}</h3>
+              {!payment && <p>Not requested yet. The customer pays from the link below.</p>}
+              {payment?.status === 'pending' && <p>Waiting for payment of {peso(payment.amount)}. Nothing has been received.</p>}
+              {payment?.status === 'expired' && <p>The payment request expired unpaid. The customer can start again from the link.</p>}
+              {payment?.status === 'verified' && (
+                <p>
+                  <strong>Verified by PayMongo:</strong> {peso(payment.paid_amount ?? null)} received ({payment.payment_id}).
+                  {payment.version !== order.version && <> This was for version {payment.version}; the order has changed since and needs review.</>}
+                </p>
+              )}
+              {payment?.status === 'mismatched' && (
+                <p>
+                  <strong>Needs review:</strong> {payment.problem}. Expected {peso(payment.amount)}, received {peso(payment.paid_amount ?? null)} ({payment.payment_id}).
+                </p>
+              )}
+              {paymentClaim && payment?.status !== 'verified' && (
+                <p>
+                  The customer says they already paid{paymentClaim.reference && <> (reference {paymentClaim.reference})</>}. <strong>No matching verified payment.</strong> Verify before you ship.
+                </p>
+              )}
+              {order.payment_review?.map((r) => (
+                <p key={r.payment_id}>
+                  <strong>Unexpected payment:</strong> {peso(r.paid_amount)} ({r.payment_id}). {r.reason}.
+                </p>
+              ))}
+              {payment && (
+                <p>
+                  <small>{payment.checked_at ? `Last checked with PayMongo ${new Date(payment.checked_at).toLocaleString()}.` : 'Not checked with PayMongo yet.'}</small>{' '}
+                  <button disabled={busy} onClick={() => call('/check-payment', { method: 'POST' })}>
+                    Recheck payment
+                  </button>
+                </p>
+              )}
+            </div>
+          )}
+          {link && (
             <p>
-              Send this link to the customer:
+              {order.status === 'confirmed' ? 'Customer link (order summary and payment):' : 'Send this link to the customer:'}
               <br />
               <input readOnly value={link} onFocus={(e) => e.target.select()} aria-label="Confirmation link" />{' '}
-              <button onClick={() => navigator.clipboard.writeText(link).then(() => setCopied(true))}>{copied ? 'Copied' : 'Copy'}</button>
+              <button onClick={() => navigator.clipboard.writeText(link).then(() => setCopied('link'))}>{copied === 'link' ? 'Copied' : 'Copy'}</button>
             </p>
           )}
           <p className="actions">
             <button onClick={() => setForm(toForm(draft))}>Edit</button>
+            <button onClick={() => navigator.clipboard.writeText(details).then(() => setCopied('details'))}>
+              {copied === 'details' ? 'Copied' : 'Copy order details'}
+            </button>
             {order.status === 'draft' && (
               <button disabled={busy || order.missing.length > 0} onClick={() => call('/send-confirmation', { method: 'POST' })}>
                 Create confirmation link
@@ -257,6 +331,9 @@ export default function OrderView({ order, onChange }: { order: Order; onChange:
                 Customer agreed another way
               </button>
             )}
+            <button disabled={busy} onClick={cancel}>
+              Cancel order
+            </button>
           </p>
         </>
       )}

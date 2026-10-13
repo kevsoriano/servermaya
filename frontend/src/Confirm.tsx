@@ -9,6 +9,8 @@ type Summary = {
   phone: string | null
   address: string | null
   delivery_instructions: string | null
+  payment: 'pending' | 'verified' | 'mismatched' | 'expired' | null
+  test_mode: boolean
 }
 
 export default function Confirm({ token }: { token: string }) {
@@ -16,23 +18,27 @@ export default function Confirm({ token }: { token: string }) {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
-  useEffect(() => {
-    loadPublic<Summary>(`/orders/${token}`).then(setOrder, (e) => setError(e.message))
-  }, [token])
+  // Back from PayMongo: ask the backend to check with PayMongo. Being redirected here proves nothing by itself.
+  const returned = new URLSearchParams(location.search).has('returned')
 
-  const confirm = () => {
+  useEffect(() => {
+    const path = returned ? `/orders/${token}/check-payment` : `/orders/${token}`
+    loadPublic<Summary>(path, { method: returned ? 'POST' : 'GET' }).then(setOrder, (e) => setError(e.message))
+  }, [token, returned])
+
+  const act = (path: string, then: (r: Summary & { checkout_url?: string }) => void) => {
     setBusy(true)
-    loadPublic<Summary>(`/orders/${token}/confirm`, { method: 'POST' })
-      .then(setOrder, (e) => setError(e.message))
+    setError('')
+    loadPublic<Summary>(`/orders/${token}${path}`, { method: 'POST' })
+      .then(then, (e) => setError(e.message))
       .finally(() => setBusy(false))
   }
 
-  if (error) return <main><p role="alert">{error}</p></main>
-  if (!order) return <main>Loading…</main>
+  if (!order) return <main>{error ? <p role="alert">{error}</p> : 'Loading…'}</main>
 
   return (
     <main className="order">
-      <h1>Please check your order</h1>
+      <h1>{order.status === 'confirmed' ? 'Your order' : 'Please check your order'}</h1>
       <table>
         <tbody>
           {order.items.map((i, n) => (
@@ -59,16 +65,38 @@ export default function Confirm({ token }: { token: string }) {
         <dd>{order.address}</dd>
         {order.delivery_instructions && <dd>Note: {order.delivery_instructions}</dd>}
       </dl>
-      {order.status === 'confirmed' ? (
-        <p role="status">
-          <strong>Order confirmed. Thank you!</strong> The seller will send payment details next.
-        </p>
-      ) : (
+      {error && <p role="alert">{error}</p>}
+      {order.status !== 'confirmed' ? (
         <>
           <p>If anything is wrong, message the seller and do not confirm.</p>
-          <button onClick={confirm} disabled={busy}>
+          <button onClick={() => act('/confirm', setOrder)} disabled={busy}>
             {busy ? 'Confirming…' : 'Yes, this is correct'}
           </button>
+        </>
+      ) : order.payment === 'verified' ? (
+        <p role="status">
+          <strong>Payment received. Thank you!</strong> The seller will prepare your order.
+        </p>
+      ) : order.payment === 'mismatched' ? (
+        <p role="status">We received a payment that does not match this order. The seller will contact you.</p>
+      ) : (
+        <>
+          <p role="status">
+            {order.payment === 'pending' && returned
+              ? 'We have not received your payment yet. If you just paid, wait a moment and check again.'
+              : 'Order confirmed. Pay to complete it.'}
+          </p>
+          <p className="actions">
+            <button onClick={() => act('/pay', (r) => r.checkout_url && location.assign(r.checkout_url))} disabled={busy}>
+              Pay {peso(order.total)} with QR Ph
+            </button>
+            {order.payment === 'pending' && (
+              <button onClick={() => act('/check-payment', setOrder)} disabled={busy}>
+                I have paid, check again
+              </button>
+            )}
+          </p>
+          {order.test_mode && <p><mark>TEST</mark> This is a test payment page. No real money moves.</p>}
         </>
       )}
     </main>

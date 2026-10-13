@@ -1,3 +1,6 @@
+import hashlib
+import hmac
+import json
 import os
 import re
 import secrets
@@ -5,7 +8,8 @@ from datetime import datetime, timezone
 from functools import lru_cache
 
 import requests
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from google import genai
 from google.cloud import firestore
 from google.auth.transport import requests as google_requests
@@ -23,6 +27,9 @@ GRAPH = "https://graph.facebook.com"
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 # ponytail: one store, add real store ids when a second seller onboards
 STORE = "main"
+PAYMONGO_KEY = os.environ.get("PAYMONGO_SECRET_KEY", "")
+PAYMONGO_WEBHOOK_SECRET = os.environ.get("PAYMONGO_WEBHOOK_SECRET", "")
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "https://servermaya-ai-builder-cup.web.app")
 
 app = FastAPI()
 _http = google_requests.Request()
@@ -183,9 +190,18 @@ def list_orders(user: dict = Depends(current_user)):
     return [present(d) for d in docs]
 
 
+def retiring(ref, rule, by: str = "") -> dict:
+    """Like change(), and if the rule dropped an unpaid payment request, expire it at PayMongo too."""
+    before = (ref.get().to_dict() or {}).get("payment")
+    order = change(ref, rule, by)
+    if before and before["status"] == "pending" and not order.get("payment"):
+        expire_session(before["session_id"])
+    return order
+
+
 @app.put("/api/orders/{order_id}")
 def edit_order(order_id: str, body: rules.Edit, user: dict = Depends(current_user)):
-    return change(orders().document(order_id), lambda o: rules.edit(o, body), user["email"])
+    return retiring(orders().document(order_id), lambda o: rules.edit(o, body), user["email"])
 
 
 @app.post("/api/orders/{order_id}/send-confirmation")
@@ -196,7 +212,22 @@ def send_confirmation(order_id: str, user: dict = Depends(current_user)):
 @app.post("/api/orders/{order_id}/assert-confirmation")
 def assert_confirmation(order_id: str, user: dict = Depends(current_user)):
     now = datetime.now(timezone.utc)
-    return change(orders().document(order_id), lambda o: rules.confirm(o, "seller_asserted", user["email"], now))
+    token = secrets.token_urlsafe(32)
+    return change(orders().document(order_id), lambda o: rules.confirm(o, "seller_asserted", user["email"], now, token))
+
+
+@app.post("/api/orders/{order_id}/cancel")
+def cancel_order(order_id: str, body: rules.Cancel, user: dict = Depends(current_user)):
+    now = datetime.now(timezone.utc)
+    return retiring(orders().document(order_id), lambda o: rules.cancel(o, user["email"], body.reason, now))
+
+
+@app.post("/api/orders/{order_id}/check-payment")
+def check_payment(order_id: str, user: dict = Depends(current_user)):
+    payment = (orders().document(order_id).get().to_dict() or {}).get("payment")
+    if not payment:
+        raise HTTPException(409, "No payment has been requested for this order")
+    return reconcile_session(payment["session_id"])
 
 
 # Customer link routes. No sign-in: the unguessable token in the link is the credential.
@@ -216,6 +247,8 @@ def customer_view(order: dict) -> dict:
         "items": [{k: i[k] for k in ("name", "variant", "quantity", "unit_price")} for i in d["items"]],
         "total": d["total"],
         **{f: d[f]["value"] for f in rules.FIELDS},
+        "payment": (order.get("payment") or {}).get("status"),
+        "test_mode": (order.get("payment") or {}).get("livemode") is False,
     }
 
 
@@ -234,3 +267,117 @@ def public_confirm(token: str):
         return rules.confirm(order, "customer", "confirmation_link", now)
 
     return customer_view(change(by_token(token).reference, rule))
+
+
+# PayMongo. It owns payment truth: an order is only marked paid from a checkout session we fetched ourselves.
+def paymongo(method: str, path: str, attributes: dict | None = None) -> dict:
+    if not PAYMONGO_KEY:
+        raise HTTPException(503, "Payments are not configured")
+    try:
+        r = requests.request(
+            method,
+            f"https://api.paymongo.com/v1/{path}",
+            auth=(PAYMONGO_KEY, ""),
+            json={"data": {"attributes": attributes}} if attributes else None,
+            timeout=15,
+        )
+        body = r.json()
+    except (requests.RequestException, ValueError):
+        raise HTTPException(502, "Could not reach PayMongo. Payment status is unknown; try again.")
+    if not r.ok:
+        raise HTTPException(502, "PayMongo: " + "; ".join(e.get("detail", "") for e in body.get("errors", [])))
+    return body["data"]
+
+
+def expire_session(session_id: str) -> None:
+    """Best effort. If it fails and the customer pays anyway, reconcile() routes that payment to review."""
+    try:
+        paymongo("POST", f"checkout_sessions/{session_id}/expire")
+    except HTTPException:
+        pass
+
+
+def reconcile_session(session_id: str) -> dict:
+    """Fetch the session from PayMongo and apply it to its order. Used by the webhook and by every manual recheck."""
+    if not re.fullmatch(r"cs_\w+", session_id):
+        raise HTTPException(400, "Invalid session id")
+    session = paymongo("GET", f"checkout_sessions/{session_id}")
+    a = session["attributes"]
+    order_id = str((a.get("metadata") or {}).get("order_id", ""))
+    if not re.fullmatch(r"\w{1,64}", order_id):
+        raise HTTPException(404, "Session does not belong to an order")
+    paid = [
+        {"id": p["id"], "amount": p["attributes"]["amount"], "currency": p["attributes"]["currency"], "paid_at": p["attributes"].get("paid_at")}
+        for p in a.get("payments", [])
+        if p["attributes"].get("status") == "paid"
+    ]
+    now = datetime.now(timezone.utc)
+    return change(orders().document(order_id), lambda o: rules.reconcile(o, session_id, a["status"], paid, now))
+
+
+@app.post("/api/public/orders/{token}/pay")
+def public_pay(token: str):
+    snap = by_token(token)
+    order = snap.to_dict()
+    try:
+        existing = rules.reusable_payment(order)
+    except rules.Refused as e:
+        raise HTTPException(409, str(e))
+    if existing:
+        return {"checkout_url": existing["checkout_url"]}
+    d = order["draft"]
+    session = paymongo(
+        "POST",
+        "checkout_sessions",
+        {
+            "line_items": [
+                {"name": " ".join(filter(None, [i["name"], i["variant"]])), "amount": i["unit_price"], "currency": "PHP", "quantity": i["quantity"]}
+                for i in d["items"]
+            ],
+            "payment_method_types": ["qrph"],
+            "reference_number": f"{snap.id}-v{order['version']}",
+            "description": f"Order {snap.id} version {order['version']}",
+            "metadata": {"order_id": snap.id, "order_version": str(order["version"])},
+            "billing": {"name": d["recipient_name"]["value"], "phone": d["phone"]["value"]},
+            # The redirect only brings the customer back. It never marks anything paid.
+            "success_url": f"{PUBLIC_URL}/c/{token}?returned=1",
+            "cancel_url": f"{PUBLIC_URL}/c/{token}",
+        },
+    )
+    a = session["attributes"]
+    now = datetime.now(timezone.utc)
+    saved = change(snap.reference, lambda o: rules.request_payment(o, session["id"], a["checkout_url"], a["livemode"], now))
+    if saved["payment"]["session_id"] != session["id"]:
+        expire_session(session["id"])
+    return {"checkout_url": saved["payment"]["checkout_url"]}
+
+
+@app.post("/api/public/orders/{token}/check-payment")
+def public_check_payment(token: str):
+    payment = by_token(token).to_dict().get("payment")
+    return customer_view(reconcile_session(payment["session_id"]) if payment else by_token(token).to_dict())
+
+
+def valid_signature(header: str, raw: bytes, secret: str) -> bool:
+    """Paymongo-Signature is 't=<timestamp>,te=<test sig>,li=<live sig>'; the signature is HMAC-SHA256 of '<t>.<raw body>'."""
+    parts = dict(p.split("=", 1) for p in header.split(",") if "=" in p)
+    expected = hmac.new(secret.encode(), f"{parts.get('t', '')}.".encode() + raw, hashlib.sha256).hexdigest()
+    return any(hmac.compare_digest(expected, parts.get(k, "")) for k in ("te", "li"))
+
+
+@app.post("/api/webhooks/paymongo")
+async def paymongo_webhook(request: Request):
+    raw = await request.body()
+    if not PAYMONGO_WEBHOOK_SECRET:
+        raise HTTPException(503, "Webhook is not configured")
+    if not valid_signature(request.headers.get("Paymongo-Signature", ""), raw, PAYMONGO_WEBHOOK_SECRET):
+        raise HTTPException(401, "Bad signature")
+    try:
+        event = json.loads(raw)["data"]["attributes"]
+        session_id = event["data"]["id"]
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(400, "Unrecognised event")
+    if event.get("type") == "checkout_session.payment.paid":
+        # The event only tells us where to look; the session we fetch is what counts. Duplicates are harmless.
+        await run_in_threadpool(reconcile_session, session_id)
+    return {"received": True}
