@@ -105,7 +105,8 @@ def cached_open_checks(conversation_id: str) -> int | None:
         return None  # the list still works without Firestore
     if not doc.exists:
         return None
-    return sum(1 for s in risk.resolve(doc.to_dict()["signals"], verified_payments(conversation_id)) if not s["resolved"])
+    d = doc.to_dict()
+    return sum(1 for s in risk.resolve(d["signals"], verified_payments(conversation_id), d.get("reviews")) if risk.is_open(s))
 
 
 @app.get("/api/conversations/{conversation_id}")
@@ -162,16 +163,39 @@ def conversation_signals(conversation_id: str, user: dict = Depends(current_user
     messages = conversation(conversation_id, user)
     latest = messages[-1]["id"] if messages else None
     ref = signal_docs().document(conversation_id)
-    cached = ref.get()
-    if cached.exists and cached.to_dict().get("latest_message_id") == latest:
-        found = cached.to_dict()["signals"]
+    cached = ref.get().to_dict() or {}
+    if cached.get("latest_message_id") == latest and "signals" in cached:
+        found = cached["signals"]
     else:
         try:
             found = risk.detect(clients()[0], GEMINI_MODEL, messages) if messages else []
         except Exception:
             raise HTTPException(502, "Could not analyse this conversation")
-        ref.set({"signals": found, "latest_message_id": latest, "model": GEMINI_MODEL, "analysed_at": firestore.SERVER_TIMESTAMP})
-    return risk.resolve(found, verified_payments(conversation_id))
+        # merge keeps the seller's reviews across re-analysis
+        ref.set({"signals": found, "latest_message_id": latest, "model": GEMINI_MODEL, "analysed_at": firestore.SERVER_TIMESTAMP}, merge=True)
+    return risk.resolve(found, verified_payments(conversation_id), cached.get("reviews"))
+
+
+class Review(BaseModel):
+    key: str = Field(min_length=1, max_length=300)
+    note: str = Field(default="", max_length=500)
+    reopen: bool = False
+
+
+@app.post("/api/conversations/{conversation_id}/signals/review")
+def review_signal(conversation_id: str, body: Review, user: dict = Depends(current_user)):
+    """Seller marks a check as reviewed, with a reason, or reopens it. History of who and why stays on the record."""
+    ref = signal_docs().document(conversation_id)
+    if body.key not in {risk.key(s) for s in (ref.get().to_dict() or {}).get("signals", [])}:
+        raise HTTPException(404, "That check is no longer in this conversation")
+    if body.reopen:
+        ref.set({"reviews": {body.key: firestore.DELETE_FIELD}}, merge=True)
+    else:
+        if not body.note.strip():
+            raise HTTPException(422, "Say why this check is fine")
+        now = datetime.now(timezone.utc)
+        ref.set({"reviews": {body.key: {"by": user["email"], "at": now, "note": body.note.strip()}}}, merge=True)
+    return conversation_signals(conversation_id, user)
 
 
 REPLY_WINDOW = timedelta(hours=24)

@@ -173,3 +173,13 @@ button[aria-current='true'] {
   justify-self: start;
   padding: 0 0.25rem;
 }
+
+.signal label {
+  display: grid;
+  margin: 0.5rem 0;
+}
+
+.signal input {
+  font: inherit;
+  padding: 0.25rem;
+}

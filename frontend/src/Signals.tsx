@@ -1,7 +1,15 @@
 import { useEffect, useState } from 'react'
 import { load } from './firebase'
 
-type Signal = { kind: string; summary: string; sources: string[]; check: string; resolved: string | null }
+type Signal = {
+  key: string
+  kind: string
+  summary: string
+  sources: string[]
+  check: string
+  resolved: string | null
+  reviewed: { by: string; at: string; note: string } | null
+}
 
 const LABEL: Record<string, string> = {
   pressure: 'Asked to ship before payment is verified',
@@ -23,6 +31,9 @@ type Props = {
 export default function Signals({ conversationId, messages, latest }: Props) {
   const [signals, setSignals] = useState<Signal[]>()
   const [error, setError] = useState('')
+  const [reviewing, setReviewing] = useState<string>()
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     let live = true
@@ -35,8 +46,26 @@ export default function Signals({ conversationId, messages, latest }: Props) {
     }
   }, [conversationId, latest])
 
-  const open = signals?.filter((s) => !s.resolved) ?? []
-  const done = signals?.filter((s) => s.resolved) ?? []
+  const isOpen = (s: Signal) => !s.resolved && !s.reviewed
+  const open = signals?.filter(isOpen) ?? []
+  const done = signals?.filter((s) => !isOpen(s)) ?? []
+
+  const review = (body: { key: string; note?: string; reopen?: boolean }) => {
+    setBusy(true)
+    setError('')
+    load<Signal[]>(`/conversations/${conversationId}/signals/review`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then((s) => {
+        setSignals(s)
+        setReviewing(undefined)
+        setNote('')
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setBusy(false))
+  }
   const quote = (id: string) => messages.find((m) => m.id === id)?.text
 
   return (
@@ -45,12 +74,43 @@ export default function Signals({ conversationId, messages, latest }: Props) {
       {error && <p role="alert">{error}</p>}
       {!signals && !error && <p>Reading the conversation…</p>}
       {signals?.length === 0 && <p>Nothing in this conversation needs checking.</p>}
-      {[...open, ...done].map((s, n) => (
-        <div key={n} className={s.resolved ? 'signal done' : 'signal'}>
+      {[...open, ...done].map((s) => (
+        <div key={s.key} className={isOpen(s) ? 'signal' : 'signal done'}>
           <strong>{LABEL[s.kind] ?? s.kind}</strong>
           <p>{s.summary}</p>
           {s.sources.map((id) => quote(id) && <blockquote key={id}>{quote(id)}</blockquote>)}
-          <p>{s.resolved ? <>Settled: {s.resolved}.</> : <>Check: {s.check}</>}</p>
+          {s.resolved ? (
+            <p>Settled: {s.resolved}.</p>
+          ) : s.reviewed ? (
+            <p>
+              Reviewed by {s.reviewed.by} on {new Date(s.reviewed.at).toLocaleString()}: {s.reviewed.note}{' '}
+              <button disabled={busy} onClick={() => review({ key: s.key, reopen: true })}>
+                Reopen
+              </button>
+            </p>
+          ) : (
+            <p>Check: {s.check}</p>
+          )}
+          {isOpen(s) &&
+            (reviewing === s.key ? (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  review({ key: s.key, note })
+                }}
+              >
+                <label>
+                  Why is this fine?
+                  <input required autoFocus value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />
+                </label>
+                <button disabled={busy || !note.trim()}>Mark reviewed</button>{' '}
+                <button type="button" onClick={() => setReviewing(undefined)}>
+                  Cancel
+                </button>
+              </form>
+            ) : (
+              <button onClick={() => (setReviewing(s.key), setNote(''))}>Mark reviewed…</button>
+            ))}
         </div>
       ))}
       <p>

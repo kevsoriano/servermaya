@@ -61,10 +61,25 @@ def detect(client, model: str, messages: list[dict]) -> list[dict]:
     return finalize(extraction.ask(client, model, SYSTEM, Found, messages), messages)
 
 
-def resolve(signals: list[dict], verified: list[dict]) -> list[dict]:
-    """Deterministic: a PayMongo-verified payment on an order from this chat settles the payment-related checks."""
+def key(signal: dict) -> str:
+    """Stable across re-analysis as long as the check rests on the same first message. New evidence means a fresh check."""
+    return f"{signal['kind']}:{signal['sources'][0]}"
+
+
+def resolve(signals: list[dict], verified: list[dict], reviews: dict | None = None) -> list[dict]:
+    """Deterministic status for each check: settled by a PayMongo-verified payment from this chat, reviewed by the seller, or open."""
     paid = verified[0] if verified else None
+    reviews = reviews or {}
     return [
-        {**s, "resolved": f"PayMongo verified a payment of ₱{paid['amount'] / 100:,.2f}" if paid and s["kind"] in ("pressure", "payment_claim", "receipt_image") else None}
+        {
+            **s,
+            "key": key(s),
+            "resolved": f"PayMongo verified a payment of ₱{paid['amount'] / 100:,.2f}" if paid and s["kind"] in ("pressure", "payment_claim", "receipt_image") else None,
+            "reviewed": reviews.get(key(s)),
+        }
         for s in signals
     ]
+
+
+def is_open(s: dict) -> bool:
+    return not s["resolved"] and not s["reviewed"]
