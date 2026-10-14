@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { load, peso, STATUS } from './firebase'
 import Reply from './Reply'
+import Signals from './Signals'
 
 type Sourced = { value: string | null; sources: string[] }
 type Item = { name: string; variant: string | null; quantity: number; unit_price: number | null; sources: string[] }
@@ -248,7 +249,8 @@ export default function OrderView({ order, onChange }: { order: Order; onChange:
         </>
       )}
 
-      {draft.claims.map((c, n) => (
+      {order.source?.type === 'messenger' && <Signals conversationId={order.source.conversation_id} messages={messages} />}
+      {order.source?.type !== 'messenger' && draft.claims.map((c, n) => (
         <p key={n} className="claim">
           <strong>Unverified {c.kind} claim.</strong> {c.text}
           {src(c.sources)}

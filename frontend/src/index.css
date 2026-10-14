@@ -142,3 +142,34 @@ button[aria-current='true'] {
   width: 100%;
   box-sizing: border-box;
 }
+
+.signals {
+  margin: 1rem 0;
+}
+
+.signal {
+  border-left: 4px solid orange;
+  padding: 0.25rem 0 0.25rem 0.75rem;
+  margin: 0.5rem 0;
+}
+
+.signal.done {
+  border-left-color: green;
+  opacity: 0.75;
+}
+
+.signal p {
+  margin: 0.25rem 0;
+}
+
+.signal blockquote {
+  margin: 0.25rem 0;
+  padding-left: 0.5rem;
+  border-left: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  font-style: italic;
+}
+
+.threads mark {
+  justify-self: start;
+  padding: 0 0.25rem;
+}

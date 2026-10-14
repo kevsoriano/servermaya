@@ -103,7 +103,8 @@ def finalize(raw: Extraction, messages: list[dict]) -> dict:
     }
 
 
-def extract(client, model: str, messages: list[dict]) -> dict:
+def ask(client, model: str, system: str, schema, messages: list[dict]):
+    """Send the numbered chat to Gemini as data and parse the reply into `schema`."""
     chat = "\n".join(
         f"[{n}] {'SELLER' if m['from_page'] else 'CUSTOMER'}: {m['text']}"
         + (f" [sent {', '.join(a['kind'] for a in m['attachments'])}, not shown to you]" if m["attachments"] else "")
@@ -113,12 +114,16 @@ def extract(client, model: str, messages: list[dict]) -> dict:
         model=model,
         contents=f"<chat>\n{chat}\n</chat>",
         config={
-            "system_instruction": SYSTEM,
+            "system_instruction": system,
             "response_mime_type": "application/json",
-            "response_schema": Extraction,
+            "response_schema": schema,
             "temperature": 0,
             # Default thinking took ~12s on a six-message chat; low gave the same result in ~5s.
             "thinking_config": {"thinking_level": "low"},
         },
     )
-    return finalize(Extraction.model_validate_json(response.text), messages)
+    return schema.model_validate_json(response.text)
+
+
+def extract(client, model: str, messages: list[dict]) -> dict:
+    return finalize(ask(client, model, SYSTEM, Extraction, messages), messages)

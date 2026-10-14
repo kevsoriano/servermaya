@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react'
 import { load } from './firebase'
 import OrderView, { type Order } from './OrderView'
 import Reply from './Reply'
+import Signals from './Signals'
 
-type Conversation = { id: string; updated_time: string; snippet: string; customer: { name: string } | null }
+type Conversation = { id: string; updated_time: string; snippet: string; customer: { name: string } | null; open_checks: number | null }
 type Message = { id: string; text: string; from_page: boolean; from_name: string; created_time: string; attachments: Attachment[] }
 type Attachment = { kind: 'image' | 'video' | 'audio' | 'file'; name: string | null; url: string; preview_url: string | null }
 
@@ -95,12 +96,14 @@ export default function Conversations() {
             <button onClick={() => open(c.id)} aria-current={c.id === openId}>
               <strong>{c.customer?.name ?? 'Unknown'}</strong>
               <span>{c.snippet}</span>
+              {!!c.open_checks && <mark>{c.open_checks} {c.open_checks === 1 ? 'check' : 'checks'} before shipping</mark>}
               <time>{new Date(c.updated_time).toLocaleString()}</time>
             </button>
           </li>
         ))}
       </ul>
       {openId && !messages && !error && <p>Loading messages…</p>}
+      {openId && messages && messages.length > 0 && <Signals conversationId={openId} messages={messages} latest={messages.at(-1)?.id} />}
       <ol className="messages">
         {messages?.map((m) => (
           <li key={m.id} className={m.from_page ? 'page' : 'customer'}>

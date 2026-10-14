@@ -17,6 +17,7 @@ from google.oauth2 import id_token
 from pydantic import BaseModel, Field
 
 import extraction
+import signals as risk
 import orders as rules
 
 PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "servermaya-ai-builder-cup")
@@ -90,9 +91,21 @@ def conversations(user: dict = Depends(current_user)):
             "updated_time": c.get("updated_time"),
             "snippet": c.get("snippet", ""),
             "customer": next((p for p in c.get("participants", {}).get("data", []) if p.get("id") != PAGE_ID), None),
+            "open_checks": cached_open_checks(c["id"]),
         }
         for c in data.get("data", [])
     ]
+
+
+def cached_open_checks(conversation_id: str) -> int | None:
+    """Count from the last analysis only, so listing never calls Gemini. None means not analysed yet."""
+    try:
+        doc = signal_docs().document(conversation_id).get()
+    except Exception:
+        return None  # the list still works without Firestore
+    if not doc.exists:
+        return None
+    return sum(1 for s in risk.resolve(doc.to_dict()["signals"], verified_payments(conversation_id)) if not s["resolved"])
 
 
 @app.get("/api/conversations/{conversation_id}")
@@ -132,6 +145,33 @@ def fetch_messages(conversation_id: str) -> list[dict]:
         }
         for m in reversed(data.get("data", []))  # Graph returns newest first
     ]
+
+
+def signal_docs():
+    return clients()[1].collection("stores").document(STORE).collection("signals")
+
+
+def verified_payments(conversation_id: str) -> list[dict]:
+    found = orders().where(filter=firestore.FieldFilter("source.conversation_id", "==", conversation_id)).stream()
+    return [p for p in ((d.to_dict().get("payment") or {}) for d in found) if p.get("status") == "verified"]
+
+
+@app.get("/api/conversations/{conversation_id}/signals")
+def conversation_signals(conversation_id: str, user: dict = Depends(current_user)):
+    """Checks before shipping for one thread. Gemini only reruns when a new message has arrived since the last analysis."""
+    messages = conversation(conversation_id, user)
+    latest = messages[-1]["id"] if messages else None
+    ref = signal_docs().document(conversation_id)
+    cached = ref.get()
+    if cached.exists and cached.to_dict().get("latest_message_id") == latest:
+        found = cached.to_dict()["signals"]
+    else:
+        try:
+            found = risk.detect(clients()[0], GEMINI_MODEL, messages) if messages else []
+        except Exception:
+            raise HTTPException(502, "Could not analyse this conversation")
+        ref.set({"signals": found, "latest_message_id": latest, "model": GEMINI_MODEL, "analysed_at": firestore.SERVER_TIMESTAMP})
+    return risk.resolve(found, verified_payments(conversation_id))
 
 
 REPLY_WINDOW = timedelta(hours=24)

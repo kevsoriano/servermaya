@@ -275,3 +275,22 @@ def test_reply_window_and_send(monkeypatch):
         assert stored[0]["sent_by"] == "s@example.com" and stored[0]["order_id"] == "o1"
     finally:
         main.app.dependency_overrides.clear()
+
+
+def test_signals_keep_only_cited_customer_messages_and_resolve_on_payment():
+    import signals as risk
+
+    msgs = [{"id": "c1", "from_page": False}, {"id": "s1", "from_page": True}, {"id": "c2", "from_page": False}]
+    found = risk.Found(signals=[
+        risk.Raw(kind="payment_claim", summary="Says paid via GCash", sources=[3, 3]),
+        risk.Raw(kind="pressure", summary="Asks to ship today", sources=[2, 3]),  # seller message dropped from citations
+        risk.Raw(kind="inconsistent_details", summary="Seller changed price", sources=[2]),  # only seller: dropped
+        risk.Raw(kind="receipt_image", summary="Invented", sources=[9]),  # no such message: dropped
+    ])
+    got = risk.finalize(found, msgs)
+    assert [(s["kind"], s["sources"]) for s in got] == [("payment_claim", ["c2"]), ("pressure", ["c2"])]
+    assert all(s["check"] for s in got)
+
+    assert all(s["resolved"] is None for s in risk.resolve(got, []))
+    done = risk.resolve(got + [{"kind": "changed_payment_details", "summary": "", "sources": ["c1"], "check": ""}], [{"amount": 89000}])
+    assert [bool(s["resolved"]) for s in done] == [True, True, False]  # a verified payment does not settle changed refund details
