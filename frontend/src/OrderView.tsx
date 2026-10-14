@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { load, peso, STATUS } from './firebase'
+import Reply from './Reply'
 
 type Sourced = { value: string | null; sources: string[] }
 type Item = { name: string; variant: string | null; quantity: number; unit_price: number | null; sources: string[] }
@@ -7,6 +8,7 @@ export type Order = {
   id: string
   status: 'draft' | 'awaiting_confirmation' | 'confirmed' | 'cancelled'
   version: number
+  source: { type: string; conversation_id: string }
   created_at: string
   confirm_token: string | null
   confirmations: { version: number; kind: 'customer' | 'seller_asserted'; by: string; at: string }[]
@@ -63,6 +65,7 @@ export default function OrderView({ order, onChange }: { order: Order; onChange:
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [copied, setCopied] = useState<'link' | 'details'>()
+  const [message, setMessage] = useState('')
   const { draft, messages } = order
   const confirmation = order.status === 'confirmed' ? order.confirmations.at(-1) : undefined
   const earlier = order.confirmations.filter((c) => c !== confirmation)
@@ -261,6 +264,7 @@ export default function OrderView({ order, onChange }: { order: Order; onChange:
               <li key={q}>{q}</li>
             ))}
           </ul>
+          <button onClick={() => setMessage(draft.clarification_questions.join('\n'))}>Write these to the customer</button>
         </>
       )}
 
@@ -310,8 +314,22 @@ export default function OrderView({ order, onChange }: { order: Order; onChange:
               {order.status === 'confirmed' ? 'Customer link (order summary and payment):' : 'Send this link to the customer:'}
               <br />
               <input readOnly value={link} onFocus={(e) => e.target.select()} aria-label="Confirmation link" />{' '}
-              <button onClick={() => navigator.clipboard.writeText(link).then(() => setCopied('link'))}>{copied === 'link' ? 'Copied' : 'Copy'}</button>
+              <button onClick={() => navigator.clipboard.writeText(link).then(() => setCopied('link'))}>{copied === 'link' ? 'Copied' : 'Copy'}</button>{' '}
+              <button
+                onClick={() =>
+                  setMessage(
+                    order.status === 'confirmed'
+                      ? `Thank you for confirming! You can pay ${peso(draft.total)} with QR Ph here: ${link}`
+                      : `Hi! Here is your order summary. Please check it and tap the button to confirm: ${link}`,
+                  )
+                }
+              >
+                Write link to customer
+              </button>
             </p>
+          )}
+          {order.source?.type === 'messenger' && (message || link) && (
+            <Reply conversationId={order.source.conversation_id} orderId={order.id} text={message} setText={setMessage} />
           )}
           <p className="actions">
             <button onClick={() => setForm(toForm(draft))}>Edit</button>

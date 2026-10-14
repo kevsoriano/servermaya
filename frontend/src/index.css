@@ -129,3 +129,16 @@ button[aria-current='true'] {
   max-width: 100%;
   margin-top: 0.25rem;
 }
+
+.reply label {
+  display: grid;
+  gap: 0.25rem;
+  margin-top: 1rem;
+}
+
+.reply textarea {
+  font: inherit;
+  padding: 0.5rem;
+  width: 100%;
+  box-sizing: border-box;
+}

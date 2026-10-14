@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { load } from './firebase'
 import OrderView, { type Order } from './OrderView'
+import Reply from './Reply'
 
 type Conversation = { id: string; updated_time: string; snippet: string; customer: { name: string } | null }
 type Message = { id: string; text: string; from_page: boolean; from_name: string; created_time: string; attachments: Attachment[] }
@@ -23,6 +24,15 @@ function Media({ a }: { a: Attachment }) {
   )
 }
 
+function same<T>(a: T[] | undefined, b: T[], key: (x: T) => string) {
+  return !!a && a.length === b.length && a.every((x, i) => key(x) === key(b[i]))
+}
+
+function replyUntil(messages: Message[]) {
+  const last = Math.max(...messages.filter((m) => !m.from_page).map((m) => Date.parse(m.created_time)))
+  return Number.isFinite(last) ? new Date(last + 24 * 3600 * 1000) : null
+}
+
 export default function Conversations() {
   const [list, setList] = useState<Conversation[]>()
   const [openId, setOpenId] = useState<string>()
@@ -30,15 +40,37 @@ export default function Conversations() {
   const [error, setError] = useState('')
   const [order, setOrder] = useState<Order>()
   const [drafting, setDrafting] = useState(false)
+  const [reply, setReply] = useState('')
 
   useEffect(() => {
     load<Conversation[]>('/conversations').then(setList, (e) => setError(e.message))
   }, [])
 
+  // ponytail: polls Meta every few seconds while the tab is visible; switch to the Messenger webhook if it hits rate limits
+  useEffect(() => {
+    let live = true // a reply for the previous thread must not land in the next one
+    const tick = () => {
+      if (document.visibilityState !== 'visible') return
+      load<Conversation[]>('/conversations').then((l) => live && setList((old) => (same(old, l, (c) => c.id + c.updated_time) ? old : l)), () => {})
+      if (openId)
+        load<Message[]>(`/conversations/${openId}`).then(
+          // Keep the old array when nothing new arrived, so playing audio or video is not reloaded with fresh Meta links.
+          (m) => live && setMessages((old) => (old && same(old, m, (x) => x.id) ? old : m)),
+          () => {},
+        )
+    }
+    const timer = setInterval(tick, openId ? 5000 : 15000)
+    return () => {
+      live = false
+      clearInterval(timer)
+    }
+  }, [openId])
+
   const open = (id: string) => {
     setOpenId(id)
     setMessages(undefined)
     setOrder(undefined)
+    setReply('')
     setError('')
     load<Message[]>(`/conversations/${id}`).then(setMessages, (e) => setError(e.message))
   }
@@ -84,6 +116,15 @@ export default function Conversations() {
           </li>
         ))}
       </ol>
+      {openId && messages && (
+        <Reply
+          conversationId={openId}
+          text={reply}
+          setText={setReply}
+          until={replyUntil(messages)}
+          onSent={() => load<Message[]>(`/conversations/${openId}`).then(setMessages, (e) => setError(e.message))}
+        />
+      )}
       {messages && messages.length > 0 && !order && (
         <button onClick={createDraft} disabled={drafting}>
           {drafting ? 'Reading the conversation…' : 'Create draft order'}

@@ -49,7 +49,7 @@ def test_conversations(monkeypatch):
                 {"id": "m1", "message": "hello", "from": {"id": "99", "name": "Shop"}},
             ]}
 
-    monkeypatch.setattr(main.requests, "get", lambda url, **k: calls.append((url, k)) or Resp())
+    monkeypatch.setattr(main.requests, "request", lambda method, url, **k: calls.append((url, k)) or Resp())
     try:
         msgs = client.get("/api/conversations/t_123").json()
         assert [m["id"] for m in msgs] == ["m1", "m2"]  # oldest first
@@ -233,3 +233,45 @@ def test_attachments_are_normalised():
     ]
     assert got[0]["preview_url"] == "https://cdn/a_p.jpg"
     assert main.attachments({"message": "text only"}) == []
+
+
+def test_reply_window_and_send(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    iso = lambda d: d.strftime("%Y-%m-%dT%H:%M:%S+0000")
+    msgs = [{"from_page": False, "created_time": iso(now - timedelta(hours=30))},
+            {"from_page": True, "created_time": iso(now - timedelta(hours=1))}]
+    # Only the customer's messages open the window; the Page's own replies do not extend it.
+    assert main.reply_until(msgs) < now
+    assert main.reply_until([msgs[1]]) is None
+
+    main.app.dependency_overrides[main.current_user] = lambda: {"uid": "u1", "email": "s@example.com"}
+    monkeypatch.setattr(main, "PAGE_ID", "99")
+    sent, stored = [], []
+    monkeypatch.setattr(main, "conversation", lambda cid, user: msgs)
+    monkeypatch.setattr(main, "graph", lambda path, send=None, **k: sent.append((path, send)) or (
+        {"participants": {"data": [{"id": "99"}, {"id": "psid7"}]}} if "fields" in k else {"message_id": "mid.1"}))
+
+    class Store:
+        def collection(self, *_):
+            return self
+
+        def document(self, *_):
+            return self
+
+        def add(self, doc):
+            stored.append(doc)
+
+    monkeypatch.setattr(main, "clients", lambda: (None, Store()))
+    try:
+        assert client.post("/api/conversations/t_1/reply", json={"text": "hi"}).status_code == 409  # window closed
+        assert sent == []
+        msgs[0]["created_time"] = iso(now - timedelta(hours=2))
+        assert client.post("/api/conversations/t_1/reply", json={"text": ""}).status_code == 422
+        r = client.post("/api/conversations/t_1/reply", json={"text": "Here is your link", "order_id": "o1"})
+        assert r.status_code == 200 and r.json() == {"message_id": "mid.1"}
+        assert sent[-1] == ("99/messages", {"recipient": {"id": "psid7"}, "messaging_type": "RESPONSE", "message": {"text": "Here is your link"}})
+        assert stored[0]["sent_by"] == "s@example.com" and stored[0]["order_id"] == "o1"
+    finally:
+        main.app.dependency_overrides.clear()
