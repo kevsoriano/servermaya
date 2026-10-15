@@ -29,6 +29,18 @@ export type Claim = {
   resolution: { how: string; note: string | null; by: string; at: string } | null
   escalation: { owner: string; next_action: string } | null
 }
+export type Refund = {
+  id: string
+  claim_id: string | null
+  method: 'paymongo_api' | 'paymongo_dashboard' | 'outside_paymongo'
+  amount: number
+  status: string
+  provider_refund_id: string | null
+  reference?: string | null
+  problem?: string
+  by: string
+  at: string
+}
 
 const ACTIONS: Record<Action, string> = {
   clarification: 'Ask for clarification',
@@ -39,6 +51,18 @@ const ACTIONS: Record<Action, string> = {
   escalation: 'Escalate',
 }
 const FINDING = { supported: 'Supported', conflicting: 'Conflicting', unverified: 'Unverified', insufficient_data: 'Insufficient data' }
+const REFUND: Record<string, string> = {
+  submitting: 'Submitting to PayMongo',
+  uncertain: 'No answer from PayMongo: check status before anything else',
+  pending: 'Pending at PayMongo',
+  succeeded: 'Succeeded at PayMongo',
+  failed: 'Failed at PayMongo',
+  api_refused: 'PayMongo refused an API refund',
+  awaiting_reconcile: 'Made in the PayMongo Dashboard: check status to confirm',
+  seller_reported: 'Seller-reported, not verified by PayMongo',
+  not_found: 'Never reached PayMongo',
+}
+
 function Review({ c, onDecide }: { c: Claim; onDecide: (a: Action, amount: number | null, reply: string) => void }) {
   const r = c.review!
   return (
@@ -91,6 +115,87 @@ function Review({ c, onDecide }: { c: Claim; onDecide: (a: Action, amount: numbe
         <button onClick={() => onDecide(r.recommendation.action, r.recommendation.amount_php != null ? Math.round(r.recommendation.amount_php * 100) : null, r.draft_reply)}>
           Use as a starting point
         </button>
+      )}
+    </div>
+  )
+}
+
+function RefundPanel({ order, c, run }: { order: Order; c: Claim; run: (label: string, path: string, body?: object) => Promise<unknown> }) {
+  const decided = c.decision!.amount!
+  const mine = (order.refunds ?? []).filter((r) => r.claim_id === c.id)
+  const held = mine.filter((r) => !['failed', 'api_refused', 'not_found'].includes(r.status)).reduce((s, r) => s + r.amount, 0)
+  const left = Math.min(decided - held, order.refundable)
+  const [method, setMethod] = useState<'outside_paymongo' | 'paymongo_dashboard'>('outside_paymongo')
+  const [reference, setReference] = useState('')
+  const viaPayMongo = order.payment?.status === 'verified'
+  const refused = mine.some((r) => r.status === 'api_refused')
+
+  return (
+    <div>
+      <p>
+        Approved refund {peso(decided)}. Still to refund: <strong>{peso(Math.max(left, 0))}</strong>. The payment can still refund {peso(order.refundable)}.
+      </p>
+      {mine.length > 0 && (
+        <ul>
+          {mine.map((r) => (
+            <li key={r.id}>
+              {peso(r.amount)} · {REFUND[r.status] ?? r.status}
+              {r.reference && <> · ref {r.reference}</>}
+              {r.problem && <small> ({r.problem})</small>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {viaPayMongo && mine.some((r) => ['uncertain', 'pending', 'submitting', 'awaiting_reconcile'].includes(r.status)) && (
+        <button onClick={() => run('Checking with PayMongo…', '/refunds/check')}>Check refund status with PayMongo</button>
+      )}
+      {left > 0 && (
+        <>
+          {viaPayMongo && !refused && (
+            <p>
+              <button
+                className="primary"
+                onClick={() =>
+                  confirm(`Refund ${peso(left)} to the customer through PayMongo? This moves money.`) &&
+                  run('Submitting to PayMongo…', '/refunds', { claim_id: c.id, amount: left, reason: 'requested_by_customer' })
+                }
+              >
+                Refund {peso(left)} through PayMongo
+              </button>
+            </p>
+          )}
+          {(refused || !viaPayMongo) && (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                run('Saving…', '/refunds/manual', { claim_id: c.id, amount: left, method, reference })
+              }}
+            >
+              <p>
+                {refused
+                  ? 'PayMongo does not refund QR Ph payments through its API. Refund another way, then record it here.'
+                  : 'This payment did not go through PayMongo. Refund the customer yourself, then record it here.'}
+              </p>
+              {viaPayMongo && (
+                <label>
+                  How you refunded
+                  <select value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
+                    <option value="outside_paymongo">Outside PayMongo (GCash or bank transfer)</option>
+                    <option value="paymongo_dashboard">In the PayMongo Dashboard</option>
+                  </select>
+                </label>
+              )}
+              <label>
+                Transfer reference{method === 'paymongo_dashboard' && viaPayMongo ? ' (optional)' : ''}
+                <input value={reference} onChange={(e) => setReference(e.target.value)} required={method === 'outside_paymongo' || !viaPayMongo} />
+              </label>
+              <button>Record refund of {peso(left)}</button>
+              <p>
+                <small>A refund outside PayMongo is shown as seller-reported. It is never marked as verified.</small>
+              </p>
+            </form>
+          )}
+        </>
       )}
     </div>
   )
@@ -211,6 +316,7 @@ function ClaimCard({ order, c, onChange, write }: { order: Order; c: Claim; onCh
           {c.decision.reply && <button onClick={() => write(c.decision!.reply!)}>Write the reply to the customer</button>}
         </p>
       )}
+      {open && (act === 'refund' || act === 'partial_refund') && <RefundPanel order={order} c={c} run={run} />}
       {open && (act === 'replacement' || act === 'redelivery') && !order.replacement && c.status === 'resolution_approved' && (
         <button disabled={!!busy} onClick={() => run('Starting…', '/replacement')}>
           Start the {act === 'replacement' ? 'replacement (pack and ship again)' : 'redelivery'}

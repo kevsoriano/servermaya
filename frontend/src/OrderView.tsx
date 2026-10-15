@@ -5,7 +5,7 @@ import Signals from './Signals'
 import Packing, { type PackingState } from './Packing'
 import GcashPayment, { type ManualPayment } from './GcashPayment'
 import Dispatch, { type Fulfillment } from './Dispatch'
-import Claims, { type Claim } from './Claims'
+import Claims, { type Claim, type Refund } from './Claims'
 
 type Sourced = { value: string | null; sources: string[] }
 type Item = { name: string; variant: string | null; quantity: number; unit_price: number | null; sources: string[] }
@@ -39,6 +39,8 @@ export type Order = {
   receipt?: { status: 'customer_confirmed'; fulfillment_id: string; source: string; at: string } | null
   replacement?: { claim_id: string; action: string; fulfillment_id: string | null } | null
   claims?: Claim[]
+  refunds?: Refund[]
+  refundable: number
   messages: { id: string; text: string; from_page: boolean }[]
   draft: {
     items: Item[]

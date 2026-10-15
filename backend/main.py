@@ -30,6 +30,7 @@ import receipts as gcash
 import claims as cases
 import delivery
 import patterns
+import refunds
 
 PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "servermaya-ai-builder-cup")
 # Comma-separated. Empty means nobody gets in.
@@ -443,7 +444,7 @@ def present(snap) -> dict:
     except rules.Refused as e:
         dispatch_blocked = str(e)
     return {**order, "id": snap.id, "missing": rules.missing(order["draft"]), "packing": packing, "packing_blocked": blocked,
-            "dispatch_blocked": dispatch_blocked}
+            "dispatch_blocked": dispatch_blocked, "refundable": refunds.refundable(order)}
 
 
 def change(ref, rule, by: str = "") -> dict:
@@ -676,6 +677,10 @@ async def paymongo_webhook(request: Request):
     # Each event only tells us where to look; what we fetch from PayMongo is what counts. Duplicates are harmless.
     if event.get("type") == "checkout_session.payment.paid":
         await run_in_threadpool(reconcile_session, subject_id)
+    elif event.get("type") in ("payment.refunded", "payment.refund.updated"):
+        payment_id = (subject.get("attributes") or {}).get("payment_id") or (subject_id if subject.get("type") == "payment" else None)
+        if payment_id:
+            await run_in_threadpool(reconcile_refunds_for, payment_id)
     return {"received": True}
 
 
@@ -1451,6 +1456,67 @@ class ResolveIn(BaseModel):
 def resolve_claim(order_id: str, cid: str, body: ResolveIn, user: dict = Depends(current_user)):
     now = datetime.now(timezone.utc)
     return change(orders().document(order_id), lambda o: cases.resolve(o, cid, body.note, user["email"], now))
+
+
+# Refunds. PayMongo first; its refusal or silence leads to the manual route, never to a guess.
+def paymongo_refund(payment_id: str, amount: int, reason: str, op_id: str, order_id: str) -> dict:
+    """{"refund": {id, status}} if accepted, {"refused": detail} if PayMongo said no, {} if no answer came."""
+    try:
+        r = requests.post("https://api.paymongo.com/v1/refunds", auth=(PAYMONGO_KEY, ""), timeout=20, json={"data": {"attributes": {
+            "amount": amount, "payment_id": payment_id, "reason": reason, "metadata": {"operation_id": op_id, "order_id": order_id}}}})
+        body = r.json()
+    except (requests.RequestException, ValueError):
+        return {}
+    if r.status_code >= 500:
+        return {}
+    if not r.ok:
+        return {"refused": "; ".join(e.get("detail", "") for e in body.get("errors", [])) or f"HTTP {r.status_code}"}
+    return {"refund": {"id": body["data"]["id"], "status": body["data"]["attributes"]["status"]}}
+
+
+@app.post("/api/orders/{order_id}/refunds")
+def submit_refund(order_id: str, body: refunds.RefundIn, user: dict = Depends(current_user)):
+    if not PAYMONGO_KEY:
+        raise HTTPException(503, "Payments are not configured")
+    ref = orders().document(order_id)
+    op_id, now = "op_" + secrets.token_hex(8), datetime.now(timezone.utc)
+    saved = change(ref, lambda o: refunds.reserve(o, op_id, body, user["email"], now))
+    payment_id = saved["payment"]["payment_id"]
+    answer = paymongo_refund(payment_id, body.amount, body.reason, op_id, order_id)
+    return change(ref, lambda o: refunds.submitted(o, op_id, answer, datetime.now(timezone.utc)))
+
+
+@app.post("/api/orders/{order_id}/refunds/manual")
+def manual_refund(order_id: str, body: refunds.ManualIn, user: dict = Depends(current_user)):
+    op_id, now = "op_" + secrets.token_hex(8), datetime.now(timezone.utc)
+    return change(orders().document(order_id), lambda o: refunds.manual(o, op_id, body, user["email"], now))
+
+
+def provider_refunds(payment_id: str) -> list[dict]:
+    attrs = paymongo("GET", f"payments/{payment_id}")["attributes"]
+    out = []
+    for x in attrs.get("refunds") or []:
+        a = x.get("attributes", x)
+        out.append({"id": x.get("id") or a.get("id"), "amount": a["amount"], "status": a["status"], "metadata": a.get("metadata") or {}})
+    return out
+
+
+def reconcile_refunds_for(payment_id: str) -> dict | None:
+    found = list(orders().where(filter=firestore.FieldFilter("payment.payment_id", "==", payment_id)).limit(1).stream())
+    if not found:
+        return None
+    listed = provider_refunds(payment_id)
+    return change(found[0].reference, lambda o: refunds.reconcile(o, listed, datetime.now(timezone.utc)))
+
+
+@app.post("/api/orders/{order_id}/refunds/check")
+def check_refunds(order_id: str, user: dict = Depends(current_user)):
+    """Ask PayMongo which refunds exist on the payment. Settles unanswered submissions and finds Dashboard refunds."""
+    _, order = loaded(order_id)
+    payment_id = (order.get("payment") or {}).get("payment_id")
+    if not payment_id:
+        raise HTTPException(409, "This order has no PayMongo payment")
+    return reconcile_refunds_for(payment_id)
 
 
 # Patterns. Recomputed on every load from the store's own orders.
