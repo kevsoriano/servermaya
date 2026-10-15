@@ -569,3 +569,21 @@ def test_packing_accepts_a_seller_confirmed_gcash_payment():
     confirmed = {**order, "manual_payment": {"status": "seller_confirmed", "version": 2}}
     assert pack.paid_by(confirmed) == "gcash_seller_confirmed" and pack.require_ready(confirmed)["version"] == 2
     assert pack.paid_by({**confirmed, "payment": {"status": "verified", "version": 2}}) == "paymongo"
+
+
+def test_profile_pics_batched_cached_and_soft_failing(monkeypatch):
+    calls = []
+    def fake(path, **k):
+        calls.append(k["ids"])
+        if k["ids"] == "bad":
+            raise main.HTTPException(502, "nope")
+        return {"a": {"profile_pic": "https://pic/a"}, "b": {}}
+    monkeypatch.setattr(main, "graph", fake)
+    monkeypatch.setattr(main, "_pics", {})
+    assert main.profile_pics(["a", "b"]) == {"a": "https://pic/a", "b": None}
+    assert main.profile_pics(["a", "b"]) == {"a": "https://pic/a", "b": None}
+    assert calls == ["a,b"]  # second call served from cache
+    assert main.profile_pics(["bad"]) == {"bad": None}
+    main._pics["a"] = (0, "old")  # expired
+    main.profile_pics(["a"])
+    assert calls[-1] == "a" and main._pics["a"][1] == "https://pic/a"

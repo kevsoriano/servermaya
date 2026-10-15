@@ -1,60 +1,426 @@
 :root {
-  font-family: system-ui, sans-serif;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 15px;
   color-scheme: light dark;
+  --bg: light-dark(#eef1f6, #0f1115);
+  --surface: light-dark(#fff, #1b1e24);
+  --hover: light-dark(#f2f4f7, #252932);
+  --selected: light-dark(#e7f0ff, #1d2a42);
+  --line: light-dark(#dfe3e8, #2d323b);
+  --text: light-dark(#1c1e21, #e4e6eb);
+  --muted: light-dark(#65676b, #a0a4ab);
+  --bubble: light-dark(#f0f2f5, #2a2e36);
+  --accent: #0866ff;
+  --accent-text: light-dark(#0866ff, #5b9bff);
+  --warn: light-dark(#b45309, #f59e0b);
+  --warn-bg: light-dark(#fff4e5, #3a2a12);
+  --ok: light-dark(#15803d, #4ade80);
+  --bad: light-dark(#c0392b, #f87171);
+  color: var(--text);
 }
 
 body {
   margin: 0;
+  background: var(--bg);
 }
 
-main {
-  max-width: 32rem;
-  margin: 10vh auto 2rem;
-  padding: 0 1rem;
+h2,
+h3 {
+  margin: 0 0 0.5rem;
+}
+
+h3 {
+  font-size: 1.05rem;
 }
 
 button {
   font: inherit;
-  padding: 0.5rem 1rem;
+  padding: 0.45rem 0.9rem;
   cursor: pointer;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
 }
 
+button:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+button.primary:hover:not(:disabled) {
+  background: #0759d6;
+}
+
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+mark {
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+[role='alert'] {
+  color: var(--bad);
+}
+
+.muted,
+.empty {
+  color: var(--muted);
+}
+
+.empty {
+  margin: auto;
+  text-align: center;
+}
+
+/* Signed-out, loading and the customer confirmation page. */
+main {
+  max-width: 32rem;
+  margin: 10vh auto 2rem;
+  padding: 1.5rem;
+  background: var(--surface);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.08);
+}
+
+/* App shell */
+.app {
+  height: 100dvh;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  box-sizing: border-box;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface);
+  border-radius: 12px;
+}
+
+.brand {
+  font-size: 1.05rem;
+}
+
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  flex: 1;
+}
+
+.tabs button {
+  border: 0;
+  background: none;
+}
+
+.tabs button[aria-current='true'] {
+  background: var(--selected);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.me {
+  color: var(--muted);
+}
+
+.inbox {
+  display: grid;
+  grid-template-columns: 22rem 1fr 24rem;
+  min-height: 0;
+  background: var(--surface);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.inbox.two {
+  grid-template-columns: 22rem 1fr;
+}
+
+.pane {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1rem;
+  border-right: 1px solid var(--line);
+}
+
+.pane:last-child {
+  border-right: 0;
+}
+
+.pane-title {
+  font-size: 1.15rem;
+}
+
+.page {
+  overflow-y: auto;
+}
+
+.page > .order {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1.5rem;
+  background: var(--surface);
+  border-radius: 12px;
+}
+
+/* Thread list */
 .threads,
 .messages {
   list-style: none;
   padding: 0;
+  margin: 0;
 }
 
 .threads button {
-  display: grid;
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
   width: 100%;
   text-align: left;
-  margin-bottom: 0.25rem;
+  padding: 0.75rem;
+  border: 0;
+  border-radius: 8px;
+  background: none;
 }
 
-button[aria-current='true'] {
-  outline: 2px solid;
+.threads button[aria-current='true'] {
+  background: var(--selected);
+  box-shadow: inset 3px 0 var(--accent);
 }
 
-.threads span {
+.threads button > div {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.thread-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.thread-head time {
+  color: var(--muted);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.threads .snippet {
+  color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.threads mark {
+  justify-self: start;
+}
+
+.threads mark.pending,
+mark.status {
+  background: var(--hover);
+  color: var(--muted);
+}
+
+mark.status.confirmed {
+  color: var(--ok);
+}
+
+.threads button.unread .snippet {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-right: 0.375rem;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+}
+
+.avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #6aa8ff, #0866ff);
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+/* Chat */
+.chat {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.chat-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 1.05rem;
+}
+
+.chat > [role='alert'] {
+  padding: 0 1rem;
+}
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column-reverse;
+  padding: 1rem;
+}
+
 .messages li {
-  margin: 0.5rem 0;
-  max-width: 85%;
+  display: grid;
+  justify-items: start;
+  margin: 0.4rem 0;
+  max-width: 75%;
 }
 
 .messages li.page {
   margin-left: auto;
-  text-align: right;
+  justify-items: end;
+}
+
+.messages small {
+  color: var(--muted);
+  font-size: 0.75rem;
+  margin: 0 0.75rem 0.15rem;
 }
 
 .messages p {
   margin: 0;
+  padding: 0.55rem 0.9rem;
+  border-radius: 18px;
+  background: var(--bubble);
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  line-height: 1.4;
+}
+
+.messages li.page p {
+  background: var(--accent);
+  color: #fff;
+}
+
+.messages img,
+.messages video {
+  display: block;
+  max-width: 100%;
+  max-height: 20rem;
+  margin-top: 0.25rem;
+  border-radius: 12px;
+}
+
+.messages audio {
+  display: block;
+  max-width: 100%;
+  margin-top: 0.25rem;
+}
+
+/* Composer */
+.reply {
+  margin: 0.75rem 1rem 1rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.reply textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  padding: 0.25rem 0;
+  resize: vertical;
+  background: none;
+  outline: none;
+}
+
+.reply-foot {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.reply-foot small {
+  flex: 1;
+  color: var(--muted);
+}
+
+.side .reply {
+  margin: 0.75rem 0;
+}
+
+/* Right sidebar */
+.side > * + * {
+  border-top: 1px solid var(--line);
+  padding-top: 1rem;
+  margin-top: 1rem;
+}
+
+.side.wide > * {
+  max-width: 44rem;
+}
+
+.profile {
+  display: grid;
+  justify-items: center;
+  gap: 0.5rem;
+  font-size: 1.1rem;
+}
+
+.profile .avatar {
+  width: 4rem;
+  height: 4rem;
+  font-size: 1.3rem;
+}
+
+/* Order */
+.order h2 {
+  font-size: 1.1rem;
 }
 
 .order table {
@@ -65,13 +431,15 @@ button[aria-current='true'] {
 
 .order th,
 .order td {
-  padding: 0.25rem 0.5rem 0.25rem 0;
-  border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  padding: 0.35rem 0.5rem 0.35rem 0;
+  border-bottom: 1px solid var(--line);
 }
 
 .order dt {
   font-weight: 600;
   margin-top: 0.5rem;
+  color: var(--muted);
+  font-size: 0.85rem;
 }
 
 .order dd {
@@ -81,11 +449,7 @@ button[aria-current='true'] {
 .order abbr {
   text-decoration: none;
   cursor: help;
-}
-
-.claim {
-  border-left: 4px solid orange;
-  padding-left: 0.75rem;
+  color: var(--accent-text);
 }
 
 .order label {
@@ -94,14 +458,22 @@ button[aria-current='true'] {
 }
 
 .order input {
-  font: inherit;
-  padding: 0.25rem;
+  padding: 0.35rem 0.5rem;
   width: 100%;
   box-sizing: border-box;
 }
 
 .order fieldset {
   margin-bottom: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.claim {
+  border-left: 4px solid var(--warn);
+  background: var(--warn-bg);
+  padding: 0.5rem 0.75rem;
+  border-radius: 0 8px 8px 0;
 }
 
 .actions {
@@ -110,52 +482,19 @@ button[aria-current='true'] {
   gap: 0.5rem;
 }
 
-.messages img,
-.messages video {
-  display: block;
-  max-width: 100%;
-  max-height: 20rem;
-  margin-top: 0.25rem;
-  border-radius: 0.5rem;
-}
-
-.messages li.page img,
-.messages li.page video {
-  margin-left: auto;
-}
-
-.messages audio {
-  display: block;
-  max-width: 100%;
-  margin-top: 0.25rem;
-}
-
-.reply label {
-  display: grid;
-  gap: 0.25rem;
-  margin-top: 1rem;
-}
-
-.reply textarea {
-  font: inherit;
-  padding: 0.5rem;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.signals {
-  margin: 1rem 0;
-}
-
+/* Checks before shipping */
 .signal {
-  border-left: 4px solid orange;
-  padding: 0.25rem 0 0.25rem 0.75rem;
+  border-left: 4px solid var(--warn);
+  background: var(--warn-bg);
+  padding: 0.5rem 0.75rem;
   margin: 0.5rem 0;
+  border-radius: 0 8px 8px 0;
 }
 
 .signal.done {
-  border-left-color: green;
-  opacity: 0.75;
+  border-left-color: var(--ok);
+  background: none;
+  opacity: 0.8;
 }
 
 .signal p {
@@ -165,33 +504,9 @@ button[aria-current='true'] {
 .signal blockquote {
   margin: 0.25rem 0;
   padding-left: 0.5rem;
-  border-left: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-left: 2px solid var(--line);
   font-style: italic;
-}
-
-.threads mark {
-  justify-self: start;
-  padding: 0 0.25rem;
-  margin-top: 0.125rem;
-}
-
-.threads mark.pending {
-  background: color-mix(in srgb, currentColor 12%, transparent);
-  color: inherit;
-}
-
-.threads button.unread span {
-  font-weight: bold;
-}
-
-.threads .dot {
-  display: inline-block;
-  width: 0.5rem;
-  height: 0.5rem;
-  margin-right: 0.375rem;
-  border-radius: 50%;
-  background: currentColor;
-  vertical-align: middle;
+  color: var(--muted);
 }
 
 .signal label {
@@ -200,25 +515,24 @@ button[aria-current='true'] {
 }
 
 .signal input {
-  font: inherit;
-  padding: 0.25rem;
+  padding: 0.35rem 0.5rem;
 }
 
-.packing {
-  margin: 1rem 0;
+.signals small {
+  color: var(--muted);
 }
 
+/* Packing */
 .packing table {
   width: 100%;
   border-collapse: collapse;
   text-align: left;
-  vertical-align: top;
 }
 
 .packing td,
 .packing th {
   padding: 0.25rem 0.5rem 0.25rem 0;
-  border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  border-bottom: 1px solid var(--line);
   vertical-align: top;
 }
 
@@ -237,13 +551,14 @@ button[aria-current='true'] {
   width: 100%;
   aspect-ratio: 4 / 3;
   object-fit: cover;
-  border-radius: 0.25rem;
+  border-radius: 6px;
 }
 
-.packing .placeholder {
+.packing .placeholder,
+.receipt .placeholder {
   display: grid;
   place-items: center;
-  background: color-mix(in srgb, currentColor 10%, transparent);
+  background: var(--hover);
 }
 
 .packing .upload {
@@ -258,17 +573,17 @@ button[aria-current='true'] {
 
 .result.matched,
 .result.pass {
-  color: green;
+  color: var(--ok);
 }
 
 .result.conflict,
 .result.fail {
-  color: #c0392b;
+  color: var(--bad);
 }
 
 .result.insufficient_visibility,
 .result.unreadable {
-  color: #b9770e;
+  color: var(--warn);
 }
 
 .receipt figure {
@@ -280,10 +595,46 @@ button[aria-current='true'] {
   display: block;
   max-width: 100%;
   max-height: 28rem;
-  border-radius: 0.25rem;
+  border-radius: 6px;
 }
 
 .receipt td {
   vertical-align: top;
   overflow-wrap: anywhere;
+}
+
+/* Narrow screens: panes stack and the page scrolls. */
+@media (max-width: 900px) {
+  .app {
+    height: auto;
+  }
+
+  .topbar {
+    flex-wrap: wrap;
+  }
+
+  .inbox,
+  .inbox.two {
+    grid-template-columns: 1fr;
+  }
+
+  .pane {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    max-height: none;
+  }
+
+  .threads {
+    max-height: 40vh;
+    overflow-y: auto;
+  }
+
+  .scroll {
+    max-height: 60vh;
+  }
+}
+
+img.avatar {
+  object-fit: cover;
+  background: var(--hover);
 }

@@ -4,6 +4,7 @@ import json
 import os
 import re
 import secrets
+import time
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
@@ -86,14 +87,37 @@ def graph(path: str, send: dict | None = None, **params) -> dict:
     return body
 
 
+_pics: dict[str, tuple[float, str | None]] = {}
+PIC_TTL = 3600
+
+
+# ponytail: in-process cache, so each Cloud Run instance fetches its own; fine at one store
+def profile_pics(psids: list[str]) -> dict[str, str | None]:
+    """Profile photo links by customer PSID, in one Graph call. Meta's links expire, so each is refetched after an hour.
+    On any failure the photo is just missing and the app shows initials."""
+    now = time.time()
+    stale = [p for p in psids if p not in _pics or now - _pics[p][0] > PIC_TTL]
+    if stale:
+        try:
+            data = graph("", ids=",".join(stale), fields="profile_pic")
+            for p in stale:
+                _pics[p] = (now, (data.get(p) or {}).get("profile_pic"))
+        except HTTPException:
+            pass
+    return {p: _pics[p][1] if p in _pics else None for p in psids}
+
+
 # ponytail: first page only (25 threads, 50 messages), add paging when a Page outgrows it
 @app.get("/api/conversations")
 def conversations(user: dict = Depends(current_user)):
     data = graph(f"{PAGE_ID}/conversations", platform="messenger", fields="id,updated_time,snippet,participants,messages.limit(1){from,created_time}")
     threads = data.get("data", [])
     seen, actions = read_marks(user), order_actions([c["id"] for c in threads])
+    customers = {c["id"]: next((p for p in c.get("participants", {}).get("data", []) if p.get("id") != PAGE_ID), None) for c in threads}
+    pics = profile_pics([p["id"] for p in customers.values() if p and p.get("id")])
     out = []
     for c in threads:
+        customer = customers[c["id"]]
         last = next(iter(c.get("messages", {}).get("data", [])), {})
         # The newest message is the customer's, so the seller owes a reply.
         waiting = bool(last) and last.get("from", {}).get("id") != PAGE_ID
@@ -102,7 +126,7 @@ def conversations(user: dict = Depends(current_user)):
             "id": c["id"],
             "updated_time": c.get("updated_time"),
             "snippet": c.get("snippet", ""),
-            "customer": next((p for p in c.get("participants", {}).get("data", []) if p.get("id") != PAGE_ID), None),
+            "customer": customer and {**customer, "picture": pics.get(customer.get("id"))},
             "open_checks": cached_open_checks(c["id"]),
             "unread": bool(at) and (c["id"] not in seen or seen[c["id"]] < at),
             "awaiting_reply": waiting,

@@ -35,29 +35,38 @@ export default function App() {
   const signIn = () =>
     signInWithPopup(auth, new GoogleAuthProvider()).catch((e) => setError(e.message))
 
-  if (user === undefined) return <main>Loading…</main>
+  if (user === undefined) return <main className="card">Loading…</main>
+
+  if (!me)
+    return (
+      <main className="card">
+        <h1>Seller Evidence Assistant</h1>
+        {error && <p role="alert">{error}</p>}
+        {user ? <button onClick={() => signOut(auth)}>Sign out</button> : <button className="primary" onClick={signIn}>Sign in with Google</button>}
+      </main>
+    )
 
   return (
-    <main>
-      <h1>Seller Evidence Assistant</h1>
-      {!user && <button onClick={signIn}>Sign in with Google</button>}
-      {me && <p>Signed in as {me.name ?? me.email} ({me.email}), verified by the backend.</p>}
-      {error && <p role="alert">{error}</p>}
-      {me && (
-        <nav>
+    <div className="app">
+      <header className="topbar">
+        <strong className="brand">Seller Evidence Assistant</strong>
+        <nav className="tabs">
           <button onClick={() => setTab('conversations')} aria-current={tab === 'conversations'}>
             Conversations
-          </button>{' '}
+          </button>
           <button onClick={() => setTab('orders')} aria-current={tab === 'orders'}>
             Orders
-          </button>{' '}
+          </button>
           <button onClick={() => setTab('settings')} aria-current={tab === 'settings'}>
             Settings
           </button>
         </nav>
-      )}
-      {me && (tab === 'conversations' ? <Conversations /> : tab === 'orders' ? <Orders /> : <GcashSettings />)}
-      {user && <button onClick={() => signOut(auth)}>Sign out</button>}
-    </main>
+        <span className="me" title={`${me.email}, verified by the backend`}>
+          {me.name ?? me.email}
+        </span>
+        <button onClick={() => signOut(auth)}>Sign out</button>
+      </header>
+      {tab === 'conversations' ? <Conversations /> : tab === 'orders' ? <Orders /> : <div className="page"><GcashSettings /></div>}
+    </div>
   )
 }

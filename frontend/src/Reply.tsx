@@ -38,22 +38,24 @@ export default function Reply({ conversationId, text, setText, orderId, until, o
 
   return (
     <form className="reply" onSubmit={send}>
-      <label>
-        Message to the customer on Messenger
-        <textarea value={text} onChange={(e) => setText(e.target.value)} maxLength={2000} rows={3} disabled={closed} />
-      </label>
-      {closed ? (
-        <p>
-          <small>Messenger only allows replies within 24 hours of the customer's last message{until && <> (closed {until.toLocaleString()})</>}.</small>
-        </p>
-      ) : (
-        until && (
-          <p>
-            <small>You can reply until {until.toLocaleString()}.</small>
-          </p>
-        )
-      )}
-      <button disabled={busy || closed || !text.trim()}>{busy ? 'Sending…' : 'Send'}</button> {status && <span role="status">{status}</span>}
+      <textarea
+        aria-label="Message to the customer on Messenger"
+        placeholder={closed ? 'Reply window closed' : 'Reply in Messenger…'}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        maxLength={2000}
+        rows={2}
+        disabled={closed}
+      />
+      <div className="reply-foot">
+        <small>
+          {closed
+            ? <>Messenger only allows replies within 24 hours of the customer's last message{until && <> (closed {until.toLocaleString()})</>}.</>
+            : until && <>You can reply until {until.toLocaleString()}.</>}
+        </small>
+        {status && <span role="status">{status}</span>}
+        <button className="primary" disabled={busy || closed || !text.trim()}>{busy ? 'Sending…' : 'Send'}</button>
+      </div>
     </form>
   )
 }

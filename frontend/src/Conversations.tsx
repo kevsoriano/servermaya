@@ -8,7 +8,7 @@ type Conversation = {
   id: string
   updated_time: string
   snippet: string
-  customer: { name: string } | null
+  customer: { name: string; picture?: string | null } | null
   open_checks: number | null
   unread: boolean
   awaiting_reply: boolean
@@ -45,6 +45,19 @@ function replyUntil(messages: Message[]) {
 }
 
 const HOUR = 3600 * 1000
+
+export function Avatar({ name, src }: { name: string; src?: string | null }) {
+  const [broken, setBroken] = useState(false) // Meta's photo links expire; fall back to initials
+  if (src && !broken) return <img className="avatar" src={src} alt="" onError={() => setBroken(true)} />
+  const initials = name.split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase()
+  return <span className="avatar" aria-hidden="true">{initials || '?'}</span>
+}
+
+/** Time today, date otherwise, like an inbox list. */
+const when = (iso: string) => {
+  const d = new Date(iso)
+  return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : d.toLocaleDateString()
+}
 
 /** What the seller still has to do on a thread. The open-checks badge is shown separately. */
 function pending(c: Conversation) {
@@ -116,64 +129,97 @@ export default function Conversations() {
       .finally(() => setDrafting(false))
   }
 
+  const customer = list?.find((c) => c.id === openId)?.customer
+  const name = customer?.name ?? 'Unknown'
+
   return (
-    <section>
-      <h2>Messenger conversations</h2>
-      {error && <p role="alert">{error}</p>}
-      {!list && !error && <p>Loading…</p>}
-      {list?.length === 0 && <p>No conversations yet.</p>}
-      <ul className="threads">
-        {list?.map((c) => (
-          <li key={c.id}>
-            <button onClick={() => open(c.id)} aria-current={c.id === openId} className={c.unread && c.id !== openId ? 'unread' : undefined}>
-              <strong>
-                {c.unread && c.id !== openId && <span className="dot" role="img" aria-label="Unread" />}
-                {c.customer?.name ?? 'Unknown'}
-              </strong>
-              <span>{c.snippet}</span>
-              {!!c.open_checks && <mark>{c.open_checks} {c.open_checks === 1 ? 'check' : 'checks'} before shipping</mark>}
-              {pending(c).map((p) => (
-                <mark key={p} className="pending">
-                  {p}
-                </mark>
-              ))}
-              <time>{new Date(c.updated_time).toLocaleString()}</time>
-            </button>
-          </li>
-        ))}
-      </ul>
-      {openId && !messages && !error && <p>Loading messages…</p>}
-      {openId && messages && messages.length > 0 && <Signals conversationId={openId} messages={messages} latest={messages.at(-1)?.id} />}
-      <ol className="messages">
-        {messages?.map((m) => (
-          <li key={m.id} className={m.from_page ? 'page' : 'customer'}>
-            <small>
-              {m.from_name} · {new Date(m.created_time).toLocaleString()}
-            </small>
-            <p>
-              {m.text}
-            </p>
-            {m.attachments.map((a, n) => (
-              <Media key={n} a={a} />
+    <div className="inbox">
+      <aside className="pane">
+        <h2 className="pane-title">Messenger</h2>
+        {!list && !error && <p className="muted">Loading…</p>}
+        {list?.length === 0 && <p className="muted">No conversations yet.</p>}
+        <ul className="threads">
+          {list?.map((c) => (
+            <li key={c.id}>
+              <button onClick={() => open(c.id)} aria-current={c.id === openId} className={c.unread && c.id !== openId ? 'unread' : undefined}>
+                <Avatar name={c.customer?.name ?? ''} src={c.customer?.picture} />
+                <div>
+                  <div className="thread-head">
+                    <strong>
+                      {c.unread && c.id !== openId && <span className="dot" role="img" aria-label="Unread" />}
+                      {c.customer?.name ?? 'Unknown'}
+                    </strong>
+                    <time dateTime={c.updated_time} title={new Date(c.updated_time).toLocaleString()}>
+                      {when(c.updated_time)}
+                    </time>
+                  </div>
+                  <span className="snippet">{c.snippet}</span>
+                  {!!c.open_checks && <mark>{c.open_checks} {c.open_checks === 1 ? 'check' : 'checks'} before shipping</mark>}
+                  {pending(c).map((p) => (
+                    <mark key={p} className="pending">
+                      {p}
+                    </mark>
+                  ))}
+                </div>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </aside>
+      <section className="pane chat">
+        {openId && (
+          <header className="chat-head">
+            <Avatar name={name} src={customer?.picture} />
+            <strong>{name}</strong>
+          </header>
+        )}
+        {error && <p role="alert">{error}</p>}
+        {!openId && !error && <p className="empty">Pick a conversation to read it.</p>}
+        {openId && !messages && !error && <p className="empty">Loading messages…</p>}
+        {/* column-reverse keeps the scroll pinned to the newest message without JS */}
+        <div className="scroll">
+          <ol className="messages">
+            {messages?.map((m) => (
+              <li key={m.id} className={m.from_page ? 'page' : 'customer'}>
+                <small>
+                  {m.from_name} · {new Date(m.created_time).toLocaleString()}
+                </small>
+                {m.text && <p>{m.text}</p>}
+                {m.attachments.map((a, n) => (
+                  <Media key={n} a={a} />
+                ))}
+              </li>
             ))}
-          </li>
-        ))}
-      </ol>
+          </ol>
+        </div>
+        {openId && messages && (
+          <Reply
+            conversationId={openId}
+            text={reply}
+            setText={setReply}
+            until={replyUntil(messages)}
+            onSent={() => load<Message[]>(`/conversations/${openId}`).then(setMessages, (e) => setError(e.message))}
+          />
+        )}
+      </section>
       {openId && messages && (
-        <Reply
-          conversationId={openId}
-          text={reply}
-          setText={setReply}
-          until={replyUntil(messages)}
-          onSent={() => load<Message[]>(`/conversations/${openId}`).then(setMessages, (e) => setError(e.message))}
-        />
+        <aside className="pane side">
+          <div className="profile">
+            <Avatar name={name} src={customer?.picture} />
+            <strong>{name}</strong>
+          </div>
+          {messages.length > 0 && !order && (
+            <div className="block">
+              <h3>Order</h3>
+              <button className="primary" onClick={createDraft} disabled={drafting}>
+                {drafting ? 'Reading the conversation…' : '+ Create draft order'}
+              </button>
+            </div>
+          )}
+          {order && <OrderView order={order} onChange={setOrder} />}
+          {messages.length > 0 && <Signals conversationId={openId} messages={messages} latest={messages.at(-1)?.id} />}
+        </aside>
       )}
-      {messages && messages.length > 0 && !order && (
-        <button onClick={createDraft} disabled={drafting}>
-          {drafting ? 'Reading the conversation…' : 'Create draft order'}
-        </button>
-      )}
-      {order && <OrderView order={order} onChange={setOrder} />}
-    </section>
+    </div>
   )
 }
