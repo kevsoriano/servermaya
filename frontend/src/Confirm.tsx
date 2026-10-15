@@ -87,6 +87,12 @@ export default function Confirm({ token }: { token: string }) {
               ? 'We have not received your payment yet. If you just paid, wait a moment and check again.'
               : 'Order confirmed. Pay to complete it.'}
           </p>
+          {order.test_mode && (
+            <p className="claim" role="note">
+              <mark>TEST</mark> <strong>This is a test. Do not scan the QR code</strong>: in test mode it is a real QR, and paying it with a real app sends
+              real money. On the payment page, press <strong>Simulate Payment</strong>, then <strong>Authorize Test Payment</strong>.
+            </p>
+          )}
           <p className="actions">
             <button onClick={() => act('/pay', (r) => r.checkout_url && location.assign(r.checkout_url))} disabled={busy}>
               Pay {peso(order.total)} with QR Ph
@@ -97,7 +103,6 @@ export default function Confirm({ token }: { token: string }) {
               </button>
             )}
           </p>
-          {order.test_mode && <p><mark>TEST</mark> This is a test payment page. No real money moves.</p>}
         </>
       )}
     </main>

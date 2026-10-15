@@ -511,7 +511,8 @@ def customer_view(order: dict) -> dict:
         "total": d["total"],
         **{f: d[f]["value"] for f in rules.FIELDS},
         "payment": (order.get("payment") or {}).get("status"),
-        "test_mode": (order.get("payment") or {}).get("livemode") is False,
+        # Before the first payment request, the key decides: PayMongo's test-mode QR codes are real and must not be scanned.
+        "test_mode": order["payment"]["livemode"] is False if order.get("payment") else PAYMONGO_KEY.startswith("sk_test_"),
         "gcash_confirmed": pack.paid_by(order) == "gcash_seller_confirmed",
     }
 
