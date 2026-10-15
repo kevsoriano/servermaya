@@ -27,6 +27,7 @@ import signals as risk
 import orders as rules
 import packing as pack
 import receipts as gcash
+import claims as cases
 import delivery
 import patterns
 
@@ -174,6 +175,8 @@ GCASH_ACTIONS = {"requested": "Waiting for GCash payment", "claimed": "Review a 
 
 
 def order_action(order: dict) -> str | None:
+    if any(c["status"] != "resolved" for c in order.get("claims", [])):
+        return "Review a customer claim"
     if order["status"] == "confirmed":
         try:
             delivery.can_dispatch(order)
@@ -539,6 +542,8 @@ def customer_view(order: dict) -> dict:
             "share_link": shipment.get("share_link"),  # only the customer holding this order's link sees it
         },
         "received": (order.get("receipt") or {}).get("fulfillment_id") == (shipment or {}).get("id") and bool(shipment),
+        "claims": [{"id": c["id"], "type": cases.TYPES[c["type"]], "status": c["status"], "created_at": c["created_at"], "photos": len(c["photos"])}
+                   for c in order.get("claims", [])],
     }
 
 
@@ -1300,6 +1305,152 @@ def cancel_delivery(order_id: str, body: rules.Cancel, user: dict = Depends(curr
 def public_received(token: str):
     now = datetime.now(timezone.utc)
     return customer_view(change(by_token(token).reference, lambda o: delivery.acknowledge(o, "customer_link", now)))
+
+
+# Claims and evidence review.
+MAX_OPEN_CLAIMS = 5
+
+
+def claim_photo(order_id: str, cid: str, data: bytes, content_type: str, source: str) -> dict:
+    if content_type not in pack.IMAGE_TYPES:
+        raise HTTPException(415, "Upload a JPEG, PNG, WebP or HEIC photo")
+    if not data or len(data) > pack.MAX_PHOTO_BYTES:
+        raise HTTPException(413, "Photos must be under 10 MB")
+    sha = hashlib.sha256(data).hexdigest()
+    path = f"stores/{STORE}/orders/{order_id}/claims/{cid}/{sha}"
+    try:
+        bucket().blob(path).upload_from_string(data, content_type=content_type, if_generation_match=0)
+    except PreconditionFailed:
+        pass  # the same photo again
+    return {"id": sha[:16], "path": path, "sha256": sha, "content_type": content_type, "size": len(data), "source": source,
+            "uploaded_at": datetime.now(timezone.utc)}
+
+
+def new_claim(ref, body: cases.ClaimIn, source: str, by: str) -> dict:
+    now, cid = datetime.now(timezone.utc), secrets.token_hex(6)
+
+    def rule(o: dict) -> dict:
+        if sum(c["status"] != "resolved" for c in o.get("claims", [])) >= MAX_OPEN_CLAIMS:
+            raise rules.Refused("There are already several open reports on this order")
+        return cases.open_claim(o, cid, body, source, by, now)
+
+    return change(ref, rule)
+
+
+@app.post("/api/public/orders/{token}/claims")
+def public_claim(token: str, body: cases.ClaimIn):
+    return customer_view(new_claim(by_token(token).reference, body, "customer_link", "customer"))
+
+
+@app.post("/api/public/orders/{token}/claims/{cid}/photos")
+async def public_claim_photo(token: str, cid: str, request: Request):
+    snap = await run_in_threadpool(by_token, token)
+    data = await request.body()
+    photo = await run_in_threadpool(claim_photo, snap.id, cid, data, request.headers.get("content-type", "").split(";")[0].strip().lower(), "customer")
+    now = datetime.now(timezone.utc)
+    return customer_view(await run_in_threadpool(change, snap.reference, lambda o: cases.add_photos(o, cid, [photo], "customer", now)))
+
+
+@app.post("/api/orders/{order_id}/claims")
+def seller_claim(order_id: str, body: cases.ClaimIn, user: dict = Depends(current_user)):
+    return new_claim(orders().document(order_id), body, "seller", user["email"])
+
+
+@app.post("/api/orders/{order_id}/claims/{cid}/photos")
+async def seller_claim_photo(order_id: str, cid: str, request: Request, user: dict = Depends(current_user)):
+    data = await request.body()
+    photo = await run_in_threadpool(claim_photo, order_id, cid, data, request.headers.get("content-type", "").split(";")[0].strip().lower(), "seller")
+    now = datetime.now(timezone.utc)
+    return await run_in_threadpool(change, orders().document(order_id), lambda o: cases.add_photos(o, cid, [photo], user["email"], now))
+
+
+@app.get("/api/orders/{order_id}/claims/{cid}/photos/{photo_id}")
+def claim_photo_file(order_id: str, cid: str, photo_id: str, user: dict = Depends(current_user)):
+    _, order = loaded(order_id)
+    try:
+        photo = next(p for p in cases.claim(order, cid)["photos"] if p["id"] == photo_id)
+    except (rules.Refused, StopIteration):
+        raise HTTPException(404, "Photo not found")
+    return Response(bucket().blob(photo["path"]).download_as_bytes(), media_type=photo["content_type"], headers={"Cache-Control": "private, max-age=3600"})
+
+
+@app.post("/api/orders/{order_id}/claims/{cid}/review")
+def review_claim(order_id: str, cid: str, user: dict = Depends(current_user)):
+    """Gemini compares the claim with the order's records. Citations are checked in code before anything is shown."""
+    ref, order = loaded(order_id)
+    try:
+        c = cases.claim(order, cid)
+    except rules.Refused as e:
+        raise HTTPException(404, str(e))
+    messages = order.get("messages", [])
+    if (order.get("source") or {}).get("type") == "messenger":
+        try:
+            messages = fetch_messages(order["source"]["conversation_id"])
+        except HTTPException:
+            pass  # the snapshot taken when the order was drafted
+    blocks, images = cases.evidence(order, messages, c)
+    contents: list = ["Records:\n" + "\n".join(blocks)]
+    shown = []
+    for label, photo in images:
+        try:
+            contents += [f"Image {label}:", types.Part.from_bytes(data=bucket().blob(photo["path"]).download_as_bytes(), mime_type=photo["content_type"])]
+            shown.append((label, photo))
+        except Exception:
+            pass  # an image that cannot be loaded cannot be cited
+    try:
+        response = clients()[0].models.generate_content(
+            model=GEMINI_MODEL, contents=contents,
+            config={"system_instruction": cases.SYSTEM, "response_mime_type": "application/json", "response_schema": cases.Review, "temperature": 0},
+        )
+        found = cases.Review.model_validate_json(response.text)
+    except Exception:
+        raise HTTPException(502, "Could not review this claim. Try again.")
+    now = datetime.now(timezone.utc)
+    review = cases.checked(found, cases.ids(blocks, shown), GEMINI_MODEL, now)
+    # The text behind each citation, so the seller can check it without hunting.
+    cited = {e for f in review["findings"] for e in f["evidence"]} | set(review["recommendation"]["evidence"])
+    texts = {b[1 : b.index("]")]: b for b in blocks} | {label: f"[{label}] Photo" for label, _ in shown}
+    review["sources"] = {k: v for k, v in texts.items() if k in cited}
+    return change(ref, lambda o: cases.record_review(o, cid, review, user["email"], now))
+
+
+@app.post("/api/orders/{order_id}/claims/{cid}/wait")
+def wait_claim(order_id: str, cid: str, user: dict = Depends(current_user)):
+    now = datetime.now(timezone.utc)
+    return change(orders().document(order_id), lambda o: cases.wait_for_evidence(o, cid, user["email"], now))
+
+
+@app.post("/api/orders/{order_id}/claims/{cid}/decide")
+def decide_claim(order_id: str, cid: str, body: cases.DecisionIn, user: dict = Depends(current_user)):
+    now = datetime.now(timezone.utc)
+    return change(orders().document(order_id), lambda o: cases.decide(o, cid, body, user["email"], now))
+
+
+class EscalateIn(BaseModel):
+    owner: str = Field(min_length=1, max_length=100)
+    next_action: str = Field(min_length=1, max_length=500)
+
+
+@app.post("/api/orders/{order_id}/claims/{cid}/escalate")
+def escalate_claim(order_id: str, cid: str, body: EscalateIn, user: dict = Depends(current_user)):
+    now = datetime.now(timezone.utc)
+    return change(orders().document(order_id), lambda o: cases.escalate(o, cid, body.owner, body.next_action, user["email"], now))
+
+
+@app.post("/api/orders/{order_id}/claims/{cid}/replacement")
+def replace_claim(order_id: str, cid: str, user: dict = Depends(current_user)):
+    now = datetime.now(timezone.utc)
+    return change(orders().document(order_id), lambda o: cases.start_replacement(o, cid, user["email"], now))
+
+
+class ResolveIn(BaseModel):
+    note: str = Field(default="", max_length=1000)
+
+
+@app.post("/api/orders/{order_id}/claims/{cid}/resolve")
+def resolve_claim(order_id: str, cid: str, body: ResolveIn, user: dict = Depends(current_user)):
+    now = datetime.now(timezone.utc)
+    return change(orders().document(order_id), lambda o: cases.resolve(o, cid, body.note, user["email"], now))
 
 
 # Patterns. Recomputed on every load from the store's own orders.

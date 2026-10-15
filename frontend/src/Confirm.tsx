@@ -14,6 +14,7 @@ type Summary = {
   gcash_confirmed: boolean
   shipment: { status: string; courier: string; simulated: boolean; share_link: string | null } | null
   received: boolean
+  claims: { id: string; type: string; status: string; created_at: string; photos: number }[]
 }
 
 const SHIPMENT: Record<string, string> = {
@@ -24,12 +25,26 @@ const SHIPMENT: Record<string, string> = {
   cancelled: 'Delivery cancelled; the seller will contact you',
   failed: 'Delivery failed; the seller will contact you',
 }
-/** Delivery status and "I received it". */
+const PROBLEMS = {
+  missing_item: 'Something is missing',
+  wrong_item: 'I got the wrong item',
+  damage: 'It arrived damaged',
+  nonreceipt: 'I did not receive it',
+  payment_issue: 'A problem with my payment',
+  cancellation: 'I want to cancel',
+  other: 'Something else',
+}
+
+/** Delivery status, "I received it", and reporting a problem. A report goes to the seller, who reviews and replies. */
 function AfterPayment({ token, order, setOrder }: { token: string; order: Summary; setOrder: (o: Summary) => void }) {
+  const [reporting, setReporting] = useState(false)
+  const [type, setType] = useState('missing_item')
+  const [narrative, setNarrative] = useState('')
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const s = order.shipment
   const sent = s && ['picked_up', 'delivered'].includes(s.status)
+  const latest = order.claims.at(-1)
 
   const post = (label: string, path: string, init: RequestInit) => {
     setBusy(label)
@@ -58,6 +73,56 @@ function AfterPayment({ token, order, setOrder }: { token: string; order: Summar
         </button>
       )}
       {order.received && <p>Thank you for confirming you received it.</p>}
+      {order.claims.map((c) => (
+        <p key={c.id}>
+          <small>
+            You reported “{c.type}” on {new Date(c.created_at).toLocaleString()}. Status: {c.status.replace(/_/g, ' ')}.
+          </small>
+        </p>
+      ))}
+      {latest && latest.status !== 'resolved' && latest.photos < 4 && (
+        <label className="upload">
+          Add a photo to your report
+          <input
+            type="file"
+            accept="image/*"
+            disabled={!!busy}
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) post('Uploading…', `/claims/${latest.id}/photos`, { headers: { 'Content-Type': file.type }, body: file })
+            }}
+          />
+        </label>
+      )}
+      {reporting ? (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            post('Sending…', '/claims', { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, narrative }) }).then(() => setReporting(false))
+          }}
+        >
+          <label>
+            What happened?
+            <select value={type} onChange={(e) => setType(e.target.value)}>
+              {Object.entries(PROBLEMS).map(([k, v]) => (
+                <option key={k} value={k}>
+                  {v}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Tell the seller more
+            <textarea required rows={3} maxLength={2000} value={narrative} onChange={(e) => setNarrative(e.target.value)} />
+          </label>
+          <p>
+            <small>You can add photos after sending.</small>
+          </p>
+          <button disabled={!!busy}>Send report</button>
+        </form>
+      ) : (
+        <button onClick={() => setReporting(true)}>Report a problem</button>
+      )}
       {error && <p role="alert">{error}</p>}
       {busy && <p role="status">{busy}</p>}
     </>

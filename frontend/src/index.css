@@ -663,3 +663,23 @@ mark.source.provider {
   color: inherit;
 }
 
+.claim.done {
+  border-left-color: green;
+  opacity: 0.8;
+}
+
+.findings {
+  padding-left: 1.25rem;
+}
+
+.findings abbr {
+  cursor: help;
+  margin-left: 0.125rem;
+}
+
+.review {
+  margin: 0.5rem 0;
+  padding: 0.5rem;
+  background: color-mix(in srgb, currentColor 5%, transparent);
+  border-radius: 0.25rem;
+}

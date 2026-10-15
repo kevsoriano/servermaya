@@ -1,0 +1,330 @@
+import { useEffect, useState } from 'react'
+import { CLAIM_TYPES as TYPES, load, peso } from './firebase'
+import type { Order } from './OrderView'
+import { Photo } from './Packing'
+import { PatternCard, type Card } from './Patterns'
+
+type Finding = { statement: string; status: 'supported' | 'conflicting' | 'unverified' | 'insufficient_data'; evidence: string[]; uncertainty: string; withheld?: boolean }
+type Action = 'clarification' | 'refund' | 'partial_refund' | 'replacement' | 'redelivery' | 'escalation'
+export type Claim = {
+  id: string
+  type: string
+  narrative: string
+  source: 'customer_link' | 'seller'
+  created_by: string
+  created_at: string
+  status: 'open' | 'awaiting_evidence' | 'under_review' | 'resolution_approved' | 'executing' | 'resolved' | 'escalated'
+  photos: { id: string; source: string }[]
+  review: {
+    findings: Finding[]
+    recommendation: { action: Action; amount_php: number | null; explanation: string; evidence: string[] }
+    draft_reply: string
+    questions: string[]
+    sources?: Record<string, string>
+    model: string
+    at: string
+  } | null
+  review_stale?: boolean
+  decision: { action: Action; amount: number | null; reason: string; reply: string | null; by: string; at: string; followed_ai: boolean } | null
+  resolution: { how: string; note: string | null; by: string; at: string } | null
+  escalation: { owner: string; next_action: string } | null
+}
+
+const ACTIONS: Record<Action, string> = {
+  clarification: 'Ask for clarification',
+  refund: 'Full refund',
+  partial_refund: 'Partial refund',
+  replacement: 'Send a replacement',
+  redelivery: 'Deliver again',
+  escalation: 'Escalate',
+}
+const FINDING = { supported: 'Supported', conflicting: 'Conflicting', unverified: 'Unverified', insufficient_data: 'Insufficient data' }
+function Review({ c, onDecide }: { c: Claim; onDecide: (a: Action, amount: number | null, reply: string) => void }) {
+  const r = c.review!
+  return (
+    <div className="review">
+      <p>
+        <small>
+          AI review by {r.model}, {new Date(r.at).toLocaleString()}. Every statement cites the records below it; check them before you decide.
+          {c.review_stale && <strong> New evidence arrived since: review again.</strong>}
+        </small>
+      </p>
+      <ul className="findings">
+        {r.findings.map((f, n) => (
+          <li key={n} className={`finding ${f.status}`}>
+            <span className={`result ${f.status === 'supported' ? 'pass' : f.status === 'conflicting' ? 'fail' : 'unreadable'}`}>{FINDING[f.status]}</span>:{' '}
+            {f.statement}
+            {f.evidence.length > 0 && (
+              <>
+                {' '}
+                {f.evidence.map((e) => (
+                  <abbr key={e} title={r.sources?.[e]}>
+                    [{e}]
+                  </abbr>
+                ))}
+              </>
+            )}
+            {f.uncertainty && <small> · Could be wrong if: {f.uncertainty}</small>}
+          </li>
+        ))}
+      </ul>
+      <p>
+        Suggested: <strong>{ACTIONS[r.recommendation.action]}</strong>
+        {r.recommendation.amount_php != null && <> of {peso(Math.round(r.recommendation.amount_php * 100))}</>}. {r.recommendation.explanation}{' '}
+        {r.recommendation.evidence.map((e) => (
+          <abbr key={e} title={r.sources?.[e]}>
+            [{e}]
+          </abbr>
+        ))}
+      </p>
+      {r.questions.length > 0 && (
+        <details>
+          <summary>Questions to ask</summary>
+          <ul>
+            {r.questions.map((q) => (
+              <li key={q}>{q}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {!c.decision && (
+        <button onClick={() => onDecide(r.recommendation.action, r.recommendation.amount_php != null ? Math.round(r.recommendation.amount_php * 100) : null, r.draft_reply)}>
+          Use as a starting point
+        </button>
+      )}
+    </div>
+  )
+}
+
+function ClaimCard({ order, c, onChange, write }: { order: Order; c: Claim; onChange: (o: Order) => void; write: (t: string) => void }) {
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+  const [deciding, setDeciding] = useState<{ action: Action; amount: string; reason: string; reply: string }>()
+  const [note, setNote] = useState('')
+  const [escalating, setEscalating] = useState(false)
+  const [owner, setOwner] = useState('')
+  const [next, setNext] = useState('')
+
+  const run = (label: string, path: string, body?: object | File) => {
+    setBusy(label)
+    setError('')
+    const claimPath = path.startsWith('/refunds') ? path : `/claims/${c.id}${path}`
+    return load<Order>(`/orders/${order.id}${claimPath}`, {
+      method: 'POST',
+      ...(body instanceof File
+        ? { headers: { 'Content-Type': body.type }, body }
+        : body && { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+    })
+      .then(onChange, (e) => setError(e.message))
+      .finally(() => setBusy(''))
+  }
+  const decide = (action: Action, amount: number | null, reply: string) =>
+    setDeciding({ action, amount: amount ? (amount / 100).toFixed(2) : '', reason: '', reply })
+  const open = c.status !== 'resolved'
+  const act = c.decision?.action
+
+  return (
+    <div className={`claim ${open ? '' : 'done'}`}>
+      <p>
+        <strong>{TYPES[c.type]}</strong> · {c.status.replace(/_/g, ' ')} · from {c.source === 'customer_link' ? 'the customer (order link)' : c.created_by},{' '}
+        {new Date(c.created_at).toLocaleString()}
+      </p>
+      <blockquote>{c.narrative}</blockquote>
+      {c.photos.length > 0 && (
+        <div className="photos">
+          {c.photos.map((p, n) => (
+            <Photo key={p.id} path={`/orders/${order.id}/claims/${c.id}/photos/${p.id}`} alt={`Claim photo ${n + 1}`} caption={`CP${n + 1} · ${p.source}`} />
+          ))}
+        </div>
+      )}
+      {open && c.photos.length < 4 && (
+        <label className="upload">
+          Add a photo to this report
+          <input type="file" accept="image/*" disabled={!!busy} onChange={(e) => e.target.files?.[0] && run('Uploading…', '/photos', e.target.files[0])} />
+        </label>
+      )}
+
+      {c.review && <Review c={c} onDecide={decide} />}
+      {open && !c.decision && (
+        <p className="actions">
+          <button disabled={!!busy} onClick={() => run('Reviewing the records… about 20 seconds', '/review')}>
+            {c.review ? 'Review again' : 'Review with AI'}
+          </button>
+          {['open', 'under_review'].includes(c.status) && (
+            <button disabled={!!busy} onClick={() => run('Saving…', '/wait')}>
+              Waiting for the customer’s evidence
+            </button>
+          )}
+          {!deciding && <button onClick={() => decide('clarification', null, '')}>Decide without AI</button>}
+        </p>
+      )}
+
+      {deciding && !c.decision && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            const amount = deciding.action === 'partial_refund' ? Math.round(parseFloat(deciding.amount) * 100) : null
+            run('Saving…', '/decide', { action: deciding.action, amount, reason: deciding.reason, reply: deciding.reply }).then(() => setDeciding(undefined))
+          }}
+        >
+          <label>
+            Outcome
+            <select value={deciding.action} onChange={(e) => setDeciding({ ...deciding, action: e.target.value as Action })}>
+              {Object.entries(ACTIONS).map(([k, v]) => (
+                <option key={k} value={k}>
+                  {v}
+                </option>
+              ))}
+            </select>
+          </label>
+          {deciding.action === 'partial_refund' && (
+            <label>
+              Amount in pesos
+              <input required inputMode="decimal" value={deciding.amount} onChange={(e) => setDeciding({ ...deciding, amount: e.target.value })} />
+            </label>
+          )}
+          <label>
+            Why (kept on record)
+            <input required value={deciding.reason} onChange={(e) => setDeciding({ ...deciding, reason: e.target.value })} />
+          </label>
+          <label>
+            Reply to the customer (edit before sending)
+            <textarea rows={3} value={deciding.reply} onChange={(e) => setDeciding({ ...deciding, reply: e.target.value })} />
+          </label>
+          <p>
+            <small>Approving records your decision. It does not refund, ship or message anyone by itself.</small>
+          </p>
+          <button className="primary" disabled={!!busy}>
+            Approve outcome
+          </button>{' '}
+          <button type="button" onClick={() => setDeciding(undefined)}>
+            Cancel
+          </button>
+        </form>
+      )}
+
+      {c.decision && (
+        <p>
+          Approved: <strong>{ACTIONS[c.decision.action]}</strong>
+          {c.decision.amount != null && <> of {peso(c.decision.amount)}</>} by {c.decision.by} ({c.decision.reason})
+          {c.decision.followed_ai ? ' · same as the AI suggestion' : c.review ? ' · differs from the AI suggestion' : ''}.{' '}
+          {c.decision.reply && <button onClick={() => write(c.decision!.reply!)}>Write the reply to the customer</button>}
+        </p>
+      )}
+      {open && (act === 'replacement' || act === 'redelivery') && !order.replacement && c.status === 'resolution_approved' && (
+        <button disabled={!!busy} onClick={() => run('Starting…', '/replacement')}>
+          Start the {act === 'replacement' ? 'replacement (pack and ship again)' : 'redelivery'}
+        </button>
+      )}
+      {order.replacement?.claim_id === c.id && <p>In progress: pack and dispatch it in the panels above. The original shipment stays on record.</p>}
+
+      {c.escalation && (
+        <p>
+          Escalated to <strong>{c.escalation.owner}</strong>. Next: {c.escalation.next_action}
+        </p>
+      )}
+      {open && c.decision && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            run('Closing…', '/resolve', { note })
+          }}
+        >
+          <label>
+            Close the report once the outcome has happened{['clarification', 'escalation'].includes(act!) ? ': how it was resolved' : ' (note optional)'}
+            <input value={note} onChange={(e) => setNote(e.target.value)} />
+          </label>
+          <button disabled={!!busy}>Close report</button>
+        </form>
+      )}
+      {open && !escalating && c.status !== 'escalated' && <button onClick={() => setEscalating(true)}>Escalate</button>}
+      {escalating && open && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            run('Saving…', '/escalate', { owner, next_action: next }).then(() => setEscalating(false))
+          }}
+        >
+          <label>
+            Owner
+            <input required value={owner} onChange={(e) => setOwner(e.target.value)} />
+          </label>
+          <label>
+            Next action
+            <input required value={next} onChange={(e) => setNext(e.target.value)} />
+          </label>
+          <button>Escalate</button>
+        </form>
+      )}
+      {c.resolution && (
+        <p role="status">
+          Closed by {c.resolution.by} on {new Date(c.resolution.at).toLocaleString()}: {c.resolution.how}
+          {c.resolution.note && <> ({c.resolution.note})</>}.
+        </p>
+      )}
+      {error && <p role="alert">{error}</p>}
+      {busy && <p role="status">{busy}</p>}
+    </div>
+  )
+}
+
+/** Claims on this order. Each review cites the order's records; the seller decides and carries out every outcome. */
+export default function Claims({ order, onChange, write }: { order: Order; onChange: (o: Order) => void; write: (t: string) => void }) {
+  const [adding, setAdding] = useState(false)
+  const [type, setType] = useState('damage')
+  const [narrative, setNarrative] = useState('')
+  const [error, setError] = useState('')
+  const [cards, setCards] = useState<Card[]>([])
+  const claims = order.claims ?? []
+  const count = claims.length
+
+  useEffect(() => {
+    if (count) load<Card[]>(`/orders/${order.id}/patterns`).then(setCards, () => setCards([]))
+  }, [order.id, count])
+
+  if (order.status !== 'confirmed' && order.status !== 'cancelled') return null
+
+  const add = (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+    load<Order>(`/orders/${order.id}/claims`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, narrative }) })
+      .then((o) => (onChange(o), setAdding(false), setNarrative('')), (e) => setError(e.message))
+  }
+
+  return (
+    <section className="packing">
+      <h3>Customer claims{count > 0 && ` · ${claims.filter((c) => c.status !== 'resolved').length} open`}</h3>
+      {cards.map((card) => (
+        <PatternCard key={card.key} card={card} compact />
+      ))}
+      {[...claims].reverse().map((c) => (
+        <ClaimCard key={c.id} order={order} c={c} onChange={onChange} write={write} />
+      ))}
+      {adding ? (
+        <form onSubmit={add}>
+          <label>
+            What the customer reports
+            <select value={type} onChange={(e) => setType(e.target.value)}>
+              {Object.entries(TYPES).map(([k, v]) => (
+                <option key={k} value={k}>
+                  {v}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            In their words, or yours
+            <textarea required rows={3} maxLength={2000} value={narrative} onChange={(e) => setNarrative(e.target.value)} />
+          </label>
+          <button>Open claim</button>{' '}
+          <button type="button" onClick={() => setAdding(false)}>
+            Cancel
+          </button>
+        </form>
+      ) : (
+        <button onClick={() => setAdding(true)}>Record a claim</button>
+      )}
+      {error && <p role="alert">{error}</p>}
+    </section>
+  )
+}
