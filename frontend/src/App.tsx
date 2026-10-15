@@ -2,6 +2,7 @@ import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type 
 import { useEffect, useState } from 'react'
 import Conversations from './Conversations'
 import Orders from './Orders'
+import Patterns from './Patterns'
 import DispatchSettings from './DispatchSettings'
 import GcashSettings from './GcashSettings'
 import { api, auth } from './firebase'
@@ -13,7 +14,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>()
   const [me, setMe] = useState<Me>()
   const [error, setError] = useState('')
-  const [tab, setTab] = useState<'conversations' | 'orders' | 'settings'>('conversations')
+  const [tab, setTab] = useState<'conversations' | 'orders' | 'patterns' | 'settings'>('conversations')
 
   useEffect(
     () =>
@@ -58,6 +59,9 @@ export default function App() {
           <button onClick={() => setTab('orders')} aria-current={tab === 'orders'}>
             Orders
           </button>
+          <button onClick={() => setTab('patterns')} aria-current={tab === 'patterns'}>
+            Patterns
+          </button>
           <button onClick={() => setTab('settings')} aria-current={tab === 'settings'}>
             Settings
           </button>
@@ -71,6 +75,8 @@ export default function App() {
         <Conversations />
       ) : tab === 'orders' ? (
         <Orders />
+      ) : tab === 'patterns' ? (
+        <Patterns />
       ) : (
         <div className="page">
           <GcashSettings />

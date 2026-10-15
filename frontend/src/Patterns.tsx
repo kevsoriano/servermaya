@@ -1,0 +1,226 @@
+import { useEffect, useState } from 'react'
+import { CLAIM_TYPES as TYPES, load } from './firebase'
+
+type Ratio = { numerator: number; denominator: number; rate: number | null; of: string }
+type Review = { status: string; reason?: string; by?: string; at?: string; was?: string }
+export type Card = {
+  key: string
+  rule: 'payment_reference_reuse' | 'recurring_customer_claims' | 'loss_concentration'
+  entity: { kind: string; value: string; label: string }
+  incidents: { order_id: string; claim_id?: string; type?: string; at?: string; outcome?: string | null }[]
+  incidents_hash: string
+  numerator: number
+  denominator: number | null
+  rate: number | null
+  baseline: Ratio | null
+  elevated: boolean
+  outcomes?: Record<string, number>
+  limitations: string[]
+  alternatives: string[]
+  suggested_review: string
+  review: Review
+  previous_review?: Review
+}
+
+const RULE = {
+  payment_reference_reuse: 'Payment reference reused',
+  recurring_customer_claims: 'Recurring claims from one customer',
+  loss_concentration: 'Damage and non-receipt concentration',
+}
+const REVIEW: Record<string, string> = {
+  new: 'New',
+  reviewing: 'Reviewing',
+  explained_operationally: 'Explained',
+  unresolved: 'Unresolved',
+  dismissed: 'Dismissed',
+}
+const pct = (r: number | null) => (r == null ? 'n/a' : `${Math.round(r * 100)}%`)
+
+export function PatternCard({ card, compact, onReviewed }: { card: Card; compact?: boolean; onReviewed?: (r: Review) => void }) {
+  const [status, setStatus] = useState('reviewing')
+  const [reason, setReason] = useState('')
+  const [error, setError] = useState('')
+
+  const save = (e: React.FormEvent) => {
+    e.preventDefault()
+    load<Review>('/patterns/review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: card.key, incidents_hash: card.incidents_hash, status, reason }),
+    }).then((r) => (onReviewed?.(r), setReason('')), (e) => setError(e.message))
+  }
+
+  return (
+    <div className="signal">
+      <p>
+        <strong>{RULE[card.rule]}</strong> · {card.entity.label} · <mark>{REVIEW[card.review.status] ?? card.review.status}</mark>
+        {card.elevated && <mark> Higher than the rest of the store</mark>}
+      </p>
+      {card.denominator != null ? (
+        <p>
+          {card.numerator} of {card.denominator} delivered shipment(s) ({pct(card.rate)})
+          {card.baseline && (
+            <>
+              {' '}
+              against {card.baseline.numerator} of {card.baseline.denominator} for {card.baseline.of} ({pct(card.baseline.rate)})
+            </>
+          )}
+          .
+        </p>
+      ) : (
+        <p>{card.numerator} different orders received it.</p>
+      )}
+      {card.outcomes && (
+        <p>
+          <small>
+            Outcomes:{' '}
+            {Object.entries(card.outcomes)
+              .map(([k, n]) => `${n} ${k === 'null' || !k ? 'not decided yet' : k.replace('_', ' ')}`)
+              .join(', ')}
+            . A claim is not a finding of error or abuse.
+          </small>
+        </p>
+      )}
+      <p>
+        Linked:{' '}
+        {card.incidents
+          .map((i) => `order ${i.order_id}${i.type ? ` (${TYPES[i.type] ?? i.type})` : ''}`)
+          .join(', ')}
+      </p>
+      {!compact && (
+        <>
+          <p>Next: {card.suggested_review}</p>
+          {card.limitations.length > 0 && (
+            <ul>
+              {card.limitations.map((l) => (
+                <li key={l}>
+                  <small>{l}</small>
+                </li>
+              ))}
+            </ul>
+          )}
+          <details>
+            <summary>Other explanations</summary>
+            <ul>
+              {card.alternatives.map((a) => (
+                <li key={a}>{a}</li>
+              ))}
+            </ul>
+          </details>
+          {card.previous_review && (
+            <p>
+              <small>
+                An earlier review ({REVIEW[card.previous_review.was ?? ''] ?? card.previous_review.was}: {card.previous_review.reason}) was superseded because the linked cases
+                changed.
+              </small>
+            </p>
+          )}
+          {card.review.reason && (
+            <p>
+              <small>
+                Reviewed by {card.review.by}: {card.review.reason}
+              </small>
+            </p>
+          )}
+          <form onSubmit={save}>
+            <label>
+              Review
+              <select value={status} onChange={(e) => setStatus(e.target.value)}>
+                {Object.entries(REVIEW)
+                  .filter(([k]) => k !== 'new')
+                  .map(([k, v]) => (
+                    <option key={k} value={k}>
+                      {v}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label>
+              Reason (required)
+              <input required value={reason} onChange={(e) => setReason(e.target.value)} />
+            </label>
+            <button>Save review</button>
+          </form>
+          {error && <p role="alert">{error}</p>}
+        </>
+      )}
+      {compact && (
+        <p>
+          <small>Context only: it does not decide this claim. See the Patterns tab to review it.</small>
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** Concentrations worth a look, computed from the store's own orders. Cards never block or decide anything. */
+export default function Patterns() {
+  const [days, setDays] = useState(30)
+  const [rule, setRule] = useState('')
+  const [state, setState] = useState('')
+  const [result, setResult] = useState<{ days: number; cards: Card[] }>()
+  const [error, setError] = useState('')
+  const cards = result?.days === days ? result.cards : undefined
+  const setCards = (c: Card[] | undefined) => c && setResult({ days, cards: c })
+
+  useEffect(() => {
+    load<Card[]>(`/patterns?days=${days}`).then((c) => setResult({ days, cards: c }), (e) => setError(e.message))
+  }, [days])
+
+  const shown = (cards ?? []).filter((c) => (!rule || c.rule === rule) && (!state || c.review.status === state))
+  return (
+    <div className="page">
+      <section className="order">
+        <h2>Patterns</h2>
+        <p>
+          Counts and rates from your own orders, for you to look into. They do not show intent, label anyone, or block a refund or shipment. Small numbers are marked as too
+          little history.
+        </p>
+        <p className="actions">
+          <label>
+            Window{' '}
+            <select value={days} onChange={(e) => setDays(Number(e.target.value))}>
+              {[7, 30, 90, 365].map((d) => (
+                <option key={d} value={d}>
+                  Last {d} days
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Type{' '}
+            <select value={rule} onChange={(e) => setRule(e.target.value)}>
+              <option value="">All</option>
+              {Object.entries(RULE).map(([k, v]) => (
+                <option key={k} value={k}>
+                  {v}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Review{' '}
+            <select value={state} onChange={(e) => setState(e.target.value)}>
+              <option value="">All</option>
+              {Object.entries(REVIEW).map(([k, v]) => (
+                <option key={k} value={k}>
+                  {v}
+                </option>
+              ))}
+            </select>
+          </label>
+        </p>
+        {error && <p role="alert">{error}</p>}
+        {!cards && !error && <p>Loading…</p>}
+        {cards && shown.length === 0 && <p>Nothing to look into for these filters.</p>}
+        {shown.map((c) => (
+          <PatternCard
+            key={c.key}
+            card={c}
+            onReviewed={(r) => setCards(cards?.map((x) => (x.key === c.key ? { ...x, review: r, previous_review: undefined } : x)))}
+          />
+        ))}
+      </section>
+    </div>
+  )
+}

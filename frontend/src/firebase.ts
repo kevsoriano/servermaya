@@ -43,3 +43,13 @@ export const STATUS = {
   confirmed: 'Confirmed',
   cancelled: 'Cancelled',
 }
+
+export const CLAIM_TYPES: Record<string, string> = {
+  missing_item: 'Missing item',
+  wrong_item: 'Wrong item',
+  damage: 'Damaged',
+  nonreceipt: 'Not received',
+  payment_issue: 'Payment issue',
+  cancellation: 'Cancellation',
+  other: 'Other',
+}

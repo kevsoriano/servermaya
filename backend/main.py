@@ -28,6 +28,7 @@ import orders as rules
 import packing as pack
 import receipts as gcash
 import delivery
+import patterns
 
 PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "servermaya-ai-builder-cup")
 # Comma-separated. Empty means nobody gets in.
@@ -1299,3 +1300,36 @@ def cancel_delivery(order_id: str, body: rules.Cancel, user: dict = Depends(curr
 def public_received(token: str):
     now = datetime.now(timezone.utc)
     return customer_view(change(by_token(token).reference, lambda o: delivery.acknowledge(o, "customer_link", now)))
+
+
+# Patterns. Recomputed on every load from the store's own orders.
+def pattern_cards(days: int) -> list[dict]:
+    # ponytail: reads every order on each load; keep a rolling aggregate when a store has thousands of orders
+    found = [{**d.to_dict(), "id": d.id} for d in orders().stream()]
+    reviews = {r["key"]: r for r in (d.to_dict() for d in store_doc().collection("patternReviews").stream())}
+    return patterns.with_review(patterns.analyse(found, datetime.now(timezone.utc), days), reviews)
+
+
+@app.get("/api/patterns")
+def list_patterns(days: int = 30, user: dict = Depends(current_user)):
+    return pattern_cards(max(1, min(days, 365)))
+
+
+@app.get("/api/orders/{order_id}/patterns")
+def order_patterns(order_id: str, user: dict = Depends(current_user)):
+    return [c for c in pattern_cards(30) if any(i["order_id"] == order_id for i in c["incidents"])]
+
+
+class PatternReviewIn(BaseModel):
+    key: str = Field(min_length=1, max_length=500)
+    incidents_hash: str = Field(min_length=1, max_length=64)
+    status: Literal["reviewing", "explained_operationally", "unresolved", "dismissed"]
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+@app.post("/api/patterns/review")
+def review_pattern(body: PatternReviewIn, user: dict = Depends(current_user)):
+    """The seller's review of one card, tied to the cases it covered. New cases make the card new again."""
+    record = {**body.model_dump(), "reason": body.reason.strip(), "by": user["email"], "at": datetime.now(timezone.utc)}
+    store_doc().collection("patternReviews").document(hashlib.sha256(body.key.encode()).hexdigest()).set(record)
+    return record
