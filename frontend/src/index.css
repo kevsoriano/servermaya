@@ -390,6 +390,13 @@ mark.status.confirmed {
   color: var(--muted);
 }
 
+.reply .attach {
+  display: inline;
+  margin: 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
 .side .reply {
   margin: 0.75rem 0;
 }

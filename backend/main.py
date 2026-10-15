@@ -73,13 +73,16 @@ def me(user: dict = Depends(current_user)):
     return user
 
 
-def graph(path: str, send: dict | None = None, **params) -> dict:
-    """GET from the Graph API as the Page, or POST `send` as JSON. Token goes in a header so it never lands in a URL or log."""
+def graph(path: str, send: dict | None = None, files: dict | None = None, **params) -> dict:
+    """GET from the Graph API as the Page, or POST `send` as JSON. With `files`, POST `send` as a multipart form instead, objects
+    JSON-encoded, as the Send API wants for uploads. Token goes in a header so it never lands in a URL or log."""
     if not PAGE_ID or not PAGE_TOKEN:
         raise HTTPException(503, "Messenger is not configured")
+    form = {k: v if isinstance(v, str) else json.dumps(v) for k, v in (send or {}).items()}
+    body = {"data": form, "files": files} if files else {"json": send}
     try:
         r = requests.request(
-            "POST" if send else "GET", f"{GRAPH}/{path}", params=params, json=send, headers={"Authorization": f"Bearer {PAGE_TOKEN}"}, timeout=10
+            "POST" if send else "GET", f"{GRAPH}/{path}", params=params, headers={"Authorization": f"Bearer {PAGE_TOKEN}"}, timeout=30 if files else 10, **body
         )
         body = r.json()
     except (requests.RequestException, ValueError):
@@ -311,29 +314,63 @@ def reply_until(messages: list[dict]) -> datetime | None:
     return max(times) + REPLY_WINDOW if times else None
 
 
-@app.post("/api/conversations/{conversation_id}/reply")
-def reply(conversation_id: str, body: Reply, user: dict = Depends(current_user)):
-    """Send one text message as the Page. Only ever called from an explicit seller click."""
-    messages = conversation(conversation_id, user)
-    until = reply_until(messages)
+def customer_to_reply(conversation_id: str, user: dict) -> str:
+    """The customer's PSID, if the 24-hour reply window is still open."""
+    until = reply_until(conversation(conversation_id, user))
     if not until or datetime.now(timezone.utc) > until:
         raise HTTPException(409, "Messenger only allows replies within 24 hours of the customer's last message.")
     participants = graph(conversation_id, fields="participants").get("participants", {}).get("data", [])
     customer = next((p["id"] for p in participants if p.get("id") != PAGE_ID), None)
     if not customer:
         raise HTTPException(409, "Could not find the customer in this conversation")
-    sent = graph(f"{PAGE_ID}/messages", send={"recipient": {"id": customer}, "messaging_type": "RESPONSE", "message": {"text": body.text}})
-    record = {
-        "conversation_id": conversation_id,
-        "order_id": body.order_id,
-        "text": body.text,
-        "message_id": sent.get("message_id"),
-        "sent_by": user["email"],
-        "sent_at": firestore.SERVER_TIMESTAMP,
-    }
+    return customer
+
+
+def record_sent(conversation_id: str, order_id: str | None, sent: dict, user: dict, **what) -> dict:
     # Meta shows the reply as coming from the Page; this records which seller sent it.
+    record = {"conversation_id": conversation_id, "order_id": order_id, **what, "message_id": sent.get("message_id"), "sent_by": user["email"],
+              "sent_at": firestore.SERVER_TIMESTAMP}
     clients()[1].collection("stores").document(STORE).collection("sentMessages").add(record)
     return {"message_id": sent.get("message_id")}
+
+
+@app.post("/api/conversations/{conversation_id}/reply")
+def reply(conversation_id: str, body: Reply, user: dict = Depends(current_user)):
+    """Send one text message as the Page. Only ever called from an explicit seller click."""
+    customer = customer_to_reply(conversation_id, user)
+    sent = graph(f"{PAGE_ID}/messages", send={"recipient": {"id": customer}, "messaging_type": "RESPONSE", "message": {"text": body.text}})
+    return record_sent(conversation_id, body.order_id, sent, user, text=body.text)
+
+
+REPLY_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif"}  # what Messenger shows as an image
+
+
+@app.post("/api/conversations/{conversation_id}/reply/image")
+async def reply_image(conversation_id: str, request: Request, order_id: str | None = None, user: dict = Depends(current_user)):
+    """Send one image as the Page, such as the seller's GCash QR. The body is the image itself. Kept as evidence of what was sent."""
+    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if content_type not in REPLY_IMAGE_TYPES:
+        raise HTTPException(415, "Send a JPEG, PNG or GIF image")
+    data = await request.body()
+    if not data or len(data) > pack.MAX_PHOTO_BYTES:
+        raise HTTPException(413, "Images must be under 10 MB")
+    if order_id and not re.fullmatch(r"\w{1,64}", order_id):
+        raise HTTPException(400, "Invalid order id")
+    customer = await run_in_threadpool(customer_to_reply, conversation_id, user)
+    sha = hashlib.sha256(data).hexdigest()
+    path = f"stores/{STORE}/sent/{sha}"
+    try:
+        await run_in_threadpool(lambda: bucket().blob(path).upload_from_string(data, content_type=content_type, if_generation_match=0))
+    except PreconditionFailed:
+        pass  # the same image was sent before
+    sent = await run_in_threadpool(
+        graph,
+        f"{PAGE_ID}/messages",
+        {"recipient": {"id": customer}, "messaging_type": "RESPONSE", "message": {"attachment": {"type": "image", "payload": {"is_reusable": False}}}},
+        {"filedata": (f"image.{content_type.split('/')[1]}", data, content_type)},
+    )
+    image = {"path": path, "sha256": sha, "content_type": content_type, "size": len(data)}
+    return await run_in_threadpool(record_sent, conversation_id, order_id, sent, user, image=image)
 
 
 @lru_cache

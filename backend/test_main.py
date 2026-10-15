@@ -250,7 +250,7 @@ def test_reply_window_and_send(monkeypatch):
     monkeypatch.setattr(main, "PAGE_ID", "99")
     sent, stored = [], []
     monkeypatch.setattr(main, "conversation", lambda cid, user: msgs)
-    monkeypatch.setattr(main, "graph", lambda path, send=None, **k: sent.append((path, send)) or (
+    monkeypatch.setattr(main, "graph", lambda path, send=None, files=None, **k: sent.append((path, send, files)) or (
         {"participants": {"data": [{"id": "99"}, {"id": "psid7"}]}} if "fields" in k else {"message_id": "mid.1"}))
 
     class Store:
@@ -271,10 +271,32 @@ def test_reply_window_and_send(monkeypatch):
         assert client.post("/api/conversations/t_1/reply", json={"text": ""}).status_code == 422
         r = client.post("/api/conversations/t_1/reply", json={"text": "Here is your link", "order_id": "o1"})
         assert r.status_code == 200 and r.json() == {"message_id": "mid.1"}
-        assert sent[-1] == ("99/messages", {"recipient": {"id": "psid7"}, "messaging_type": "RESPONSE", "message": {"text": "Here is your link"}})
+        assert sent[-1] == ("99/messages", {"recipient": {"id": "psid7"}, "messaging_type": "RESPONSE", "message": {"text": "Here is your link"}}, None)
         assert stored[0]["sent_by"] == "s@example.com" and stored[0]["order_id"] == "o1"
+
+        # An image, such as the seller's GCash QR: uploaded to Messenger as a file and kept as evidence.
+        uploads = []
+        monkeypatch.setattr(main, "bucket", lambda: type("B", (), {"blob": lambda self, p: type("Blob", (), {
+            "upload_from_string": lambda self, data, **k: uploads.append((p, data))})()})())
+        image = lambda body, kind: client.post("/api/conversations/t_1/reply/image?order_id=o1", content=body, headers={"Content-Type": kind})
+        assert image(b"x", "image/heic").status_code == 415  # Messenger would not show it
+        assert image(b"", "image/png").status_code == 413
+        r = image(b"png bytes", "image/png")
+        assert r.status_code == 200 and r.json() == {"message_id": "mid.1"}
+        path, send, files = sent[-1]
+        assert send["message"] == {"attachment": {"type": "image", "payload": {"is_reusable": False}}} and files["filedata"][1:] == (b"png bytes", "image/png")
+        assert uploads[0][0].startswith("stores/main/sent/") and stored[-1]["image"]["size"] == 9 and stored[-1]["order_id"] == "o1"
     finally:
         main.app.dependency_overrides.clear()
+
+
+def test_graph_uploads_send_objects_as_json_form_fields(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(main, "PAGE_ID", "99")
+    monkeypatch.setattr(main, "PAGE_TOKEN", "t")
+    monkeypatch.setattr(main.requests, "request", lambda method, url, **k: seen.update(k) or type("R", (), {"ok": True, "json": lambda self: {}})())
+    main.graph("99/messages", {"recipient": {"id": "7"}, "messaging_type": "RESPONSE"}, {"filedata": ("a.png", b"x", "image/png")})
+    assert seen["data"] == {"recipient": '{"id": "7"}', "messaging_type": "RESPONSE"} and "json" not in seen
 
 
 def test_thread_list_read_state_and_pending_actions(monkeypatch):
