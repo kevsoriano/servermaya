@@ -522,11 +522,15 @@ def test_gcash_manual_payment_rules():
     assert gc.confirm(order, "3012345678901", "me", "Customer paid in person at pickup", now, False)["manual_payment"]["confirmed"]["claim_id"] is None
 
     # A bank payment: GCash history shows its own reference, and the invno ends in the bank receipt's trace.
-    bank = {**order, "manual_payment": {**order["manual_payment"], "claims": [claim("t", "757427")]}}
-    invno = "20261015BOPI PHMMXXXB00019511075 7427"
-    assert gc.confirm(bank, "1046160730748", "me", "", now, False, invno)["manual_payment"]["confirmed"]["claim_id"] == "t"
-    with pytest.raises(rules.Refused):
-        gc.confirm(bank, "1046160730748", "me", "", now, False, "20261015BOPIPHMMXXXB000195110757428")  # another transfer
+    shown = {"readable": True, "outcome": "successful", "amount_php": 83.0, "reference": "757427", "paid_at": "2026-10-15T23:59",
+             "recipient_name": "KE**N G** S.", "recipient_mobile": None}
+    bank = {**order, "manual_payment": {**order["manual_payment"], "claims": [{**claim("t", "757427"), "receipt": shown}]}}
+    matched = lambda invno: gc.confirm(bank, "1046160730748", "me", "", now, False, invno)["manual_payment"]["confirmed"]["claim_id"] == "t"
+    assert matched("20261015BOPI PHMMXXXB00019511075 7427")
+    assert matched("20261016BOPIPHMMXXXB000195110757427")  # dated by the bank just after midnight
+    for other in ("20261015BOPIPHMMXXXB000195110757428", "20260914BOPIPHMMXXXB000195110757427"):  # other digits; an older transfer
+        with pytest.raises(rules.Refused):
+            gc.confirm(bank, "1046160730748", "me", "", now, False, other)
 
     order |= gc.confirm(order, "1012 3456 78901", "me", "", now, False)
     c = order["manual_payment"]["confirmed"]

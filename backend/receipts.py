@@ -317,7 +317,8 @@ def add_claims(order: dict, claims: list[dict]) -> dict:
 def confirm(order: dict, ref: str, by: str, reason: str, now: datetime, confirmed_elsewhere: bool, invno: str = "") -> dict:
     """The seller found this reference in their own GCash history. Shown as seller-confirmed, never as provider-verified.
 
-    invno: for a payment from a bank app, the invoice number GCash history shows; it ends in the bank receipt's reference.
+    invno: for a payment from a bank app, the invoice number GCash history shows; it starts with the transfer date and ends
+    in the bank receipt's reference.
     A reason is required when no checked screenshot shows the reference or any of its checks did not pass.
     """
     m = current(order)
@@ -329,7 +330,15 @@ def confirm(order: dict, ref: str, by: str, reason: str, now: datetime, confirme
     if confirmed_elsewhere:
         raise Refused(f"Reference {ref} is already confirmed on another order")
     invno = re.sub(r"\W", "", invno).upper()
-    shows = lambda c: c["reference"] == ref or bool(invno and c["reference"] and len(c["reference"]) == 6 and invno.endswith(c["reference"]))
+
+    def shows(c: dict) -> bool:
+        if c["reference"] == ref:
+            return True
+        # A bank receipt: the invno starts with the transfer date and ends in its 6-digit reference.
+        # The next day is allowed too, in case the bank dates a transfer made just before midnight.
+        at = c["reference"] and len(c["reference"]) == 6 and invno.endswith(c["reference"]) and paid_at(Receipt(**c["receipt"]))
+        return bool(at) and invno[:8] in (f"{at:%Y%m%d}", f"{at + timedelta(days=1):%Y%m%d}")
+
     claim = next((c for c in reversed(m["claims"]) if shows(c)), None)
     doubts = [c["check"] for c in claim["checks"] if c["result"] != "pass"] if claim else []
     if (not claim or doubts) and not reason.strip():

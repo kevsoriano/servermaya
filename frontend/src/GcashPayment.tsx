@@ -54,7 +54,7 @@ function Guardrails({ m }: { m: ManualPayment }) {
         <dt>{LABEL.reference}</dt>
         <dd>
           13 digits from GCash, or 6 digits from a bank app such as BPI, and not used on another order. Find the payment in your own GCash history: for a
-          bank payment, GCash shows its own reference, and the invno ends in the bank&apos;s 6 digits.
+          bank payment, GCash shows its own reference, and the invno starts with the transfer date and ends in the bank&apos;s 6 digits.
         </dd>
         <dt>{LABEL.recipient_name}</dt>
         <dd>
@@ -131,8 +131,13 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
     })
 
   const tail = invno.replace(/\W/g, '').toUpperCase()
+  // Mirrors receipts.confirm: the invno starts with the transfer date (or the next day) and ends in the bank's 6 digits.
+  const days = (at: string) => [0, 1].map((d) => new Date(Date.parse(`${at.slice(0, 10)}T00:00Z`) + d * 864e5).toISOString().slice(0, 10).replace(/-/g, ''))
   const matching = current?.claims.findLast(
-    (c) => c.reference && (c.reference === reference.replace(/\s/g, '') || (tail && c.reference.length === 6 && tail.endsWith(c.reference))),
+    (c) =>
+      c.reference &&
+      (c.reference === reference.replace(/\s/g, '') ||
+        (tail && c.reference.length === 6 && tail.endsWith(c.reference) && !!c.receipt.paid_at && days(c.receipt.paid_at).includes(tail.slice(0, 8)))),
   )
   const fromBank = current?.claims.some((c) => c.reference?.length === 6)
   const doubtful = !matching || matching.checks.some((c) => c.result !== 'pass')
