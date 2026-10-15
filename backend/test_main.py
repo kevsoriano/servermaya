@@ -277,6 +277,40 @@ def test_reply_window_and_send(monkeypatch):
         main.app.dependency_overrides.clear()
 
 
+def test_thread_list_read_state_and_pending_actions(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    iso = lambda d: d.strftime("%Y-%m-%dT%H:%M:%S+0000")
+    thread = lambda cid, sender, at: {"id": cid, "updated_time": iso(at), "participants": {"data": [{"id": "99"}, {"id": "7", "name": "Ana"}]},
+                                      "messages": {"data": [{"from": {"id": sender}, "created_time": iso(at)}]}}
+    main.app.dependency_overrides[main.current_user] = lambda: {"uid": "u1"}
+    monkeypatch.setattr(main, "PAGE_ID", "99")
+    monkeypatch.setattr(main, "graph", lambda path, **k: {"data": [
+        thread("t_1", "7", now - timedelta(hours=21)),  # customer waiting, window closing
+        thread("t_2", "99", now - timedelta(hours=1)),  # seller replied last
+        thread("t_3", "7", now - timedelta(hours=2)),  # customer waiting, but seen since
+    ]})
+    monkeypatch.setattr(main, "cached_open_checks", lambda cid: None)
+    monkeypatch.setattr(main, "read_marks", lambda user: {"t_3": now - timedelta(hours=1)})
+    monkeypatch.setattr(main, "order_actions", lambda ids: {"t_2": ["Waiting for payment"]})
+    try:
+        t1, t2, t3 = client.get("/api/conversations").json()
+        assert (t1["unread"], t1["awaiting_reply"]) == (True, True)
+        assert datetime.fromisoformat(t1["reply_until"]) - now < timedelta(hours=4)
+        assert (t2["unread"], t2["awaiting_reply"], t2["reply_until"]) == (False, False, None)
+        assert t2["order_actions"] == ["Waiting for payment"]
+        assert (t3["unread"], t3["awaiting_reply"]) == (False, True)
+        assert client.post("/api/conversations/bad/seen").status_code == 400
+    finally:
+        main.app.dependency_overrides.clear()
+
+    assert main.order_action({"status": "draft"}) == "Send the draft order"
+    assert main.order_action({"status": "confirmed"}) == "Request payment"
+    assert main.order_action({"status": "confirmed", "payment": {"status": "verified"}}) is None
+    assert main.order_action({"status": "cancelled"}) is None
+
+
 def test_signals_keep_only_cited_customer_messages_and_resolve_on_payment():
     import signals as risk
 

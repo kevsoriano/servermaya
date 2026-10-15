@@ -87,17 +87,76 @@ def graph(path: str, send: dict | None = None, **params) -> dict:
 # ponytail: first page only (25 threads, 50 messages), add paging when a Page outgrows it
 @app.get("/api/conversations")
 def conversations(user: dict = Depends(current_user)):
-    data = graph(f"{PAGE_ID}/conversations", platform="messenger", fields="id,updated_time,snippet,participants")
-    return [
-        {
+    data = graph(f"{PAGE_ID}/conversations", platform="messenger", fields="id,updated_time,snippet,participants,messages.limit(1){from,created_time}")
+    threads = data.get("data", [])
+    seen, actions = read_marks(user), order_actions([c["id"] for c in threads])
+    out = []
+    for c in threads:
+        last = next(iter(c.get("messages", {}).get("data", [])), {})
+        # The newest message is the customer's, so the seller owes a reply.
+        waiting = bool(last) and last.get("from", {}).get("id") != PAGE_ID
+        at = datetime.fromisoformat(last["created_time"]) if waiting and last.get("created_time") else None
+        out.append({
             "id": c["id"],
             "updated_time": c.get("updated_time"),
             "snippet": c.get("snippet", ""),
             "customer": next((p for p in c.get("participants", {}).get("data", []) if p.get("id") != PAGE_ID), None),
             "open_checks": cached_open_checks(c["id"]),
-        }
-        for c in data.get("data", [])
-    ]
+            "unread": bool(at) and (c["id"] not in seen or seen[c["id"]] < at),
+            "awaiting_reply": waiting,
+            "reply_until": (at + REPLY_WINDOW).isoformat() if at else None,
+            "order_actions": actions.get(c["id"], []),
+        })
+    return out
+
+
+def read_docs():
+    return clients()[1].collection("stores").document(STORE).collection("reads")
+
+
+def read_marks(user: dict) -> dict:
+    """When this seller last opened each thread. Read state is per seller, so one opening a thread does not clear it for the rest."""
+    try:
+        doc = read_docs().document(user["uid"]).get()
+    except Exception:
+        return {}  # the list still works without Firestore; every waiting thread just shows as unread
+    return (doc.to_dict() or {}).get("seen", {}) if doc.exists else {}
+
+
+@app.post("/api/conversations/{conversation_id}/seen")
+def mark_seen(conversation_id: str, user: dict = Depends(current_user)):
+    """Recorded in our database only. Nothing goes to Meta, so the customer never gets a "Seen" receipt."""
+    if not re.fullmatch(r"t_\d+", conversation_id):
+        raise HTTPException(400, "Invalid conversation id")
+    read_docs().document(user["uid"]).set({"seen": {conversation_id: datetime.now(timezone.utc)}}, merge=True)
+    return {"ok": True}
+
+
+ORDER_ACTIONS = {"draft": "Send the draft order", "awaiting_confirmation": "Waiting for the customer to confirm"}
+PAYMENT_ACTIONS = {None: "Request payment", "pending": "Waiting for payment", "mismatched": "Review a payment"}
+
+
+def order_action(order: dict) -> str | None:
+    if order["status"] == "confirmed":
+        return PAYMENT_ACTIONS.get((order.get("payment") or {}).get("status"))
+    return ORDER_ACTIONS.get(order["status"])
+
+
+def order_actions(conversation_ids: list[str]) -> dict[str, list[str]]:
+    """What is still open on each thread's orders. Cancelled and paid orders need nothing."""
+    found: dict[str, list[str]] = {}
+    try:
+        for i in range(0, len(conversation_ids), 30):  # Firestore caps an "in" filter at 30 values
+            batch = conversation_ids[i : i + 30]
+            for d in orders().where(filter=firestore.FieldFilter("source.conversation_id", "in", batch)).stream():
+                o = d.to_dict()
+                action = order_action(o)
+                cid = o["source"]["conversation_id"]
+                if action and action not in found.setdefault(cid, []):
+                    found[cid].append(action)
+    except Exception:
+        return {}
+    return found
 
 
 def cached_open_checks(conversation_id: str) -> int | None:

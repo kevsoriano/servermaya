@@ -4,7 +4,17 @@ import OrderView, { type Order } from './OrderView'
 import Reply from './Reply'
 import Signals from './Signals'
 
-type Conversation = { id: string; updated_time: string; snippet: string; customer: { name: string } | null; open_checks: number | null }
+type Conversation = {
+  id: string
+  updated_time: string
+  snippet: string
+  customer: { name: string } | null
+  open_checks: number | null
+  unread: boolean
+  awaiting_reply: boolean
+  reply_until: string | null
+  order_actions: string[]
+}
 type Message = { id: string; text: string; from_page: boolean; from_name: string; created_time: string; attachments: Attachment[] }
 type Attachment = { kind: 'image' | 'video' | 'audio' | 'file'; name: string | null; url: string; preview_url: string | null }
 
@@ -32,6 +42,18 @@ function same<T>(a: T[] | undefined, b: T[], key: (x: T) => string) {
 function replyUntil(messages: Message[]) {
   const last = Math.max(...messages.filter((m) => !m.from_page).map((m) => Date.parse(m.created_time)))
   return Number.isFinite(last) ? new Date(last + 24 * 3600 * 1000) : null
+}
+
+const HOUR = 3600 * 1000
+
+/** What the seller still has to do on a thread. The open-checks badge is shown separately. */
+function pending(c: Conversation) {
+  const out: string[] = []
+  if (c.awaiting_reply) {
+    const left = c.reply_until ? Date.parse(c.reply_until) - Date.now() : 0
+    out.push(left <= 0 ? 'Reply window closed' : left < 4 * HOUR ? `Reply within ${Math.ceil(left / HOUR)}h` : 'Needs a reply')
+  }
+  return [...out, ...c.order_actions]
 }
 
 export default function Conversations() {
@@ -67,6 +89,16 @@ export default function Conversations() {
     }
   }, [openId])
 
+  // Mark the open thread read when it loads and again whenever the customer sends something new while it is open.
+  const lastFromCustomer = messages?.findLast((m) => !m.from_page)?.id
+  useEffect(() => {
+    if (!openId || !lastFromCustomer) return
+    load(`/conversations/${openId}/seen`, { method: 'POST' }).then(
+      () => setList((l) => l?.map((c) => (c.id === openId ? { ...c, unread: false } : c))),
+      () => {},
+    )
+  }, [openId, lastFromCustomer])
+
   const open = (id: string) => {
     setOpenId(id)
     setMessages(undefined)
@@ -93,10 +125,18 @@ export default function Conversations() {
       <ul className="threads">
         {list?.map((c) => (
           <li key={c.id}>
-            <button onClick={() => open(c.id)} aria-current={c.id === openId}>
-              <strong>{c.customer?.name ?? 'Unknown'}</strong>
+            <button onClick={() => open(c.id)} aria-current={c.id === openId} className={c.unread && c.id !== openId ? 'unread' : undefined}>
+              <strong>
+                {c.unread && c.id !== openId && <span className="dot" role="img" aria-label="Unread" />}
+                {c.customer?.name ?? 'Unknown'}
+              </strong>
               <span>{c.snippet}</span>
               {!!c.open_checks && <mark>{c.open_checks} {c.open_checks === 1 ? 'check' : 'checks'} before shipping</mark>}
+              {pending(c).map((p) => (
+                <mark key={p} className="pending">
+                  {p}
+                </mark>
+              ))}
               <time>{new Date(c.updated_time).toLocaleString()}</time>
             </button>
           </li>
