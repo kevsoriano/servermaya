@@ -26,21 +26,21 @@ const RESULT = {
 }
 
 /** Photos are only served to signed-in sellers, so they are fetched with the token and shown from memory. */
-function Photo({ orderId, id, n }: { orderId: string; id: string; n: number }) {
+export function Photo({ path, alt, caption }: { path: string; alt: string; caption: string }) {
   const [src, setSrc] = useState<string>()
   useEffect(() => {
     let url: string | undefined
-    api(`/orders/${orderId}/packing/photos/${id}`)
+    api(path)
       .then((r) => (r.ok ? r.blob() : Promise.reject()))
       .then((b) => setSrc((url = URL.createObjectURL(b))), () => {})
     return () => {
       if (url) URL.revokeObjectURL(url)
     }
-  }, [orderId, id])
+  }, [path])
   return (
     <figure>
-      {src ? <img src={src} alt={`Packing photo ${n}`} /> : <div className="placeholder">Loading…</div>}
-      <figcaption>Photo {n}</figcaption>
+      {src ? <img src={src} alt={alt} /> : <div className="placeholder">Loading…</div>}
+      <figcaption>{caption}</figcaption>
     </figure>
   )
 }
@@ -99,7 +99,7 @@ export default function Packing({ order, onChange }: { order: Order; onChange: (
       {packing.photos.length > 0 && (
         <div className="photos">
           {packing.photos.map((p, n) => (
-            <Photo key={p.id} orderId={order.id} id={p.id} n={n + 1} />
+            <Photo key={p.id} path={`/orders/${order.id}/packing/photos/${p.id}`} alt={`Packing photo ${n + 1}`} caption={`Photo ${n + 1}`} />
           ))}
         </div>
       )}

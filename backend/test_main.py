@@ -328,6 +328,9 @@ def test_signals_keep_only_cited_customer_messages_and_resolve_on_payment():
     assert all(s["resolved"] is None for s in risk.resolve(got, []))
     done = risk.resolve(got + [{"kind": "changed_payment_details", "summary": "", "sources": ["c1"], "check": ""}], [{"amount": 89000}])
     assert [bool(s["resolved"]) for s in done] == [True, True, False]  # a verified payment does not settle changed refund details
+    # A GCash payment the seller found in their own history settles the payment claim only.
+    gcash = [{"amount": 89000, "confirmed": {"reference": "1234567890123"}}]
+    assert [bool(s["resolved"]) for s in risk.resolve(got, [], None, gcash)] == [True, False]
 
     # A seller review closes a check without claiming it was settled; it survives re-analysis while the evidence is the same.
     reviewed = risk.resolve(got, [], {"pressure:c2": {"by": "s", "note": "Regular customer, paid via link before"}})

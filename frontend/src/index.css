@@ -270,3 +270,20 @@ button[aria-current='true'] {
 .result.unreadable {
   color: #b9770e;
 }
+
+.receipt figure {
+  margin: 0.5rem 0;
+}
+
+.receipt img,
+.receipt .placeholder {
+  display: block;
+  max-width: 100%;
+  max-height: 28rem;
+  border-radius: 0.25rem;
+}
+
+.receipt td {
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}

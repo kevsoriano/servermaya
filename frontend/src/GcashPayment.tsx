@@ -1,9 +1,18 @@
 import { useState } from 'react'
 import { load, localMobile, peso } from './firebase'
 import type { Order } from './OrderView'
+import { Photo } from './Packing'
 
 type Check = { check: string; result: 'pass' | 'fail' | 'unreadable'; detail: string }
-type Claim = { id: string; message_id: string; received_at: string; reference: string | null; checks: Check[] }
+type Receipt = {
+  readable: boolean
+  amount_php: number | null
+  reference: string | null
+  paid_at: string | null
+  recipient_name: string | null
+  recipient_mobile: string | null
+}
+type Claim = { id: string; message_id: string; received_at: string; reference: string | null; receipt: Receipt; checks: Check[] }
 export type ManualPayment = {
   status: 'requested' | 'claimed' | 'seller_confirmed'
   version: number
@@ -15,6 +24,63 @@ export type ManualPayment = {
 }
 
 const RESULT = { pass: 'Pass', fail: 'Does not fit', unreadable: 'Could not read' }
+
+const LABEL: Record<string, string> = {
+  receipt: 'Receipt',
+  amount: 'Amount',
+  time: 'Date and time',
+  reference: 'Reference number',
+  recipient_name: 'Recipient name',
+  recipient_mobile: 'Recipient number',
+  duplicate: 'Not a copy',
+}
+
+/** The guardrails, with the values this request expects, so the seller can check any screenshot by eye, including bank-app receipts. */
+function Guardrails({ m }: { m: ManualPayment }) {
+  const from = new Date(new Date(m.requested_at).getTime() - 2 * 60_000).toLocaleString()
+  return (
+    <details open={m.claims.length === 0}>
+      <summary>What to check on a receipt</summary>
+      <dl>
+        <dt>{LABEL.amount}</dt>
+        <dd>Exactly {peso(m.amount)}, centavos included</dd>
+        <dt>{LABEL.time}</dt>
+        <dd>From {from} (Philippine time) until the screenshot was sent</dd>
+        <dt>{LABEL.reference}</dt>
+        <dd>13 digits, and not used on another order. Find it in your own GCash history.</dd>
+        <dt>{LABEL.recipient_name}</dt>
+        <dd>
+          {m.pay_to.masked_name ? (
+            <>
+              <code>{m.pay_to.masked_name}</code>, which is how GCash shows {m.pay_to.name}
+            </>
+          ) : (
+            <>{m.pay_to.name}, with some letters hidden by GCash</>
+          )}
+        </dd>
+        <dt>{LABEL.recipient_mobile}</dt>
+        <dd>{localMobile(m.pay_to.mobile)}, with some digits hidden by GCash</dd>
+        <dt>{LABEL.duplicate}</dt>
+        <dd>Not the same screenshot as another order, and not the same amount and minute as another receipt with a different reference</dd>
+      </dl>
+      <p>
+        <small>A screenshot that passes all of these can still be fake.</small>
+      </p>
+    </details>
+  )
+}
+
+/** What the screenshot shows for each check, as Gemini copied it down. */
+function shown(r: Receipt, check: string) {
+  const value = {
+    amount: r.amount_php === null ? null : peso(Math.round(r.amount_php * 100)),
+    time: r.paid_at?.replace('T', ' '),
+    reference: r.reference,
+    recipient_name: r.recipient_name,
+    recipient_mobile: r.recipient_mobile,
+  }[check]
+  return value === undefined ? '' : (value ?? 'nothing readable')
+}
 
 /** Direct GCash, for customers who will not use the PayMongo link. Screenshots are claims; only the seller's own GCash history confirms. */
 export default function GcashPayment({ order, onChange, write }: { order: Order; onChange: (o: Order) => void; write: (text: string) => void }) {
@@ -68,19 +134,36 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
             Asked for {peso(current.amount)} to {current.pay_to.name} ({localMobile(current.pay_to.mobile)}) on {new Date(current.requested_at).toLocaleString()}. Receipts dated
             before then do not count.
           </p>
+          <Guardrails m={current} />
           {current.claims.map((c) => (
-            <div key={c.id}>
+            <div key={c.id} className="receipt">
               <p>
                 <strong>Screenshot sent {new Date(c.received_at).toLocaleString()}</strong>
                 {c.reference && <> (reference {c.reference})</>}
               </p>
-              <ul>
-                {c.checks.map((k) => (
-                  <li key={k.check}>
-                    <span className={`result ${k.result}`}>{RESULT[k.result]}</span>: {k.detail}
-                  </li>
-                ))}
-              </ul>
+              <Photo path={`/orders/${order.id}/gcash/claims/${c.id}/image`} alt="Receipt screenshot from the customer" caption="Compare the screenshot with each row" />
+              <table>
+                <thead>
+                  <tr>
+                    <th>Check</th>
+                    <th>Screenshot shows</th>
+                    <th>Result</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {c.checks.map((k) => (
+                    <tr key={k.check}>
+                      <td>{LABEL[k.check] ?? k.check}</td>
+                      <td>{shown(c.receipt, k.check)}</td>
+                      <td>
+                        <span className={`result ${k.result}`}>{RESULT[k.result]}</span>
+                        <br />
+                        <small>{k.detail}</small>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           ))}
           {current.status === 'seller_confirmed' && current.confirmed ? (

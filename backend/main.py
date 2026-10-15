@@ -174,7 +174,8 @@ def cached_open_checks(conversation_id: str) -> int | None:
     if not doc.exists:
         return None
     d = doc.to_dict()
-    return sum(1 for s in risk.resolve(d["signals"], verified_payments(conversation_id), d.get("reviews")) if risk.is_open(s))
+    paid, confirmed = payments(conversation_id)
+    return sum(1 for s in risk.resolve(d["signals"], paid, d.get("reviews"), confirmed) if risk.is_open(s))
 
 
 @app.get("/api/conversations/{conversation_id}")
@@ -220,9 +221,12 @@ def signal_docs():
     return clients()[1].collection("stores").document(STORE).collection("signals")
 
 
-def verified_payments(conversation_id: str) -> list[dict]:
-    found = orders().where(filter=firestore.FieldFilter("source.conversation_id", "==", conversation_id)).stream()
-    return [p for p in ((d.to_dict().get("payment") or {}) for d in found) if p.get("status") == "verified"]
+def payments(conversation_id: str) -> tuple[list[dict], list[dict]]:
+    """PayMongo-verified payments and seller-confirmed direct GCash payments on orders from this chat."""
+    found = [d.to_dict() for d in orders().where(filter=firestore.FieldFilter("source.conversation_id", "==", conversation_id)).stream()]
+    paid = [p for p in (o.get("payment") or {} for o in found) if p.get("status") == "verified"]
+    confirmed = [m for m in (o.get("manual_payment") or {} for o in found) if m.get("status") == "seller_confirmed"]
+    return paid, confirmed
 
 
 @app.get("/api/conversations/{conversation_id}/signals")
@@ -241,7 +245,8 @@ def conversation_signals(conversation_id: str, user: dict = Depends(current_user
             raise HTTPException(502, "Could not analyse this conversation")
         # merge keeps the seller's reviews across re-analysis
         ref.set({"signals": found, "latest_message_id": latest, "model": GEMINI_MODEL, "analysed_at": firestore.SERVER_TIMESTAMP}, merge=True)
-    return risk.resolve(found, verified_payments(conversation_id), cached.get("reviews"))
+    paid, confirmed = payments(conversation_id)
+    return risk.resolve(found, paid, cached.get("reviews"), confirmed)
 
 
 class Review(BaseModel):
@@ -818,6 +823,18 @@ def read_gcash_receipts(order_id: str, user: dict = Depends(current_user)):
     now = datetime.now(timezone.utc)
     claims = [read_receipt(order_id, manual, m, a, now) for m, a in images]
     return change(ref, lambda o: gcash.add_claims(o, claims))
+
+
+@app.get("/api/orders/{order_id}/gcash/claims/{claim_id}/image")
+def gcash_screenshot(order_id: str, claim_id: str, user: dict = Depends(current_user)):
+    """The stored copy of a receipt screenshot, so the seller can compare it with the checks by eye."""
+    _, order = loaded(order_id)
+    requests_ = [order.get("manual_payment") or {}] + order.get("manual_payment_history", [])
+    claim = next((c for r in requests_ for c in r.get("claims", []) if c["id"] == claim_id), None)
+    if not claim:
+        raise HTTPException(404, "Screenshot not found")
+    image = claim["image"]
+    return Response(bucket().blob(image["path"]).download_as_bytes(), media_type=image["content_type"], headers={"Cache-Control": "private, max-age=3600"})
 
 
 class GcashConfirm(BaseModel):

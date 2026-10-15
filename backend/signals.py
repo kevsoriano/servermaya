@@ -13,7 +13,7 @@ Kind = Literal["pressure", "payment_claim", "changed_payment_details", "inconsis
 
 SUGGESTED = {
     "pressure": "Do not pack or ship until PayMongo has verified the payment.",
-    "payment_claim": "Check the order's payment panel. Only a PayMongo-verified payment counts.",
+    "payment_claim": "Check the order's payment panel. Only a PayMongo-verified payment, or a GCash payment you found in your own GCash history, counts.",
     "changed_payment_details": "Confirm the change in writing. Refunds only go back to the original payment.",
     "inconsistent_details": "Confirm the final details with the customer before shipping.",
     "receipt_image": "Treat the image as a claim. Only a PayMongo-verified payment counts.",
@@ -66,19 +66,24 @@ def key(signal: dict) -> str:
     return f"{signal['kind']}:{signal['sources'][0]}"
 
 
-def resolve(signals: list[dict], verified: list[dict], reviews: dict | None = None) -> list[dict]:
-    """Deterministic status for each check: settled by a PayMongo-verified payment from this chat, reviewed by the seller, or open."""
+def resolve(signals: list[dict], verified: list[dict], reviews: dict | None = None, seller_confirmed: list[dict] = ()) -> list[dict]:
+    """Deterministic status for each check: settled by a payment from this chat, reviewed by the seller, or open.
+
+    A PayMongo-verified payment settles pressure, payment claims and receipt images. A GCash payment the seller found in
+    their own history settles only the payment claim: the claim was checked at the source, but a screenshot is still a screenshot.
+    """
     paid = verified[0] if verified else None
+    gcash = seller_confirmed[0] if seller_confirmed else None
     reviews = reviews or {}
-    return [
-        {
-            **s,
-            "key": key(s),
-            "resolved": f"PayMongo verified a payment of ₱{paid['amount'] / 100:,.2f}" if paid and s["kind"] in ("pressure", "payment_claim", "receipt_image") else None,
-            "reviewed": reviews.get(key(s)),
-        }
-        for s in signals
-    ]
+
+    def settled(kind: str) -> str | None:
+        if paid and kind in ("pressure", "payment_claim", "receipt_image"):
+            return f"PayMongo verified a payment of ₱{paid['amount'] / 100:,.2f}"
+        if gcash and kind == "payment_claim":
+            return f"You found GCash reference {gcash['confirmed']['reference']} for ₱{gcash['amount'] / 100:,.2f} in your own GCash history (not verified by PayMongo)"
+        return None
+
+    return [{**s, "key": key(s), "resolved": settled(s["kind"]), "reviewed": reviews.get(key(s))} for s in signals]
 
 
 def is_open(s: dict) -> bool:
