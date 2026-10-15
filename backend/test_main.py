@@ -412,13 +412,16 @@ def test_gcash_receipt_checks():
     sent = datetime(2026, 10, 15, 14, 0, tzinfo=gc.PHT)
     arrived = datetime(2026, 10, 15, 14, 20, tzinfo=gc.PHT)
     seller = {"name": "Juan Miguel Dela Cruz", "mobile": "0917 123 1234"}
-    good = {"readable": True, "amount_php": 1250.37, "reference": "1012 345 678901", "paid_at": "2026-10-15T14:12",
+    good = {"readable": True, "outcome": "successful", "amount_php": 1250.37, "reference": "1012 345 678901", "paid_at": "2026-10-15T14:12",
             "recipient_name": "JU** MI**** D.", "recipient_mobile": "+63 917 *** 1234"}
 
     def run(used=frozenset(), **k):
         return {c["check"]: c["result"] for c in gc.check_receipt(gc.Receipt(**{**good, **k}), 125037, sent, arrived, seller, set(used))}
 
     assert set(run().values()) == {"pass"}
+    assert run(outcome="failed")["outcome"] == "fail"  # a "Your transfer has failed" screen still shows amount and recipient
+    assert run(outcome="pending")["outcome"] == "fail"
+    assert run(outcome="not_shown")["outcome"] == "unreadable"
     assert run(amount_php=1250.0)["amount"] == "fail"  # the centavos matter
     assert run(amount_php=None)["amount"] == "unreadable"
 
@@ -430,6 +433,10 @@ def test_gcash_receipt_checks():
     assert run(used={"1012345678901"})["reference"] == "fail"  # reused on another order
     assert run(reference="12345")["reference"] == "fail"
     assert run(reference=None)["reference"] == "unreadable"
+    assert run(reference="757427")["reference"] == "pass"  # a bank app's InstaPay trace, as on a BPI receipt
+    assert gc.reference_key("757427", gc.Receipt(**good)) == "20261015-757427"  # traces repeat, so the index keys them by day
+    assert gc.reference_key("757427", gc.Receipt(**{**good, "paid_at": None})) is None
+    assert gc.reference_key("1012345678901", gc.Receipt(**good)) == "1012345678901"
 
     assert run(recipient_name="JU** DE** C.")["recipient_name"] == "pass"  # middle name not shown
     assert run(recipient_name="MA** SA****")["recipient_name"] == "fail"
@@ -441,6 +448,15 @@ def test_gcash_receipt_checks():
     assert run(recipient_mobile="+63 918 *** 1234")["recipient_mobile"] == "fail"  # same last four, other number
     assert run(recipient_mobile="+63 917 *** **34")["recipient_mobile"] == "pass"
     assert run(recipient_mobile="+63 9** *** **34")["recipient_mobile"] == "unreadable"  # too little to compare
+
+    # A BPI InstaPay receipt shows the end of the GCash account ID from the seller's QR instead of the number.
+    qr_seller = {**seller, "user_id": "DWQM4TK3JDNWF205D"}
+    bank = lambda account: {c["check"]: c["result"] for c in gc.check_receipt(gc.Receipt(**{**good, "recipient_mobile": None, "recipient_account": account}), 125037, sent, arrived, qr_seller, set())}["recipient_mobile"]
+    assert bank("xxxxxxxxxxxxxx05D") == "pass"
+    assert gc.masked("KE**N G** S. (QR Code)") == "KE**N G** S."  # BPI's label after the name
+    assert bank("xxxxxxxxxxxxxx06D") == "fail"
+    assert bank("xxxxxxxxxxxxxxx5D") == "unreadable"  # too little to compare
+    assert run(recipient_mobile=None, recipient_account="xxxxxxxxxxxxxx05D")["recipient_mobile"] == "unreadable"  # no QR saved
 
     # The format on the seller's real QR card: letters hidden mid-word, last digits hidden with bullets.
     kevin = {"name": "Kevin Gil Soriano", "mobile": "639272561234", "masked_name": "KE**N G** S."}
@@ -504,6 +520,13 @@ def test_gcash_manual_payment_rules():
     with pytest.raises(rules.Refused, match="no screenshot"):
         gc.confirm(order, "3012345678901", "me", "", now, False)
     assert gc.confirm(order, "3012345678901", "me", "Customer paid in person at pickup", now, False)["manual_payment"]["confirmed"]["claim_id"] is None
+
+    # A bank payment: GCash history shows its own reference, and the invno ends in the bank receipt's trace.
+    bank = {**order, "manual_payment": {**order["manual_payment"], "claims": [claim("t", "757427")]}}
+    invno = "20261015BOPI PHMMXXXB00019511075 7427"
+    assert gc.confirm(bank, "1046160730748", "me", "", now, False, invno)["manual_payment"]["confirmed"]["claim_id"] == "t"
+    with pytest.raises(rules.Refused):
+        gc.confirm(bank, "1046160730748", "me", "", now, False, "20261015BOPIPHMMXXXB000195110757428")  # another transfer
 
     order |= gc.confirm(order, "1012 3456 78901", "me", "", now, False)
     c = order["manual_payment"]["confirmed"]

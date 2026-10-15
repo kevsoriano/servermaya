@@ -6,32 +6,35 @@ import { Photo } from './Packing'
 type Check = { check: string; result: 'pass' | 'fail' | 'unreadable'; detail: string }
 type Receipt = {
   readable: boolean
+  outcome: 'successful' | 'failed' | 'pending' | 'not_shown'
   amount_php: number | null
   reference: string | null
   paid_at: string | null
   recipient_name: string | null
   recipient_mobile: string | null
+  recipient_account?: string | null
 }
 type Claim = { id: string; message_id: string; received_at: string; reference: string | null; receipt: Receipt; checks: Check[] }
 export type ManualPayment = {
   status: 'requested' | 'claimed' | 'seller_confirmed'
   version: number
   amount: number
-  pay_to: { name: string; mobile: string; masked_name?: string | null }
+  pay_to: { name: string; mobile: string; masked_name?: string | null; user_id?: string | null }
   requested_at: string
   claims: Claim[]
-  confirmed: { reference: string; claim_id: string | null; by: string; at: string; reason: string | null } | null
+  confirmed: { reference: string; invno?: string | null; claim_id: string | null; by: string; at: string; reason: string | null } | null
 }
 
 const RESULT = { pass: 'Pass', fail: 'Does not fit', unreadable: 'Could not read' }
 
 const LABEL: Record<string, string> = {
   receipt: 'Receipt',
+  outcome: 'Payment went through',
   amount: 'Amount',
   time: 'Date and time',
   reference: 'Reference number',
   recipient_name: 'Recipient name',
-  recipient_mobile: 'Recipient number',
+  recipient_mobile: 'Recipient number or account',
   duplicate: 'Not a copy',
 }
 
@@ -42,12 +45,17 @@ function Guardrails({ m }: { m: ManualPayment }) {
     <details open={m.claims.length === 0}>
       <summary>What to check on a receipt</summary>
       <dl>
+        <dt>{LABEL.outcome}</dt>
+        <dd>The screen says successful, not failed or pending</dd>
         <dt>{LABEL.amount}</dt>
         <dd>Exactly {peso(m.amount)}, centavos included</dd>
         <dt>{LABEL.time}</dt>
         <dd>From {from} (Philippine time) until the screenshot was sent</dd>
         <dt>{LABEL.reference}</dt>
-        <dd>13 digits, and not used on another order. Find it in your own GCash history.</dd>
+        <dd>
+          13 digits from GCash, or 6 digits from a bank app such as BPI, and not used on another order. Find the payment in your own GCash history: for a
+          bank payment, GCash shows its own reference, and the invno ends in the bank&apos;s 6 digits.
+        </dd>
         <dt>{LABEL.recipient_name}</dt>
         <dd>
           {m.pay_to.masked_name ? (
@@ -59,7 +67,14 @@ function Guardrails({ m }: { m: ManualPayment }) {
           )}
         </dd>
         <dt>{LABEL.recipient_mobile}</dt>
-        <dd>{localMobile(m.pay_to.mobile)}, with some digits hidden by GCash</dd>
+        <dd>
+          {localMobile(m.pay_to.mobile)}, with some digits hidden by GCash
+          {m.pay_to.user_id && (
+            <>
+              . Bank apps show the account instead: it ends in <code>{m.pay_to.user_id.slice(-3)}</code>
+            </>
+          )}
+        </dd>
         <dt>{LABEL.duplicate}</dt>
         <dd>Not the same screenshot as another order, and not the same amount and minute as another receipt with a different reference</dd>
       </dl>
@@ -73,11 +88,12 @@ function Guardrails({ m }: { m: ManualPayment }) {
 /** What the screenshot shows for each check, as Gemini copied it down. */
 function shown(r: Receipt, check: string) {
   const value = {
+    outcome: r.outcome === 'not_shown' ? null : r.outcome,
     amount: r.amount_php === null ? null : peso(Math.round(r.amount_php * 100)),
     time: r.paid_at?.replace('T', ' '),
     reference: r.reference,
     recipient_name: r.recipient_name,
-    recipient_mobile: r.recipient_mobile,
+    recipient_mobile: r.recipient_mobile ?? r.recipient_account,
   }[check]
   return value === undefined ? '' : (value ?? 'nothing readable')
 }
@@ -88,6 +104,7 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
   const [error, setError] = useState('')
   const [reference, setReference] = useState('')
   const [reason, setReason] = useState('')
+  const [invno, setInvno] = useState('')
   const [found, setFound] = useState(false)
   const m = order.manual_payment
   const current = m && m.version === order.version ? m : null
@@ -113,7 +130,11 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
       if (p) write(`You can also pay ${peso(p.amount)} by GCash to ${p.pay_to.name}, ${localMobile(p.pay_to.mobile)}. Please send a screenshot of the receipt here after paying.`)
     })
 
-  const matching = current?.claims.findLast((c) => c.reference && c.reference === reference.replace(/\s/g, ''))
+  const tail = invno.replace(/\W/g, '').toUpperCase()
+  const matching = current?.claims.findLast(
+    (c) => c.reference && (c.reference === reference.replace(/\s/g, '') || (tail && c.reference.length === 6 && tail.endsWith(c.reference))),
+  )
+  const fromBank = current?.claims.some((c) => c.reference?.length === 6)
   const doubtful = !matching || matching.checks.some((c) => c.result !== 'pass')
 
   return (
@@ -181,7 +202,7 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
               <form
                 onSubmit={(e) => {
                   e.preventDefault()
-                  run('Saving…', '/confirm', { reference, reason, found_in_history: found })
+                  run('Saving…', '/confirm', { reference, invno, reason, found_in_history: found })
                 }}
               >
                 <p>
@@ -191,6 +212,12 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
                   Reference number in your GCash history
                   <input inputMode="numeric" maxLength={40} value={reference} onChange={(e) => setReference(e.target.value)} />
                 </label>
+                {fromBank && (
+                  <label>
+                    Paid from a bank app? The invno in your GCash history
+                    <input maxLength={80} value={invno} onChange={(e) => setInvno(e.target.value)} />
+                  </label>
+                )}
                 {reference && doubtful && (
                   <label>
                     {matching ? 'Some checks did not pass. Why are you confirming?' : 'No checked screenshot shows this reference. Why are you confirming?'}

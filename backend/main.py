@@ -758,8 +758,8 @@ def request_gcash(order_id: str, user: dict = Depends(current_user)):
     if not pay_to:
         raise HTTPException(409, "Add your GCash name and number in Settings first")
     now = datetime.now(timezone.utc)
-    masked_name = (pay_to.get("qr") or {}).get("masked_name")
-    snapshot = {"name": pay_to["name"], "mobile": pay_to["mobile"], "masked_name": masked_name}
+    qr = pay_to.get("qr") or {}
+    snapshot = {"name": pay_to["name"], "mobile": pay_to["mobile"], "masked_name": qr.get("masked_name"), "user_id": qr.get("user_id")}
     return change(orders().document(order_id), lambda o: gcash.request(o, snapshot, user["email"], now))
 
 
@@ -805,7 +805,8 @@ def read_receipt(order_id: str, manual: dict, message: dict, attachment: dict, n
     ref = gcash.reference(receipt.reference)
     # Copies are caught three ways: the same file, the same reference, or the same amount and minute under another reference (an edited copy).
     reused = first_seen("gcashImages", sha, order_id)["order_id"] != order_id
-    used_elsewhere = {ref} if ref and first_seen("gcashReferences", ref, order_id)["order_id"] != order_id else set()
+    ref_key = gcash.reference_key(ref, receipt)
+    used_elsewhere = {ref} if ref_key and first_seen("gcashReferences", ref_key, order_id)["order_id"] != order_id else set()
     key = gcash.details_key(receipt)
     twin = first_seen("gcashReceiptDetails", key, order_id, reference=ref, message_id=message["id"]) if key else None
     twin_reference = (twin["reference"] or "unreadable") if twin and twin["message_id"] != message["id"] and twin["reference"] != ref else None
@@ -865,6 +866,7 @@ class GcashConfirm(BaseModel):
     reference: str = Field(min_length=1, max_length=40)
     reason: str = Field(default="", max_length=500)
     found_in_history: bool
+    invno: str = Field(default="", max_length=80)
 
 
 @app.post("/api/orders/{order_id}/gcash/confirm")
@@ -875,4 +877,4 @@ def confirm_gcash(order_id: str, body: GcashConfirm, user: dict = Depends(curren
     others = orders().where(filter=firestore.FieldFilter("manual_payment.confirmed.reference", "==", ref)).limit(2).stream()
     elsewhere = any(d.id != order_id for d in others)
     now = datetime.now(timezone.utc)
-    return change(orders().document(order_id), lambda o: gcash.confirm(o, ref, user["email"], body.reason, now, elsewhere))
+    return change(orders().document(order_id), lambda o: gcash.confirm(o, ref, user["email"], body.reason, now, elsewhere, body.invno))
