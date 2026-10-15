@@ -645,3 +645,21 @@ img.avatar {
   object-fit: cover;
   background: var(--hover);
 }
+
+.timeline {
+  padding-left: 1.25rem;
+}
+
+.timeline li {
+  margin: 0.25rem 0;
+}
+
+mark.source.demo {
+  background: #f5d76e;
+}
+
+mark.source.provider {
+  background: color-mix(in srgb, green 25%, transparent);
+  color: inherit;
+}
+

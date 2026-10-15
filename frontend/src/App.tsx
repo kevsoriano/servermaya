@@ -2,6 +2,7 @@ import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type 
 import { useEffect, useState } from 'react'
 import Conversations from './Conversations'
 import Orders from './Orders'
+import DispatchSettings from './DispatchSettings'
 import GcashSettings from './GcashSettings'
 import { api, auth } from './firebase'
 
@@ -66,7 +67,16 @@ export default function App() {
         </span>
         <button onClick={() => signOut(auth)}>Sign out</button>
       </header>
-      {tab === 'conversations' ? <Conversations /> : tab === 'orders' ? <Orders /> : <div className="page"><GcashSettings /></div>}
+      {tab === 'conversations' ? (
+        <Conversations />
+      ) : tab === 'orders' ? (
+        <Orders />
+      ) : (
+        <div className="page">
+          <GcashSettings />
+          <DispatchSettings />
+        </div>
+      )}
     </div>
   )
 }

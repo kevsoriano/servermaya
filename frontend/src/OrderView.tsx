@@ -4,6 +4,7 @@ import Reply from './Reply'
 import Signals from './Signals'
 import Packing, { type PackingState } from './Packing'
 import GcashPayment, { type ManualPayment } from './GcashPayment'
+import Dispatch, { type Fulfillment } from './Dispatch'
 
 type Sourced = { value: string | null; sources: string[] }
 type Item = { name: string; variant: string | null; quantity: number; unit_price: number | null; sources: string[] }
@@ -31,6 +32,11 @@ export type Order = {
   manual_payment?: ManualPayment | null
   packing: PackingState | null
   packing_blocked: string | null
+  dispatch_blocked: string | null
+  fulfillment?: Fulfillment | null
+  fulfillment_history?: Fulfillment[]
+  receipt?: { status: 'customer_confirmed'; fulfillment_id: string; source: string; at: string } | null
+  replacement?: { claim_id: string; action: string; fulfillment_id: string | null } | null
   messages: { id: string; text: string; from_page: boolean }[]
   draft: {
     items: Item[]
@@ -318,6 +324,7 @@ export default function OrderView({ order, onChange }: { order: Order; onChange:
           )}
           <GcashPayment order={order} onChange={onChange} write={setMessage} />
           <Packing order={order} onChange={onChange} />
+          <Dispatch order={order} onChange={onChange} />
           {link && (
             <p>
               {order.status === 'confirmed' ? 'Customer link (order summary and payment):' : 'Send this link to the customer:'}

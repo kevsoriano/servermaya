@@ -51,6 +51,8 @@ def edit(order: dict, body: Edit) -> dict:
     """A seller edit always makes a new version and voids the confirmation link for the old one."""
     if order["status"] == "cancelled":
         raise Refused("This order is cancelled")
+    if order.get("fulfillment"):
+        raise Refused("This order has a shipment. Cancel the shipment before changing the order.")
     old = order["draft"]
     key = lambda i: (i["name"], i["variant"], i["quantity"], i["unit_price"])
     cited = {key(i): i["sources"] for i in old["items"]}
@@ -104,6 +106,8 @@ def cancel(order: dict, by: str, reason: str, now: datetime) -> dict:
     """Cancelling keeps the whole record, including any received payment, and kills the customer link."""
     if order["status"] == "cancelled":
         return {}
+    if order.get("fulfillment"):
+        raise Refused("This order has a shipment. Cancel the shipment first.")
     cancelled = {"by": by, "at": now, "reason": reason.strip() or None, "previous_status": order["status"]}
     updates = {"status": "cancelled", "confirm_token": None, "cancelled": cancelled}
     if (order.get("payment") or {}).get("status") == "pending":

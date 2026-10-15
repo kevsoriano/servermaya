@@ -12,6 +12,56 @@ type Summary = {
   payment: 'pending' | 'verified' | 'mismatched' | 'expired' | null
   test_mode: boolean
   gcash_confirmed: boolean
+  shipment: { status: string; courier: string; simulated: boolean; share_link: string | null } | null
+  received: boolean
+}
+
+const SHIPMENT: Record<string, string> = {
+  booked: 'Booked with the courier',
+  driver_assigned: 'A driver is on the way to pick it up',
+  picked_up: 'On its way to you',
+  delivered: 'The courier marked it delivered',
+  cancelled: 'Delivery cancelled; the seller will contact you',
+  failed: 'Delivery failed; the seller will contact you',
+}
+/** Delivery status and "I received it". */
+function AfterPayment({ token, order, setOrder }: { token: string; order: Summary; setOrder: (o: Summary) => void }) {
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+  const s = order.shipment
+  const sent = s && ['picked_up', 'delivered'].includes(s.status)
+
+  const post = (label: string, path: string, init: RequestInit) => {
+    setBusy(label)
+    setError('')
+    return loadPublic<Summary>(`/orders/${token}${path}`, { method: 'POST', ...init })
+      .then(setOrder, (e) => setError(e.message))
+      .finally(() => setBusy(''))
+  }
+
+  return (
+    <>
+      {s && (
+        <p role="status">
+          <strong>{SHIPMENT[s.status] ?? 'Preparing your delivery'}.</strong>
+          {s.simulated && <mark> DEMO: simulated delivery</mark>}{' '}
+          {s.share_link && (
+            <a href={s.share_link} target="_blank" rel="noreferrer">
+              Track your delivery
+            </a>
+          )}
+        </p>
+      )}
+      {sent && !order.received && (
+        <button disabled={!!busy} onClick={() => post('Saving…', '/received', {})}>
+          I received my order
+        </button>
+      )}
+      {order.received && <p>Thank you for confirming you received it.</p>}
+      {error && <p role="alert">{error}</p>}
+      {busy && <p role="status">{busy}</p>}
+    </>
+  )
 }
 
 export default function Confirm({ token }: { token: string }) {
@@ -75,9 +125,13 @@ export default function Confirm({ token }: { token: string }) {
           </button>
         </>
       ) : order.payment === 'verified' || order.gcash_confirmed ? (
-        <p role="status">
-          <strong>Payment received{order.payment !== 'verified' && ' by GCash'}. Thank you!</strong> The seller will prepare your order.
-        </p>
+        <>
+          <p role="status">
+            <strong>Payment received{order.payment !== 'verified' && ' by GCash'}. Thank you!</strong>
+            {!order.shipment && ' The seller will prepare your order.'}
+          </p>
+          <AfterPayment token={token} order={order} setOrder={setOrder} />
+        </>
       ) : order.payment === 'mismatched' ? (
         <p role="status">We received a payment that does not match this order. The seller will contact you.</p>
       ) : (

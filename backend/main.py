@@ -8,6 +8,7 @@ import secrets
 import time
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
+from typing import Literal
 
 import pypdf
 import requests
@@ -26,6 +27,7 @@ import signals as risk
 import orders as rules
 import packing as pack
 import receipts as gcash
+import delivery
 
 PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "servermaya-ai-builder-cup")
 # Comma-separated. Empty means nobody gets in.
@@ -39,6 +41,8 @@ STORE = "main"
 PAYMONGO_KEY = os.environ.get("PAYMONGO_SECRET_KEY", "")
 PAYMONGO_WEBHOOK_SECRET = os.environ.get("PAYMONGO_WEBHOOK_SECRET", "")
 LALAMOVE_KEY = os.environ.get("LALAMOVE_API_KEY", "")
+LALAMOVE_SECRET = os.environ.get("LALAMOVE_API_SECRET", "")
+LALAMOVE_URL = os.environ.get("LALAMOVE_URL", "https://rest.sandbox.lalamove.com")
 EVIDENCE_BUCKET = os.environ.get("EVIDENCE_BUCKET", "servermaya-ai-builder-cup-evidence")
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "https://servermaya-ai-builder-cup.web.app")
 
@@ -170,6 +174,12 @@ GCASH_ACTIONS = {"requested": "Waiting for GCash payment", "claimed": "Review a 
 
 def order_action(order: dict) -> str | None:
     if order["status"] == "confirmed":
+        try:
+            delivery.can_dispatch(order)
+            if not order.get("fulfillment"):
+                return "Ready to dispatch"
+        except rules.Refused:
+            pass
         manual = order.get("manual_payment") or {}
         if manual and manual["version"] == order.get("version") and (order.get("payment") or {}).get("status") != "verified":
             return GCASH_ACTIONS[manual["status"]]
@@ -423,7 +433,13 @@ def present(snap) -> dict:
         packing, blocked = pack.require_ready(order), None  # the checklist to show, even before the first photo
     except rules.Refused as e:
         packing, blocked = order.get("packing"), str(e)
-    return {**order, "id": snap.id, "missing": rules.missing(order["draft"]), "packing": packing, "packing_blocked": blocked}
+    try:
+        delivery.can_dispatch(order)
+        dispatch_blocked = None
+    except rules.Refused as e:
+        dispatch_blocked = str(e)
+    return {**order, "id": snap.id, "missing": rules.missing(order["draft"]), "packing": packing, "packing_blocked": blocked,
+            "dispatch_blocked": dispatch_blocked}
 
 
 def change(ref, rule, by: str = "") -> dict:
@@ -505,6 +521,7 @@ def by_token(token: str):
 def customer_view(order: dict) -> dict:
     """Only what the customer needs to check. No chat, claims or seller details."""
     d = order["draft"]
+    shipment = order.get("fulfillment") or (order.get("fulfillment_history") or [None])[-1]
     return {
         "status": order["status"],
         "items": [{k: i[k] for k in ("name", "variant", "quantity", "unit_price")} for i in d["items"]],
@@ -514,6 +531,13 @@ def customer_view(order: dict) -> dict:
         # Before the first payment request, the key decides: PayMongo's test-mode QR codes are real and must not be scanned.
         "test_mode": order["payment"]["livemode"] is False if order.get("payment") else PAYMONGO_KEY.startswith("sk_test_"),
         "gcash_confirmed": pack.paid_by(order) == "gcash_seller_confirmed",
+        "shipment": shipment and {
+            "status": shipment["status"],
+            "courier": shipment["courier"],
+            "simulated": shipment["courier"] == "simulator",
+            "share_link": shipment.get("share_link"),  # only the customer holding this order's link sees it
+        },
+        "received": (order.get("receipt") or {}).get("fulfillment_id") == (shipment or {}).get("id") and bool(shipment),
     }
 
 
@@ -639,34 +663,131 @@ async def paymongo_webhook(request: Request):
         raise HTTPException(401, "Bad signature")
     try:
         event = json.loads(raw)["data"]["attributes"]
-        session_id = event["data"]["id"]
+        subject = event["data"]
+        subject_id = subject["id"]
     except (ValueError, KeyError, TypeError):
         raise HTTPException(400, "Unrecognised event")
+    # Each event only tells us where to look; what we fetch from PayMongo is what counts. Duplicates are harmless.
     if event.get("type") == "checkout_session.payment.paid":
-        # The event only tells us where to look; the session we fetch is what counts. Duplicates are harmless.
-        await run_in_threadpool(reconcile_session, session_id)
+        await run_in_threadpool(reconcile_session, subject_id)
     return {"received": True}
+
+
+class LalamoveNoAnswer(Exception):
+    """No answer, or a server error: the request may or may not have taken effect."""
+
+
+def lalamove_signature(timestamp: str, method: str, path: str, body: str) -> str:
+    """Lalamove v3: HMAC-SHA256 of "<timestamp>\\r\\n<METHOD>\\r\\n<path>\\r\\n\\r\\n<body>" with the API secret.
+    Webhooks are signed the same way, over the compact JSON of their data. Checked against real sandbox events."""
+    return hmac.new(LALAMOVE_SECRET.encode(), f"{timestamp}\r\n{method}\r\n{path}\r\n\r\n{body}".encode(), hashlib.sha256).hexdigest()
+
+
+def lalamove(method: str, path: str, body: dict | None = None) -> dict:
+    if not LALAMOVE_KEY or not LALAMOVE_SECRET:
+        raise HTTPException(503, "Lalamove is not configured")
+    raw = json.dumps(body, separators=(",", ":")) if body else ""
+    ts = str(int(time.time() * 1000))
+    headers = {"Authorization": f"hmac {LALAMOVE_KEY}:{ts}:{lalamove_signature(ts, method, path, raw)}", "Market": "PH", "Content-Type": "application/json"}
+    try:
+        r = requests.request(method, LALAMOVE_URL + path, data=raw or None, headers=headers, timeout=15)
+    except requests.RequestException:
+        raise LalamoveNoAnswer()
+    if r.status_code >= 500:
+        raise LalamoveNoAnswer()
+    try:
+        payload = r.json() if r.content else {}
+    except ValueError:
+        payload = {}
+    if not r.ok:
+        problems = "; ".join(e.get("message") or e.get("id", "") for e in payload.get("errors", [])) or f"HTTP {r.status_code}"
+        raise HTTPException(502, f"Lalamove: {problems}")
+    return payload.get("data") or {}
+
+
+def lalamove_time(text: str | None) -> datetime:
+    """Lalamove sends times like 2026-10-13T19:05.00Z; the minute is what is reliable."""
+    found = re.match(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})", text or "")
+    return datetime.fromisoformat(found[1]).replace(tzinfo=timezone.utc) if found else datetime.now(timezone.utc)
+
+
+def lalamove_pod(provider_order_id: str) -> dict | None:
+    """Proof of delivery for the drop-off stop, as Lalamove reports it. Missing POD means unavailable, not failed."""
+    try:
+        stops = lalamove("GET", f"/v3/orders/{provider_order_id}").get("stops", [])
+    except (HTTPException, LalamoveNoAnswer):
+        return None
+    pod = (stops[-1].get("POD") or {}) if stops else {}
+    if not pod:
+        return None
+    # ponytail: keeps Lalamove's image link, which may expire; copy the image into the evidence bucket when retention lands
+    return {"status": pod.get("status"), "image_url": pod.get("image"), "delivered_at": pod.get("deliveredAt"), "source": "lalamove",
+            "fetched_at": datetime.now(timezone.utc)}
+
+
+def shipment_ref(provider_order_id: str | None, quotation_id: str | None = None):
+    for field, value in (("fulfillment.provider_order_id", provider_order_id), ("fulfillment.quotation.id", quotation_id)):
+        if value:
+            found = list(orders().where(filter=firestore.FieldFilter(field, "==", value)).limit(1).stream())
+            if found:
+                return found[0].reference
+    return None
+
+
+def lalamove_rule(provider_order_id: str, raw_status: str | None, eid: str, at: datetime, order_data: dict):
+    """Link the Lalamove order to its shipment if this is the first we hear of it, then record the status event."""
+    now = datetime.now(timezone.utc)
+    status = delivery.LALAMOVE.get(raw_status or "") or ("driver_assigned" if raw_status == "DRIVER_ASSIGNED" else None)
+    pod = lalamove_pod(provider_order_id) if status == "delivered" else None
+
+    def rule(order: dict) -> dict:
+        updates = {}
+        if not (order.get("fulfillment") or {}).get("provider_order_id"):
+            updates = delivery.booked(order, provider_order_id, order_data.get("shareLink"), now)
+            order = {**order, **updates}
+        if status:
+            ev = delivery.event(eid, "provider", raw_status, status, at, now)
+            updates.update(delivery.apply_event(order, ev, driver_id=order_data.get("driverId") or None, share_link=order_data.get("shareLink"), pod=pod))
+        return updates
+
+    return rule
 
 
 @app.post("/api/webhooks/lalamove")
 async def lalamove_webhook(request: Request):
-    """Capture only: stores the raw event so we can see what the sandbox sends. Nothing acts on these yet.
+    """Lalamove order events. Always answers 200, because Lalamove pings the URL when it is registered and retries otherwise.
 
-    Always answers 200, because Lalamove pings the URL when it is registered.
+    Only events with our API key and a valid signature are stored and acted on. The raw event is kept; the event ID dedupes.
     """
-    # ponytail: filtered by apiKey only; verify the signature before any order state depends on these events
     raw = await request.body()
     try:
         event = json.loads(raw)
     except ValueError:
-        event = None
-    if LALAMOVE_KEY and isinstance(event, dict) and event.get("apiKey") == LALAMOVE_KEY and len(raw) < 65536:
-        doc = {"provider": "lalamove", "raw": raw.decode(), "path": request.url.path, "received_at": firestore.SERVER_TIMESTAMP}
-        ref = clients()[1].collection("webhookEvents").document(f"lalamove_{event.get('eventId') or secrets.token_hex(8)}")
-        try:
-            await run_in_threadpool(ref.create, doc)
-        except Exception:
-            pass  # duplicate delivery of an event we already have
+        return {"received": True}
+    if not (LALAMOVE_KEY and isinstance(event, dict) and event.get("apiKey") == LALAMOVE_KEY and len(raw) < 65536):
+        return {"received": True}
+    data = event.get("data")
+    bodies = {json.dumps(data, separators=(",", ":")), json.dumps(data, separators=(",", ":"), ensure_ascii=False)}
+    expected = {lalamove_signature(str(event.get("timestamp")), "POST", request.url.path, b) for b in bodies}
+    if not any(hmac.compare_digest(e, str(event.get("signature", ""))) for e in expected):
+        return {"received": True}
+    doc = {"provider": "lalamove", "raw": raw.decode(), "path": request.url.path, "verified": True, "received_at": firestore.SERVER_TIMESTAMP}
+    ref = clients()[1].collection("webhookEvents").document(f"lalamove_{event.get('eventId') or secrets.token_hex(8)}")
+    try:
+        await run_in_threadpool(ref.create, doc)
+    except Exception:
+        return {"received": True}  # duplicate delivery of an event we already have
+    o = (data or {}).get("order") or {}
+    kind = event.get("eventType")
+    if o.get("orderId") and kind in ("ORDER_CREATED", "ORDER_STATUS_CHANGED", "DRIVER_ASSIGNED"):
+        target = await run_in_threadpool(shipment_ref, o["orderId"], o.get("quotationId"))
+        raw_status = None if kind == "ORDER_CREATED" else (o.get("status") or kind)
+        if target:
+            rule = lalamove_rule(o["orderId"], raw_status, f"lalamove:{event['eventId']}", lalamove_time(data.get("updatedAt")), o)
+            try:
+                await run_in_threadpool(change, target, rule)
+            except HTTPException:
+                pass  # the event is stored; a refresh reconciles from Lalamove
     return {"received": True}
 
 
@@ -1009,3 +1130,172 @@ def confirm_gcash(order_id: str, body: GcashConfirm, user: dict = Depends(curren
     elsewhere = any(d.id != order_id for d in others)
     now = datetime.now(timezone.utc)
     return change(orders().document(order_id), lambda o: gcash.confirm(o, ref, user["email"], body.reason, now, elsewhere, body.invno))
+
+
+# Dispatch and delivery. Lalamove is live in its sandbox; the simulator and other couriers are labelled as such.
+class DispatchSettings(BaseModel):
+    address: str = Field(min_length=5, max_length=300)
+    pin: str = Field(min_length=3, max_length=500)
+    name: str = Field(min_length=1, max_length=100)
+    phone: str = Field(min_length=7, max_length=30)
+
+
+@app.get("/api/settings/dispatch")
+def get_dispatch_settings(user: dict = Depends(current_user)):
+    return (store_doc().get().to_dict() or {}).get("dispatch")
+
+
+@app.put("/api/settings/dispatch")
+def put_dispatch_settings(body: DispatchSettings, user: dict = Depends(current_user)):
+    """Where couriers pick up from. Lalamove needs a map pin; the seller pastes it from Google Maps."""
+    try:
+        lat, lng = delivery.parse_pin(body.pin)
+        phone = delivery.e164(body.phone)
+    except rules.Refused as e:
+        raise HTTPException(422, str(e))
+    saved = {"address": body.address.strip(), "lat": lat, "lng": lng, "name": body.name.strip(), "phone": phone,
+             "updated_by": user["email"], "updated_at": datetime.now(timezone.utc)}
+    store_doc().set({"dispatch": saved}, merge=True)
+    return saved
+
+
+class QuoteIn(BaseModel):
+    pin: str = Field(min_length=3, max_length=500)
+    service: Literal["MOTORCYCLE", "SEDAN", "MPV", "VAN"] = "MOTORCYCLE"
+
+
+def centavos_of(text: str) -> int:
+    return int(round(float(text) * 100))
+
+
+@app.post("/api/orders/{order_id}/dispatch/quote")
+def quote_delivery(order_id: str, body: QuoteIn, user: dict = Depends(current_user)):
+    """A Lalamove quotation for the seller to approve. Nothing is booked yet."""
+    pickup = get_dispatch_settings(user)
+    if not pickup:
+        raise HTTPException(409, "Add your pickup address and pin in Settings first")
+    ref, order = loaded(order_id)
+    try:
+        delivery.can_dispatch(order)
+        lat, lng = delivery.parse_pin(body.pin)
+    except rules.Refused as e:
+        raise HTTPException(409, str(e))
+    stops = [{"coordinates": {"lat": str(pickup["lat"]), "lng": str(pickup["lng"])}, "address": pickup["address"]},
+             {"coordinates": {"lat": str(lat), "lng": str(lng)}, "address": order["draft"]["address"]["value"]}]
+    try:
+        q = lalamove("POST", "/v3/quotations", {"data": {"serviceType": body.service, "language": "en_PH", "stops": stops}})
+    except LalamoveNoAnswer:
+        raise HTTPException(502, "Lalamove did not answer. Try again.")
+    price = q.get("priceBreakdown") or {}
+    quotation = {"id": q["quotationId"], "service": body.service, "price": centavos_of(price.get("total", "0")), "currency": price.get("currency", "PHP"),
+                 "expires_at": lalamove_time(q.get("expiresAt")), "stop_ids": [s["stopId"] for s in q.get("stops", [])], "dropoff": [lat, lng],
+                 "livemode": "sandbox" not in LALAMOVE_URL}
+    now = datetime.now(timezone.utc)
+    fid = ((order.get("fulfillment") or {}).get("id")) or secrets.token_hex(8)
+    return change(ref, lambda o: delivery.start(o, fid, "lalamove", user["email"], now, quotation=quotation))
+
+
+@app.post("/api/orders/{order_id}/dispatch/book")
+def book_delivery(order_id: str, user: dict = Depends(current_user)):
+    """Book the approved quote. The quote is locked first, so a retry cannot book twice."""
+    pickup = get_dispatch_settings(user)
+    ref, order = loaded(order_id)
+    f, d = order.get("fulfillment") or {}, order["draft"]
+    try:
+        phone = delivery.e164(d["phone"]["value"])
+    except rules.Refused as e:
+        raise HTTPException(409, f"Recipient phone: {e}")
+    if not pickup or len((f.get("quotation") or {}).get("stop_ids", [])) != 2:
+        raise HTTPException(409, "Get a Lalamove quote first")
+    now = datetime.now(timezone.utc)
+    change(ref, lambda o: delivery.begin_booking(o, now))
+    q = f["quotation"]
+    payload = {"data": {
+        "quotationId": q["id"],
+        "sender": {"stopId": q["stop_ids"][0], "name": pickup["name"], "phone": pickup["phone"]},
+        "recipients": [{"stopId": q["stop_ids"][1], "name": d["recipient_name"]["value"], "phone": phone, "remarks": d["delivery_instructions"]["value"] or ""}],
+        "isPODEnabled": True,
+        "metadata": {"orderId": order_id, "fulfillmentId": f["id"]},
+    }}
+    try:
+        placed = lalamove("POST", "/v3/orders", payload)
+    except LalamoveNoAnswer:
+        return change(ref, delivery.booking_uncertain)  # Lalamove's ORDER_CREATED event, matched by quotation, settles it
+    except HTTPException as e:
+        change(ref, lambda o: delivery.booking_failed(o, e.detail))
+        raise
+    return change(ref, lambda o: delivery.booked(o, placed["orderId"], placed.get("shareLink"), datetime.now(timezone.utc)))
+
+
+@app.post("/api/orders/{order_id}/dispatch/release")
+def release_delivery(order_id: str, user: dict = Depends(current_user)):
+    now = datetime.now(timezone.utc)
+    return change(orders().document(order_id), lambda o: delivery.release_booking(o, now))
+
+
+@app.post("/api/orders/{order_id}/dispatch/refresh")
+def refresh_delivery(order_id: str, user: dict = Depends(current_user)):
+    """Ask Lalamove for the order's current status, for when a webhook is late or missed."""
+    ref, order = loaded(order_id)
+    f = order.get("fulfillment") or {}
+    if f.get("courier") != "lalamove" or not f.get("provider_order_id"):
+        raise HTTPException(409, "No booked Lalamove order to refresh")
+    try:
+        o = lalamove("GET", f"/v3/orders/{f['provider_order_id']}")
+    except LalamoveNoAnswer:
+        raise HTTPException(502, "Lalamove did not answer. Status unchanged.")
+    raw = o.get("status")
+    eid = f"lalamove:{f['provider_order_id']}:poll:{raw}"  # one event per status seen by polling
+    return change(ref, lalamove_rule(f["provider_order_id"], raw, eid, datetime.now(timezone.utc), o))
+
+
+class StartIn(BaseModel):
+    courier: Literal["simulator", "other"]
+    tracking: str = Field(default="", max_length=200)
+
+
+@app.post("/api/orders/{order_id}/dispatch/start")
+def start_delivery(order_id: str, body: StartIn, user: dict = Depends(current_user)):
+    """The delivery simulator (every event labelled demo) or another courier whose updates the seller reports."""
+    if body.courier == "other" and not body.tracking.strip():
+        raise HTTPException(422, "Enter the courier and tracking number")
+    now = datetime.now(timezone.utc)
+    fid = secrets.token_hex(8)
+    return change(orders().document(order_id), lambda o: delivery.start(o, fid, body.courier, user["email"], now, tracking=body.tracking.strip() or None))
+
+
+class StepIn(BaseModel):
+    status: Literal["driver_assigned", "picked_up", "delivered", "failed"]
+    note: str = Field(default="", max_length=500)
+
+
+@app.post("/api/orders/{order_id}/dispatch/step")
+def step_delivery(order_id: str, body: StepIn, user: dict = Depends(current_user)):
+    now = datetime.now(timezone.utc)
+
+    def rule(o: dict) -> dict:
+        source = "demo" if (o.get("fulfillment") or {}).get("courier") == "simulator" else "seller_reported"
+        return delivery.step(o, body.status, source, user["email"], now, body.note)
+
+    return change(orders().document(order_id), rule)
+
+
+@app.post("/api/orders/{order_id}/dispatch/cancel")
+def cancel_delivery(order_id: str, body: rules.Cancel, user: dict = Depends(current_user)):
+    ref, order = loaded(order_id)
+    f = order.get("fulfillment") or {}
+    if f.get("status") == "booking":
+        raise HTTPException(409, "A booking is waiting for Lalamove's answer. Release it once the quote expires.")
+    if f.get("courier") == "lalamove" and f.get("provider_order_id"):
+        try:
+            lalamove("DELETE", f"/v3/orders/{f['provider_order_id']}")
+        except LalamoveNoAnswer:
+            raise HTTPException(502, "Lalamove did not answer. The booking may still be active; try again.")
+    now = datetime.now(timezone.utc)
+    return change(ref, lambda o: delivery.cancel(o, user["email"], body.reason, now))
+
+
+@app.post("/api/public/orders/{token}/received")
+def public_received(token: str):
+    now = datetime.now(timezone.utc)
+    return customer_view(change(by_token(token).reference, lambda o: delivery.acknowledge(o, "customer_link", now)))
