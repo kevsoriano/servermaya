@@ -22,11 +22,18 @@ export type ManualPayment = {
   pay_to: { name: string; mobile: string; masked_name?: string | null; user_id?: string | null }
   requested_at: string
   claims: Claim[]
+  history_check?: { status: 'found' | 'amount_differs' | 'not_found'; checked_at: string } | null
   history_read?: { reference: string | null; entry: { invno: string | null }; checks: Check[] } | null
   confirmed: { reference: string; invno?: string | null; claim_id: string | null; history_image?: object | null; by: string; at: string; reason: string | null } | null
 }
 
 const RESULT = { pass: 'Pass', fail: 'Does not fit', unreadable: 'Could not read' }
+
+const HISTORY = {
+  found: 'Found in your GCash history',
+  amount_differs: 'In your GCash history with a different amount',
+  not_found: 'Not in your GCash history, although the export covers it',
+}
 
 const LABEL: Record<string, string> = {
   receipt: 'Receipt',
@@ -212,6 +219,13 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
             <p>
               <strong>Seller confirmed in GCash</strong> by {current.confirmed.by} on {new Date(current.confirmed.at).toLocaleString()}: reference {current.confirmed.reference}
               {current.confirmed.reason && <> ({current.confirmed.reason})</>}. Not verified by PayMongo.
+              {current.history_check && (
+                <>
+                  <br />
+                  <span className={`result ${current.history_check.status === 'found' ? 'pass' : 'fail'}`}>{HISTORY[current.history_check.status]}</span>{' '}
+                  <small>(GCash history uploaded {new Date(current.history_check.checked_at).toLocaleString()})</small>
+                </>
+              )}
             </p>
           ) : (
             <>

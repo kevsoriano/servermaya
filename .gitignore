@@ -7,3 +7,6 @@ dist
 .firebase
 *.local
 .DS_Store
+
+# GCash history exports and other private statements
+docs/*.pdf

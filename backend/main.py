@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
@@ -8,6 +9,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
+import pypdf
 import requests
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
@@ -897,6 +899,57 @@ async def read_gcash_history(order_id: str, request: Request, user: dict = Depen
         "model": GEMINI_MODEL,
     }
     return await run_in_threadpool(change, ref, lambda o: gcash.add_history(o, read))
+
+
+MAX_STATEMENT_BYTES = 5 * 1024 * 1024
+
+
+def statement_text(data: bytes, password: str) -> str:
+    try:
+        reader = pypdf.PdfReader(io.BytesIO(data))
+        if reader.is_encrypted and not reader.decrypt(password):
+            raise HTTPException(422, "Wrong password. GCash uses your last name and the last 4 digits of your mobile number, like delacruz1234.")
+        return "\n".join(page.extract_text() for page in reader.pages)
+    except pypdf.errors.PyPdfError:
+        raise HTTPException(422, "Could not open this PDF")
+
+
+@app.post("/api/gcash/statements")
+async def upload_gcash_statement(request: Request, x_pdf_password: str = Header(default=""), user: dict = Depends(current_user)):
+    """The seller's GCash transaction history export. Confirms waiting GCash payments it shows, and checks confirmed ones.
+
+    The password is used once and never stored. Only received rows are kept; the PDF itself is not.
+    """
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/pdf":
+        raise HTTPException(415, "Upload the PDF that GCash emailed you")
+    data = await request.body()
+    if not data or len(data) > MAX_STATEMENT_BYTES:
+        raise HTTPException(413, "The PDF must be under 5 MB")
+    text = await run_in_threadpool(statement_text, data, x_pdf_password)
+    try:
+        statement = gcash.parse_statement(text)
+    except rules.Refused as e:
+        raise HTTPException(422, str(e))
+    return await run_in_threadpool(apply_statement, statement, hashlib.sha256(data).hexdigest(), user["email"])
+
+
+def apply_statement(statement: dict, statement_id: str, by: str) -> dict:
+    now = datetime.now(timezone.utc)
+    store_doc().collection("gcashStatements").document(statement_id).set({**statement, "uploaded_by": by, "uploaded_at": now})
+    waiting = list(orders().where(filter=firestore.FieldFilter("manual_payment.status", "in", ["requested", "claimed", "seller_confirmed"])).stream())
+    taken = {m["confirmed"]["reference"]: d.id for d in waiting if (m := d.to_dict()["manual_payment"]).get("confirmed")}
+    result = {"start": statement["start"], "last_at": statement["last_at"], "received": len(statement["credits"])}
+    for d in waiting:
+        others = {ref for ref, order_id in taken.items() if order_id != d.id}
+        # check outside the transaction first, so unchanged orders cost no write
+        if not gcash.reconcile(d.to_dict(), statement, statement_id, others, by, now):
+            continue
+        saved = change(d.reference, lambda o: gcash.reconcile(o, statement, statement_id, others, by, now))
+        m = saved["manual_payment"]
+        status = "confirmed" if m["confirmed"].get("statement") == statement_id else m["history_check"]["status"]
+        result.setdefault(status, []).append(d.id)
+        taken[m["confirmed"]["reference"]] = d.id
+    return result
 
 
 class GcashConfirm(BaseModel):

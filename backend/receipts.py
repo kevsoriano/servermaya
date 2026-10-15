@@ -375,6 +375,17 @@ def add_history(order: dict, read: dict) -> dict:
     return {"manual_payment": {**m, "history_read": read}}
 
 
+def shows(claim: dict, ref: str, invno: str | None) -> bool:
+    """Whether a checked screenshot is this GCash payment: same reference, or for a bank receipt, the invno in GCash history
+    starts with the transfer date and ends in the bank's 6-digit reference. The next day is allowed too, in case the bank
+    dates a transfer made just before midnight."""
+    if claim["reference"] == ref:
+        return True
+    invno = re.sub(r"\W", "", invno or "").upper()
+    at = claim["reference"] and len(claim["reference"]) == 6 and invno.endswith(claim["reference"]) and paid_at(claim["receipt"]["paid_at"])
+    return bool(at) and invno[:8] in (f"{at:%Y%m%d}", f"{at + timedelta(days=1):%Y%m%d}")
+
+
 def confirm(order: dict, ref: str, by: str, reason: str, now: datetime, confirmed_elsewhere: bool, invno: str = "") -> dict:
     """The seller found this reference in their own GCash history. Shown as seller-confirmed, never as provider-verified.
 
@@ -392,16 +403,7 @@ def confirm(order: dict, ref: str, by: str, reason: str, now: datetime, confirme
     if confirmed_elsewhere:
         raise Refused(f"Reference {ref} is already confirmed on another order")
     invno = re.sub(r"\W", "", invno).upper()
-
-    def shows(c: dict) -> bool:
-        if c["reference"] == ref:
-            return True
-        # A bank receipt: the invno starts with the transfer date and ends in its 6-digit reference.
-        # The next day is allowed too, in case the bank dates a transfer made just before midnight.
-        at = c["reference"] and len(c["reference"]) == 6 and invno.endswith(c["reference"]) and paid_at(c["receipt"]["paid_at"])
-        return bool(at) and invno[:8] in (f"{at:%Y%m%d}", f"{at + timedelta(days=1):%Y%m%d}")
-
-    claim = next((c for c in reversed(m["claims"]) if shows(c)), None)
+    claim = next((c for c in reversed(m["claims"]) if shows(c, ref, invno)), None)
     doubts = [c["check"] for c in claim["checks"] if c["result"] != "pass"] if claim else []
     history = m.get("history_read")
     history = history if history and history["reference"] == ref else None
@@ -411,3 +413,76 @@ def confirm(order: dict, ref: str, by: str, reason: str, now: datetime, confirme
         raise Refused(f"Say why you are confirming: {why}")
     confirmed = {"reference": ref, "invno": invno or None, "claim_id": claim and claim["id"], "history_image": history and history["image"], "by": by, "at": now, "reason": reason.strip() or None}
     return {"manual_payment": {**m, "status": "seller_confirmed", "confirmed": confirmed}}
+
+
+# The seller's GCash transaction history export (PDF, text extracted in code). Parsed exactly, never by a model:
+# each row must carry the running balance from the one before, so a row read wrong or missed refuses the whole file.
+ROW = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2} [AP]M) (.*) (\d{13}) ([\d,]+\.\d{2}) ([\d,]+\.\d{2})$")
+MONEY = r"([\d,]+\.\d{2})"
+
+
+def parse_statement(text: str) -> dict:
+    """Returns {start, last_at, credits: [{at, reference, amount, description, invno}]}. Debits are dropped: they are the
+    seller's own spending and not ours to keep. last_at is the latest row of any kind, how far the export reaches."""
+    amount = lambda s: centavos(float(s.replace(",", "")))
+    period = re.search(r"(\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})", text)
+    opening = re.search(r"STARTING BALANCE " + MONEY, text)
+    closing = re.search(r"ENDING BALANCE " + MONEY, text)
+    if not (period and opening and closing):
+        raise Refused("This is not a GCash transaction history export")
+    balance, credits, last_at, total_in, total_out = amount(opening[1]), [], None, 0, 0
+    for line in text.splitlines():
+        row = ROW.match(line.strip())
+        if not row:
+            continue
+        at = datetime.strptime(row[1], "%Y-%m-%d %I:%M %p").replace(tzinfo=PHT)
+        moved, after = amount(row[4]), amount(row[5])
+        if balance + moved == after:
+            invno = re.search(r"invno:(\w+)", row[2])
+            credits.append({"at": at, "reference": row[3], "amount": moved, "description": row[2], "invno": invno and invno[1]})
+            total_in += moved
+        elif balance - moved == after:
+            total_out += moved
+        else:
+            raise Refused(f"Could not read the row at {row[1]} (reference {row[3]}). Nothing was matched.")
+        balance, last_at = after, max(filter(None, [last_at, at]))
+    totals = [re.search(f"Total {kind} " + MONEY, text) for kind in ("Debit", "Credit")]
+    if balance != amount(closing[1]) or any(t and amount(t[1]) != n for t, n in zip(totals, (total_out, total_in))):
+        raise Refused("Could not read every row of this export. Nothing was matched.")
+    start = datetime.strptime(period[1], "%Y-%m-%d").replace(tzinfo=PHT)
+    return {"start": start, "last_at": last_at, "credits": credits}
+
+
+def reconcile(order: dict, statement: dict, statement_id: str, taken: set[str], by: str, now: datetime) -> dict:
+    """Check one order's direct GCash payment against an uploaded history export.
+
+    Waiting: confirmed automatically when a checked screenshot, or the seller's history screenshot, points to a received row
+    with the exact amount, received after the request. Already confirmed: marked found, or not_found when the export
+    clearly covers the time the payment must have arrived. taken: references confirmed on other orders.
+    """
+    try:
+        m = current(order)
+    except Refused:
+        return {}
+    credits = statement["credits"]
+    check = lambda status, row=None: {"status": status, "statement": statement_id, "reference": row and row["reference"], "checked_at": now}
+    if m["status"] == "seller_confirmed":
+        c = m["confirmed"]
+        row = next((r for r in credits if r["reference"] == c["reference"]), None)
+        if row:
+            status = "found" if row["amount"] == m["amount"] else "amount_differs"
+        elif statement["start"] <= m["requested_at"] and statement["last_at"] and c["at"] <= statement["last_at"]:
+            status = "not_found"  # it must have arrived between the request and the confirmation, and the export covers both
+        else:
+            return {}  # outside this export
+        return {"manual_payment": {**m, "history_check": check(status, row)}}
+    history = m.get("history_read") or {}
+    for row in credits:
+        if row["amount"] != m["amount"] or row["at"] < m["requested_at"] - SLACK or row["reference"] in taken:
+            continue
+        claim = next((c for c in reversed(m["claims"]) if shows(c, row["reference"], row["invno"])), None)
+        if claim or history.get("reference") == row["reference"]:
+            confirmed = {"reference": row["reference"], "invno": row["invno"], "claim_id": claim and claim["id"], "history_image": history.get("image") if history.get("reference") == row["reference"] else None,
+                         "by": by, "at": now, "reason": "Found in an uploaded GCash history export", "statement": statement_id}
+            return {"manual_payment": {**m, "status": "seller_confirmed", "confirmed": confirmed, "history_check": check("found", row)}}
+    return {}

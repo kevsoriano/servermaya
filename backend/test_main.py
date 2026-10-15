@@ -613,6 +613,63 @@ def test_packing_accepts_a_seller_confirmed_gcash_payment():
     assert pack.paid_by({**confirmed, "payment": {"status": "verified", "version": 2}}) == "paymongo"
 
 
+def test_gcash_history_export_is_parsed_exactly_and_matched():
+    from datetime import datetime, timezone
+
+    import pytest
+
+    import orders as rules
+    import receipts as gc
+
+    # The layout of a real export (pypdf text), with made-up figures.
+    text = """GCash Transaction History
+2026-10-09 to 2026-10-15
+Date and Time Description Reference No. Debit Credit Balance
+STARTING BALANCE 1,000.00
+2026-10-11 08:52 PM Payment to SHOP, Merchant Transaction Number: P1 0000000000001 100.00 900.00
+2026-10-14 04:52 PM Received GCash from BPI / VYBE by BPI with account ending in 1111 andinvno:20261014BOPIPHMMXXXB000165215123456 1046000000001 1,250.37 2,150.37
+2026-10-14 05:10 PM Received GCash from JU** DE** C. 1046000000002 83.00 2,233.37
+ENDING BALANCE 2,233.37
+Total Debit 100.00
+Total Credit 1,333.37"""
+    st = gc.parse_statement(text)
+    assert [(c["reference"], c["amount"], c["invno"]) for c in st["credits"]] == [
+        ("1046000000001", 125037, "20261014BOPIPHMMXXXB000165215123456"), ("1046000000002", 8300, None)]  # spending is dropped
+    assert st["start"] == datetime(2026, 10, 9, tzinfo=gc.PHT) and st["last_at"] == datetime(2026, 10, 14, 17, 10, tzinfo=gc.PHT)
+    for broken in (text.replace("2,150.37", "2,150.73"),  # a digit read wrong breaks the running balance
+                   text.replace("2026-10-14 05:10 PM", "2026-10-14 05:10"),  # a row skipped breaks the ending balance
+                   "Some other PDF"):
+        with pytest.raises(rules.Refused):
+            gc.parse_statement(broken)
+
+    now = datetime(2026, 10, 15, tzinfo=timezone.utc)
+    sent = datetime(2026, 10, 14, 16, 0, tzinfo=gc.PHT)
+    passing = [gc.check("amount", "pass", "")]
+    bank_claim = {"id": "t", "reference": "123456", "receipt": {"paid_at": "2026-10-14T16:51"}, "checks": passing}
+    order = {"status": "confirmed", "version": 1, "manual_payment": {"status": "claimed", "version": 1, "amount": 125037, "requested_at": sent,
+                                                                      "claims": [bank_claim]}}
+    run = lambda o, taken=frozenset(): gc.reconcile(o, st, "s1", set(taken), "me", now)
+
+    # A bank screenshot whose 6 digits end the invno, with the exact amount: confirmed from the export.
+    c = run(order)["manual_payment"]["confirmed"]
+    assert (c["reference"], c["claim_id"], c["statement"]) == ("1046000000001", "t", "s1")
+    assert run(order, {"1046000000001"}) == {}  # already confirmed on another order
+    assert run({**order, "manual_payment": {**order["manual_payment"], "amount": 125000}}) == {}  # amount differs
+    assert run({**order, "manual_payment": {**order["manual_payment"], "requested_at": now}}) == {}  # arrived before the request
+    assert run({**order, "manual_payment": {**order["manual_payment"], "claims": []}}) == {}  # nothing points to the row
+    seller_read = {**order["manual_payment"], "claims": [], "history_read": {"reference": "1046000000001", "image": {"path": "h"}}}
+    assert run({**order, "manual_payment": seller_read})["manual_payment"]["confirmed"]["history_image"] == {"path": "h"}
+
+    # Confirmed by hand: found, a different amount, missing although the export covers it, or outside the export.
+    done = lambda ref, at=datetime(2026, 10, 14, 8, 30, tzinfo=timezone.utc), amount=125037: {**order, "manual_payment": {
+        **order["manual_payment"], "status": "seller_confirmed", "amount": amount, "confirmed": {"reference": ref, "at": at}}}
+    assert run(done("1046000000001"))["manual_payment"]["history_check"]["status"] == "found"
+    assert run(done("1046000000001", amount=8300))["manual_payment"]["history_check"]["status"] == "amount_differs"
+    assert run(done("1046999999999"))["manual_payment"]["history_check"]["status"] == "not_found"
+    assert run(done("1046999999999", at=now)) == {}  # confirmed after the export ends: it may simply not be in it yet
+    assert run({**order, "version": 2}) == {}  # the request is for an older version
+
+
 def test_profile_pics_batched_cached_and_soft_failing(monkeypatch):
     calls = []
     def fake(path, **k):

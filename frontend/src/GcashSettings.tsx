@@ -21,6 +21,84 @@ async function decode(file: File): Promise<string | null> {
   return jsQR(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height)?.data ?? null
 }
 
+type Applied = {
+  start: string
+  last_at: string | null
+  received: number
+  confirmed?: string[]
+  found?: string[]
+  amount_differs?: string[]
+  not_found?: string[]
+}
+
+/** The seller's GCash transaction history export. The password is used once and not stored. */
+function HistoryUpload() {
+  const [file, setFile] = useState<File>()
+  const [password, setPassword] = useState('')
+  const [result, setResult] = useState<Applied>()
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const upload = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!file) return
+    setBusy(true)
+    setError('')
+    setResult(undefined)
+    load<Applied>('/gcash/statements', { method: 'POST', headers: { 'Content-Type': 'application/pdf', 'X-Pdf-Password': password }, body: file })
+      .then((r) => (setResult(r), setPassword('')), (e) => setError(e.message))
+      .finally(() => setBusy(false))
+  }
+  const list = (ids?: string[]) => (ids?.length ? ids.join(', ') : 'none')
+
+  return (
+    <section className="order">
+      <h2>Check payments against your GCash history</h2>
+      <p>
+        In GCash, open Transactions → Request transaction history, and upload the PDF that GCash emails you. Waiting GCash payments that a checked screenshot points
+        to are confirmed, and payments you already confirmed are checked. Only money received is kept; the PDF and its password are not.
+      </p>
+      <form onSubmit={upload}>
+        <label>
+          GCash history PDF
+          <input type="file" accept="application/pdf" required onChange={(e) => setFile(e.target.files?.[0])} />
+        </label>
+        <label>
+          PDF password: your last name and the last 4 digits of your mobile number
+          <input type="password" autoComplete="off" placeholder="delacruz1234" value={password} onChange={(e) => setPassword(e.target.value)} />
+        </label>
+        <button disabled={busy || !file}>{busy ? 'Checking…' : 'Upload and check'}</button>
+      </form>
+      {result && (
+        <dl>
+          <dt>Export covers</dt>
+          <dd>
+            {new Date(result.start).toLocaleDateString()} to {result.last_at ? new Date(result.last_at).toLocaleString() : 'no transactions'} ({result.received}{' '}
+            received)
+          </dd>
+          <dt>Confirmed now</dt>
+          <dd>{list(result.confirmed)}</dd>
+          <dt>Already confirmed, found</dt>
+          <dd>{list(result.found)}</dd>
+          {!!result.amount_differs?.length && (
+            <>
+              <dt className="result fail">Found with a different amount</dt>
+              <dd>{list(result.amount_differs)}</dd>
+            </>
+          )}
+          {!!result.not_found?.length && (
+            <>
+              <dt className="result fail">Confirmed, but not in this history</dt>
+              <dd>{list(result.not_found)}</dd>
+            </>
+          )}
+        </dl>
+      )}
+      {error && <p role="alert">{error}</p>}
+    </section>
+  )
+}
+
 /** The account customers are told to pay for direct GCash. Receipts are checked against it. */
 export default function GcashSettings() {
   const [saved, setSaved] = useState<Saved>()
@@ -61,44 +139,47 @@ export default function GcashSettings() {
   if (saved === undefined) return error ? <p role="alert">{error}</p> : <p>Loading…</p>
 
   return (
-    <section className="order">
-      <h2>GCash account</h2>
-      <p>
-        Used when a customer pays by GCash directly. The name and number on their receipt must fit these. Enter the name exactly as registered in GCash, including any
-        middle name.
-      </p>
-      <form onSubmit={save}>
-        <label>
-          Registered name
-          <input required minLength={2} maxLength={100} value={name} onChange={(e) => setName(e.target.value)} />
-        </label>
-        <label>
-          GCash mobile number
-          <input required inputMode="tel" maxLength={30} placeholder="0917 123 4567" value={mobile} onChange={(e) => setMobile(e.target.value)} />
-        </label>
-        <label>
-          GCash QR (optional): a screenshot from GCash → Receive → Receive via QR
-          <input type="file" accept="image/*" onChange={(e) => pick(e.target.files?.[0])} />
-        </label>
+    <>
+      <section className="order">
+        <h2>GCash account</h2>
         <p>
-          <small>
-            {qr
-              ? qr === saved?.qr?.payload
-                ? `QR saved: GCash shows your name as ${saved.qr.masked_name}. Receipts are compared with that exactly.`
-                : 'QR read. Save to check it against your name.'
-              : 'Without a QR, receipt names are compared with the name above, letter by letter where GCash shows them.'}
-          </small>
+          Used when a customer pays by GCash directly. The name and number on their receipt must fit these. Enter the name exactly as registered in GCash, including any
+          middle name.
         </p>
-        <button disabled={busy}>Save</button>
-      </form>
-      {saved && (
-        <p>
-          <small>
-            Last saved by {saved.updated_by} on {new Date(saved.updated_at).toLocaleString()}. Changing it does not affect requests already sent.
-          </small>
-        </p>
-      )}
-      {error && <p role="alert">{error}</p>}
-    </section>
+        <form onSubmit={save}>
+          <label>
+            Registered name
+            <input required minLength={2} maxLength={100} value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+          <label>
+            GCash mobile number
+            <input required inputMode="tel" maxLength={30} placeholder="0917 123 4567" value={mobile} onChange={(e) => setMobile(e.target.value)} />
+          </label>
+          <label>
+            GCash QR (optional): a screenshot from GCash → Receive → Receive via QR
+            <input type="file" accept="image/*" onChange={(e) => pick(e.target.files?.[0])} />
+          </label>
+          <p>
+            <small>
+              {qr
+                ? qr === saved?.qr?.payload
+                  ? `QR saved: GCash shows your name as ${saved.qr.masked_name}. Receipts are compared with that exactly.`
+                  : 'QR read. Save to check it against your name.'
+                : 'Without a QR, receipt names are compared with the name above, letter by letter where GCash shows them.'}
+            </small>
+          </p>
+          <button disabled={busy}>Save</button>
+        </form>
+        {saved && (
+          <p>
+            <small>
+              Last saved by {saved.updated_by} on {new Date(saved.updated_at).toLocaleString()}. Changing it does not affect requests already sent.
+            </small>
+          </p>
+        )}
+        {error && <p role="alert">{error}</p>}
+      </section>
+      <HistoryUpload />
+    </>
   )
 }
