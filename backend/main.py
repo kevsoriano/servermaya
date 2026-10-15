@@ -802,6 +802,9 @@ def request_gcash(order_id: str, user: dict = Depends(current_user)):
     return change(orders().document(order_id), lambda o: gcash.request(o, snapshot, user["email"], now))
 
 
+# ponytail: written before the claim is saved, so a failed read leaves an entry pointing at an order with no claim, and a
+# legitimate reuse on another order is then flagged (fails safe: the seller gives a reason). Upgrade: when the entry
+# points elsewhere, check that order really has the claim and take the entry over if not.
 def first_seen(collection: str, key: str, order_id: str, **extra) -> dict:
     """Index a reference number, image hash or receipt details across orders. Returns whichever record got there first."""
     doc = store_doc().collection(collection).document(key)
