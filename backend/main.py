@@ -777,6 +777,18 @@ def first_seen(collection: str, key: str, order_id: str, **extra) -> dict:
 MAX_RECEIPTS_PER_READ = 5
 
 
+def transcribe(data: bytes, content_type: str, system: str, schema: type[BaseModel]) -> BaseModel:
+    try:
+        response = clients()[0].models.generate_content(
+            model=GEMINI_MODEL,
+            contents=["Screenshot:", types.Part.from_bytes(data=data, mime_type=content_type)],
+            config={"system_instruction": system, "response_mime_type": "application/json", "response_schema": schema, "temperature": 0},
+        )
+        return schema.model_validate_json(response.text)
+    except Exception:
+        raise HTTPException(502, "Could not read a screenshot. Try again.")
+
+
 def read_receipt(order_id: str, manual: dict, message: dict, attachment: dict, now: datetime) -> dict:
     """Copy one screenshot into our storage as evidence, have Gemini transcribe it, and run the checks."""
     try:
@@ -793,15 +805,7 @@ def read_receipt(order_id: str, manual: dict, message: dict, attachment: dict, n
         bucket().blob(path).upload_from_string(data, content_type=content_type, if_generation_match=0)
     except PreconditionFailed:
         pass  # the same file is already stored
-    try:
-        response = clients()[0].models.generate_content(
-            model=GEMINI_MODEL,
-            contents=["Screenshot:", types.Part.from_bytes(data=data, mime_type=content_type)],
-            config={"system_instruction": gcash.SYSTEM, "response_mime_type": "application/json", "response_schema": gcash.Receipt, "temperature": 0},
-        )
-        receipt = gcash.Receipt.model_validate_json(response.text)
-    except Exception:
-        raise HTTPException(502, "Could not read a screenshot. Try again.")
+    receipt = transcribe(data, content_type, gcash.SYSTEM, gcash.Receipt)
     ref = gcash.reference(receipt.reference)
     # Copies are caught three ways: the same file, the same reference, or the same amount and minute under another reference (an edited copy).
     reused = first_seen("gcashImages", sha, order_id)["order_id"] != order_id
@@ -860,6 +864,39 @@ def gcash_screenshot(order_id: str, claim_id: str, user: dict = Depends(current_
         raise HTTPException(404, "Screenshot not found")
     image = claim["image"]
     return Response(bucket().blob(image["path"]).download_as_bytes(), media_type=image["content_type"], headers={"Cache-Control": "private, max-age=3600"})
+
+
+@app.post("/api/orders/{order_id}/gcash/history")
+async def read_gcash_history(order_id: str, request: Request, user: dict = Depends(current_user)):
+    """The seller's screenshot of the payment in their own GCash history. Read to fill in the reference; it confirms nothing."""
+    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if content_type not in pack.IMAGE_TYPES:
+        raise HTTPException(415, "Upload a JPEG, PNG, WebP or HEIC screenshot")
+    data = await request.body()
+    if not data or len(data) > pack.MAX_PHOTO_BYTES:
+        raise HTTPException(413, "Screenshots must be under 10 MB")
+    ref, order = await run_in_threadpool(loaded, order_id)
+    try:
+        manual = gcash.current(order)
+    except rules.Refused as e:
+        raise HTTPException(409, str(e))
+    sha = hashlib.sha256(data).hexdigest()
+    path = f"stores/{STORE}/orders/{order_id}/gcash/history/{sha}"
+    try:
+        await run_in_threadpool(lambda: bucket().blob(path).upload_from_string(data, content_type=content_type, if_generation_match=0))
+    except PreconditionFailed:
+        pass  # the same file is already stored
+    entry = await run_in_threadpool(transcribe, data, content_type, gcash.HISTORY_SYSTEM, gcash.HistoryEntry)
+    read = {
+        "image": {"path": path, "sha256": sha, "content_type": content_type, "size": len(data)},
+        "entry": entry.model_dump(),
+        "reference": gcash.reference(entry.reference) or None,
+        "checks": gcash.check_history(entry, manual["amount"], manual["requested_at"]),
+        "read_at": datetime.now(timezone.utc),
+        "read_by": user["email"],
+        "model": GEMINI_MODEL,
+    }
+    return await run_in_threadpool(change, ref, lambda o: gcash.add_history(o, read))
 
 
 class GcashConfirm(BaseModel):

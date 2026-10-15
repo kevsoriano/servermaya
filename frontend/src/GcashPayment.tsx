@@ -22,7 +22,8 @@ export type ManualPayment = {
   pay_to: { name: string; mobile: string; masked_name?: string | null; user_id?: string | null }
   requested_at: string
   claims: Claim[]
-  confirmed: { reference: string; invno?: string | null; claim_id: string | null; by: string; at: string; reason: string | null } | null
+  history_read?: { reference: string | null; entry: { invno: string | null }; checks: Check[] } | null
+  confirmed: { reference: string; invno?: string | null; claim_id: string | null; history_image?: object | null; by: string; at: string; reason: string | null } | null
 }
 
 const RESULT = { pass: 'Pass', fail: 'Does not fit', unreadable: 'Could not read' }
@@ -112,12 +113,14 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
 
   if (order.status !== 'confirmed' || (paidByPayMongo && !current)) return null
 
-  const run = (label: string, path: string, body?: object) => {
+  const run = (label: string, path: string, body?: object | File) => {
     setBusy(label)
     setError('')
     return load<Order>(`/orders/${order.id}/gcash${path}`, {
       method: 'POST',
-      ...(body && { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+      ...(body instanceof File
+        ? { headers: { 'Content-Type': body.type }, body }
+        : body && { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
     })
       .then((o) => (onChange(o), o))
       .catch((e) => (setError(e.message), undefined))
@@ -130,6 +133,17 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
       if (p) write(`You can also pay ${peso(p.amount)} by GCash to ${p.pay_to.name}, ${localMobile(p.pay_to.mobile)}. Please send a screenshot of the receipt here after paying.`)
     })
 
+  // The seller's screenshot of the payment in their own GCash history fills in the form; the seller still confirms.
+  const readHistory = (file?: File) =>
+    file &&
+    run('Reading your screenshot…', '/history', file).then((o) => {
+      const h = o?.manual_payment?.history_read
+      if (h) {
+        setReference(h.reference ?? '')
+        setInvno(h.entry.invno ?? '')
+      }
+    })
+
   const tail = invno.replace(/\W/g, '').toUpperCase()
   // Mirrors receipts.confirm: the invno starts with the transfer date (or the next day) and ends in the bank's 6 digits.
   const days = (at: string) => [0, 1].map((d) => new Date(Date.parse(`${at.slice(0, 10)}T00:00Z`) + d * 864e5).toISOString().slice(0, 10).replace(/-/g, ''))
@@ -140,7 +154,9 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
         (tail && c.reference.length === 6 && tail.endsWith(c.reference) && !!c.receipt.paid_at && days(c.receipt.paid_at).includes(tail.slice(0, 8)))),
   )
   const fromBank = current?.claims.some((c) => c.reference?.length === 6)
-  const doubtful = !matching || matching.checks.some((c) => c.result !== 'pass')
+  const history = current?.history_read?.reference === reference.replace(/\s/g, '') ? current.history_read : null
+  const historyDoubt = !!history?.checks.some((c) => c.result !== 'pass')
+  const doubtful = !matching || matching.checks.some((c) => c.result !== 'pass') || historyDoubt
 
   return (
     <div className={current?.status === 'seller_confirmed' ? undefined : 'claim'}>
@@ -214,6 +230,19 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
                   <small>Passing checks do not prove payment; a good fake passes them all. Open your GCash app and find the payment in your transaction history.</small>
                 </p>
                 <label>
+                  Faster: upload a screenshot of this payment in your GCash history
+                  <input type="file" accept="image/*" disabled={!!busy} onChange={(e) => (readHistory(e.target.files?.[0]), (e.target.value = ''))} />
+                </label>
+                {history && (
+                  <ul>
+                    {history.checks.map((k) => (
+                      <li key={k.check}>
+                        <span className={`result ${k.result}`}>{RESULT[k.result]}</span>: {k.detail}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <label>
                   Reference number in your GCash history
                   <input inputMode="numeric" maxLength={40} value={reference} onChange={(e) => setReference(e.target.value)} />
                 </label>
@@ -225,7 +254,11 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
                 )}
                 {reference && doubtful && (
                   <label>
-                    {matching ? 'Some checks did not pass. Why are you confirming?' : 'No checked screenshot shows this reference. Why are you confirming?'}
+                    {historyDoubt
+                      ? 'Your GCash history screenshot did not pass every check. Why are you confirming?'
+                      : matching
+                        ? 'Some checks did not pass. Why are you confirming?'
+                        : 'No checked screenshot shows this reference. Why are you confirming?'}
                     <input maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} />
                   </label>
                 )}

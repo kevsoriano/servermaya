@@ -532,6 +532,21 @@ def test_gcash_manual_payment_rules():
         with pytest.raises(rules.Refused):
             gc.confirm(bank, "1046160730748", "me", "", now, False, other)
 
+    # The seller's own GCash history screenshot fills in the reference; a failed check on it needs a reason too.
+    entry = gc.HistoryEntry(readable=True, direction="received", amount_php=1250.37, reference="1012 345 678901",
+                            paid_at=f"{now.astimezone(gc.PHT):%Y-%m-%dT%H:%M}", invno=None)
+    assert {c["result"] for c in gc.check_history(entry, 125037, now)} == {"pass"}
+    checks = lambda **k: {c["check"]: c["result"] for c in gc.check_history(entry.model_copy(update=k), 125037, now)}
+    assert checks(direction="sent")["direction"] == "fail"
+    assert checks(amount_php=1250.0)["amount"] == "fail"
+    assert checks(paid_at="2026-01-01T09:00")["time"] == "fail"  # came in before payment was asked for
+    assert checks(reference="757427")["reference"] == "fail"  # history always shows GCash's own 13 digits
+    read = lambda **k: {"image": {"path": "p"}, "reference": "1012345678901", "checks": gc.check_history(entry.model_copy(update=k), 125037, now)}
+    with pytest.raises(rules.Refused):
+        gc.confirm(order | gc.add_history(order, read(direction="sent")), "1012345678901", "me", "", now, False)
+    with_history = order | gc.add_history(order, read())
+    assert gc.confirm(with_history, "1012345678901", "me", "", now, False)["manual_payment"]["confirmed"]["history_image"] == {"path": "p"}
+
     order |= gc.confirm(order, "1012 3456 78901", "me", "", now, False)
     c = order["manual_payment"]["confirmed"]
     assert order["manual_payment"]["status"] == "seller_confirmed" and (c["reference"], c["claim_id"], c["reason"]) == ("1012345678901", "a", None)
