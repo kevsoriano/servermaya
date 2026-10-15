@@ -3,6 +3,7 @@ import { load, peso, STATUS } from './firebase'
 import Reply from './Reply'
 import Signals from './Signals'
 import Packing, { type PackingState } from './Packing'
+import GcashPayment, { type ManualPayment } from './GcashPayment'
 
 type Sourced = { value: string | null; sources: string[] }
 type Item = { name: string; variant: string | null; quantity: number; unit_price: number | null; sources: string[] }
@@ -27,6 +28,7 @@ export type Order = {
     problem?: string
   } | null
   payment_review?: { payment_id: string; paid_amount: number; reason: string }[]
+  manual_payment?: ManualPayment | null
   packing: PackingState | null
   packing_blocked: string | null
   messages: { id: string; text: string; from_page: boolean }[]
@@ -314,6 +316,7 @@ export default function OrderView({ order, onChange }: { order: Order; onChange:
               )}
             </div>
           )}
+          <GcashPayment order={order} onChange={onChange} write={setMessage} />
           <Packing order={order} onChange={onChange} />
           {link && (
             <p>

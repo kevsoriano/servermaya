@@ -84,6 +84,11 @@ export default function Packing({ order, onChange }: { order: Order; onChange: (
   return (
     <section className="packing">
       <h3>Packing{done && ' · packed'}</h3>
+      {order.manual_payment?.status === 'seller_confirmed' && order.manual_payment.version === order.version && order.payment?.status !== 'verified' && (
+        <p>
+          <small>Paid by direct GCash, confirmed by {order.manual_payment.confirmed?.by} in their GCash history. Not verified by PayMongo.</small>
+        </p>
+      )}
       {done && (
         <p role="status">
           Marked packed by {packing.completed!.by} on {new Date(packing.completed!.at).toLocaleString()}.

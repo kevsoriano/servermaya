@@ -14,6 +14,9 @@ export const auth = getAuth(app)
 export const peso = (centavos: number | null) =>
   centavos === null ? 'not stated' : (centavos / 100).toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })
 
+/** 639171231234 -> 0917 123 1234 */
+export const localMobile = (m: string) => `0${m.slice(2, 5)} ${m.slice(5, 8)} ${m.slice(8)}`
+
 async function json<T>(r: Response): Promise<T> {
   if (!r.ok) throw new Error((await r.json().catch(() => null))?.detail ?? `Backend returned ${r.status}`)
   return r.json()

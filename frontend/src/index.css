@@ -256,14 +256,17 @@ button[aria-current='true'] {
   font-weight: 600;
 }
 
-.result.matched {
+.result.matched,
+.result.pass {
   color: green;
 }
 
-.result.conflict {
+.result.conflict,
+.result.fail {
   color: #c0392b;
 }
 
-.result.insufficient_visibility {
+.result.insufficient_visibility,
+.result.unreadable {
   color: #b9770e;
 }

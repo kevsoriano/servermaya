@@ -11,6 +11,7 @@ import requests
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from google import genai
+from google.api_core.exceptions import AlreadyExists, PreconditionFailed
 from google.cloud import firestore, storage
 from google.genai import types
 from google.auth.transport import requests as google_requests
@@ -21,6 +22,7 @@ import extraction
 import signals as risk
 import orders as rules
 import packing as pack
+import receipts as gcash
 
 PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "servermaya-ai-builder-cup")
 # Comma-separated. Empty means nobody gets in.
@@ -134,10 +136,14 @@ def mark_seen(conversation_id: str, user: dict = Depends(current_user)):
 
 ORDER_ACTIONS = {"draft": "Send the draft order", "awaiting_confirmation": "Waiting for the customer to confirm"}
 PAYMENT_ACTIONS = {None: "Request payment", "pending": "Waiting for payment", "mismatched": "Review a payment"}
+GCASH_ACTIONS = {"requested": "Waiting for GCash payment", "claimed": "Review a GCash receipt", "seller_confirmed": None}
 
 
 def order_action(order: dict) -> str | None:
     if order["status"] == "confirmed":
+        manual = order.get("manual_payment") or {}
+        if manual and manual["version"] == order.get("version") and (order.get("payment") or {}).get("status") != "verified":
+            return GCASH_ACTIONS[manual["status"]]
         return PAYMENT_ACTIONS.get((order.get("payment") or {}).get("status"))
     return ORDER_ACTIONS.get(order["status"])
 
@@ -438,6 +444,7 @@ def customer_view(order: dict) -> dict:
         **{f: d[f]["value"] for f in rules.FIELDS},
         "payment": (order.get("payment") or {}).get("status"),
         "test_mode": (order.get("payment") or {}).get("livemode") is False,
+        "gcash_confirmed": pack.paid_by(order) == "gcash_seller_confirmed",
     }
 
 
@@ -693,3 +700,138 @@ def confirm_packing_line(order_id: str, line: int, body: Inspection, user: dict 
 def complete_packing(order_id: str, user: dict = Depends(current_user)):
     now = datetime.now(timezone.utc)
     return change(orders().document(order_id), lambda o: pack.complete(o, user["email"], now))
+
+
+# Direct GCash. Screenshots are claims: code checks them, and only the seller, looking at their own GCash history, confirms.
+def store_doc():
+    return clients()[1].collection("stores").document(STORE)
+
+
+@app.get("/api/settings/gcash")
+def get_gcash(user: dict = Depends(current_user)):
+    return (store_doc().get().to_dict() or {}).get("gcash")
+
+
+@app.put("/api/settings/gcash")
+def put_gcash(body: gcash.Settings, user: dict = Depends(current_user)):
+    try:
+        found = gcash.settings(body)
+    except rules.Refused as e:
+        raise HTTPException(422, str(e))
+    saved = {**found, "updated_by": user["email"], "updated_at": datetime.now(timezone.utc)}
+    store_doc().set({"gcash": saved}, merge=True)
+    return saved
+
+
+@app.post("/api/orders/{order_id}/gcash/request")
+def request_gcash(order_id: str, user: dict = Depends(current_user)):
+    pay_to = get_gcash(user)
+    if not pay_to:
+        raise HTTPException(409, "Add your GCash name and number in Settings first")
+    now = datetime.now(timezone.utc)
+    masked_name = (pay_to.get("qr") or {}).get("masked_name")
+    snapshot = {"name": pay_to["name"], "mobile": pay_to["mobile"], "masked_name": masked_name}
+    return change(orders().document(order_id), lambda o: gcash.request(o, snapshot, user["email"], now))
+
+
+def first_seen(collection: str, key: str, order_id: str, **extra) -> dict:
+    """Index a reference number, image hash or receipt details across orders. Returns whichever record got there first."""
+    doc = store_doc().collection(collection).document(key)
+    record = {"order_id": order_id, **extra}
+    try:
+        doc.create({**record, "at": firestore.SERVER_TIMESTAMP})
+        return record
+    except AlreadyExists:
+        return doc.get().to_dict()
+
+
+MAX_RECEIPTS_PER_READ = 5
+
+
+def read_receipt(order_id: str, manual: dict, message: dict, attachment: dict, now: datetime) -> dict:
+    """Copy one screenshot into our storage as evidence, have Gemini transcribe it, and run the checks."""
+    try:
+        r = requests.get(attachment["url"], timeout=20)
+        r.raise_for_status()
+    except requests.RequestException:
+        raise HTTPException(502, "Could not download a screenshot from Messenger. Try again.")
+    data, content_type = r.content, r.headers.get("content-type", "").split(";")[0].strip().lower()
+    if content_type not in pack.IMAGE_TYPES or len(data) > pack.MAX_PHOTO_BYTES:
+        raise HTTPException(415, "A screenshot is not a supported image")
+    sha = hashlib.sha256(data).hexdigest()
+    path = f"stores/{STORE}/orders/{order_id}/gcash/{sha}"
+    try:
+        bucket().blob(path).upload_from_string(data, content_type=content_type, if_generation_match=0)
+    except PreconditionFailed:
+        pass  # the same file is already stored
+    try:
+        response = clients()[0].models.generate_content(
+            model=GEMINI_MODEL,
+            contents=["Screenshot:", types.Part.from_bytes(data=data, mime_type=content_type)],
+            config={"system_instruction": gcash.SYSTEM, "response_mime_type": "application/json", "response_schema": gcash.Receipt, "temperature": 0},
+        )
+        receipt = gcash.Receipt.model_validate_json(response.text)
+    except Exception:
+        raise HTTPException(502, "Could not read a screenshot. Try again.")
+    ref = gcash.reference(receipt.reference)
+    # Copies are caught three ways: the same file, the same reference, or the same amount and minute under another reference (an edited copy).
+    reused = first_seen("gcashImages", sha, order_id)["order_id"] != order_id
+    used_elsewhere = {ref} if ref and first_seen("gcashReferences", ref, order_id)["order_id"] != order_id else set()
+    key = gcash.details_key(receipt)
+    twin = first_seen("gcashReceiptDetails", key, order_id, reference=ref, message_id=message["id"]) if key else None
+    twin_reference = (twin["reference"] or "unreadable") if twin and twin["message_id"] != message["id"] and twin["reference"] != ref else None
+    received_at = datetime.fromisoformat(message["created_time"])
+    checks = gcash.check_receipt(receipt, manual["amount"], manual["requested_at"], received_at, manual["pay_to"], used_elsewhere, reused, twin_reference)
+    return {
+        "id": sha[:16],
+        "message_id": message["id"],
+        "received_at": received_at,
+        "image": {"path": path, "sha256": sha, "content_type": content_type, "size": len(data)},
+        "receipt": receipt.model_dump(),
+        "reference": ref or None,
+        "checks": checks,
+        "read_at": now,
+        "model": GEMINI_MODEL,
+    }
+
+
+@app.post("/api/orders/{order_id}/gcash/read")
+def read_gcash_receipts(order_id: str, user: dict = Depends(current_user)):
+    """Check every customer image sent since GCash payment was requested that has not been checked yet."""
+    ref, order = loaded(order_id)
+    try:
+        manual = gcash.current(order)
+    except rules.Refused as e:
+        raise HTTPException(409, str(e))
+    if order.get("source", {}).get("type") != "messenger":
+        raise HTTPException(409, "This order did not come from Messenger")
+    known = {c["message_id"] for c in manual["claims"]}
+    images = [
+        (m, a)
+        for m in fetch_messages(order["source"]["conversation_id"])
+        if not m["from_page"] and m["id"] not in known and datetime.fromisoformat(m["created_time"]) >= manual["requested_at"] - gcash.SLACK
+        for a in m["attachments"][:1]
+        if a["kind"] == "image" and a["name"] != "sticker"
+    ][-MAX_RECEIPTS_PER_READ:]
+    if not images:
+        raise HTTPException(409, "No new images from the customer since you asked for GCash payment")
+    now = datetime.now(timezone.utc)
+    claims = [read_receipt(order_id, manual, m, a, now) for m, a in images]
+    return change(ref, lambda o: gcash.add_claims(o, claims))
+
+
+class GcashConfirm(BaseModel):
+    reference: str = Field(min_length=1, max_length=40)
+    reason: str = Field(default="", max_length=500)
+    found_in_history: bool
+
+
+@app.post("/api/orders/{order_id}/gcash/confirm")
+def confirm_gcash(order_id: str, body: GcashConfirm, user: dict = Depends(current_user)):
+    if not body.found_in_history:
+        raise HTTPException(422, "Only confirm a reference you found in your own GCash transaction history")
+    ref = gcash.reference(body.reference)
+    others = orders().where(filter=firestore.FieldFilter("manual_payment.confirmed.reference", "==", ref)).limit(2).stream()
+    elsewhere = any(d.id != order_id for d in others)
+    now = datetime.now(timezone.utc)
+    return change(orders().document(order_id), lambda o: gcash.confirm(o, ref, user["email"], body.reason, now, elsewhere))

@@ -399,3 +399,170 @@ def test_packing_rules():
                                 "address": {"value": None, "sources": []}, "delivery_instructions": {"value": None, "sources": []}}}
     up = rules.edit(full, body)
     assert up["packing"] is None and up["packing_history"][0]["completed"]
+
+
+def test_gcash_receipt_checks():
+    from datetime import datetime
+
+    import receipts as gc
+
+    sent = datetime(2026, 10, 15, 14, 0, tzinfo=gc.PHT)
+    arrived = datetime(2026, 10, 15, 14, 20, tzinfo=gc.PHT)
+    seller = {"name": "Juan Miguel Dela Cruz", "mobile": "0917 123 1234"}
+    good = {"readable": True, "amount_php": 1250.37, "reference": "1012 345 678901", "paid_at": "2026-10-15T14:12",
+            "recipient_name": "JU** MI**** D.", "recipient_mobile": "+63 917 *** 1234"}
+
+    def run(used=frozenset(), **k):
+        return {c["check"]: c["result"] for c in gc.check_receipt(gc.Receipt(**{**good, **k}), 125037, sent, arrived, seller, set(used))}
+
+    assert set(run().values()) == {"pass"}
+    assert run(amount_php=1250.0)["amount"] == "fail"  # the centavos matter
+    assert run(amount_php=None)["amount"] == "unreadable"
+
+    assert run(paid_at="2026-10-14T09:30")["time"] == "fail"  # an old receipt
+    assert run(paid_at="2026-10-15T14:40")["time"] == "fail"  # dated after the screenshot arrived
+    assert run(paid_at="2026-10-15T13:59")["time"] == "pass"  # minute precision: within the slack
+    assert run(paid_at="Oct 15, 2:12 PM")["time"] == "unreadable"
+
+    assert run(used={"1012345678901"})["reference"] == "fail"  # reused on another order
+    assert run(reference="12345")["reference"] == "fail"
+    assert run(reference=None)["reference"] == "unreadable"
+
+    assert run(recipient_name="JU** DE** C.")["recipient_name"] == "pass"  # middle name not shown
+    assert run(recipient_name="MA** SA****")["recipient_name"] == "fail"
+    assert run(recipient_name="DE** JU**")["recipient_name"] == "fail"  # wrong order
+    assert run(recipient_name="*** ***")["recipient_name"] == "fail"  # nothing to compare
+
+    assert run(recipient_mobile="09171231234")["recipient_mobile"] == "pass"
+    assert run(recipient_mobile="+63 917 *** 9999")["recipient_mobile"] == "fail"
+    assert run(recipient_mobile="+63 918 *** 1234")["recipient_mobile"] == "fail"  # same last four, other number
+    assert run(recipient_mobile="+63 917 *** **34")["recipient_mobile"] == "pass"
+    assert run(recipient_mobile="+63 9** *** **34")["recipient_mobile"] == "unreadable"  # too little to compare
+
+    # The format on the seller's real QR card: letters hidden mid-word, last digits hidden with bullets.
+    kevin = {"name": "Kevin Gil Soriano", "mobile": "639272561234", "masked_name": "KE**N G** S."}
+    receipt = gc.Receipt(**{**good, "recipient_name": "KE**N G** S.", "recipient_mobile": "+63  927 256 ••••"})
+    by_check = {c["check"]: c for c in gc.check_receipt(receipt, 125037, sent, arrived, kevin, set())}
+    assert by_check["recipient_name"]["detail"].endswith("exactly how GCash shows the seller's name")
+    assert by_check["recipient_mobile"]["result"] == "pass"
+    assert gc.name_fits("KE**N G** S.", "Kevin Soriano") is False  # the G word is missing
+    assert gc.name_fits("KE**N S.", "Kevin Gil Soriano")  # a middle name may be left out
+    assert gc.name_fits("KE**N G** S.", "Ken Gil Soriano") is False  # ** hides at least one letter
+    assert gc.mobile_fits(gc.mobile("+63 927 256 ••••"), "639172561234") is False
+
+    # Copies: the same file, or the same amount and minute under another reference.
+    check = lambda **k: {c["check"]: c for c in gc.check_receipt(gc.Receipt(**good), 125037, sent, arrived, seller, set(), **k)}["duplicate"]
+    assert check(image_reused=True)["result"] == "fail"
+    assert check(twin_reference="9999999999999")["result"] == "fail"
+    assert gc.details_key(gc.Receipt(**good)) == "125037_20261015T1412"
+    assert gc.details_key(gc.Receipt(**{**good, "paid_at": None})) is None
+
+    assert gc.check_receipt(gc.Receipt(**{**good, "readable": False}), 125037, sent, arrived, seller, set())[0]["result"] == "unreadable"
+
+
+def test_gcash_manual_payment_rules():
+    from datetime import datetime, timezone
+
+    import pytest
+
+    import orders as rules
+    import receipts as gc
+
+    now = datetime.now(timezone.utc)
+    assert gc.settings(gc.Settings(name="  Juan  Dela Cruz ", mobile="0917 123 1234")) == {"name": "Juan Dela Cruz", "mobile": "639171231234", "qr": None}
+    with pytest.raises(rules.Refused):
+        gc.settings(gc.Settings(name="Juan", mobile="1234"))
+
+    pay_to = {"name": "Juan Dela Cruz", "mobile": "639171231234"}
+    order = {"status": "draft", "version": 1, "draft": {"total": 125037}}
+    with pytest.raises(rules.Refused):
+        gc.request(order, pay_to, "me", now)  # not confirmed
+    order["status"] = "confirmed"
+    with pytest.raises(rules.Refused):
+        gc.current(order)  # nothing requested yet
+    order |= gc.request(order, pay_to, "me", now)
+    m = order["manual_payment"]
+    assert (m["status"], m["amount"], m["pay_to"], m["requested_at"]) == ("requested", 125037, pay_to, now)
+    assert gc.request(order, pay_to, "me", datetime.now(timezone.utc)) == {}  # the first request time stands
+    assert main.order_action(order) == "Waiting for GCash payment"
+
+    passing = [gc.check("amount", "pass", ""), gc.check("time", "pass", "")]
+    claim = lambda id, ref, checks=passing: {"id": id, "message_id": f"m_{id}", "reference": ref, "checks": checks}
+    order |= gc.add_claims(order, [claim("a", "1012345678901"), claim("b", "2012345678901", [gc.check("time", "fail", "old")])])
+    assert order["manual_payment"]["status"] == "claimed" and main.order_action(order) == "Review a GCash receipt"
+    assert gc.add_claims(order, [claim("a", "1012345678901")]) == {}  # each message once
+
+    with pytest.raises(rules.Refused):
+        gc.confirm(order, "12345", "me", "", now, False)  # not a GCash reference
+    with pytest.raises(rules.Refused):
+        gc.confirm(order, "1012345678901", "me", "", now, True)  # already confirmed on another order
+    with pytest.raises(rules.Refused, match="time"):
+        gc.confirm(order, "2012345678901", "me", "", now, False)  # a failed check needs a reason
+    with pytest.raises(rules.Refused, match="no screenshot"):
+        gc.confirm(order, "3012345678901", "me", "", now, False)
+    assert gc.confirm(order, "3012345678901", "me", "Customer paid in person at pickup", now, False)["manual_payment"]["confirmed"]["claim_id"] is None
+
+    order |= gc.confirm(order, "1012 3456 78901", "me", "", now, False)
+    c = order["manual_payment"]["confirmed"]
+    assert order["manual_payment"]["status"] == "seller_confirmed" and (c["reference"], c["claim_id"], c["reason"]) == ("1012345678901", "a", None)
+    assert main.order_action(order) is None
+    assert gc.add_claims(order, [claim("c", "4012345678901")]) == {}  # nothing changes after confirming
+    with pytest.raises(rules.Refused):
+        rules.reusable_payment(order)  # no PayMongo request on top of a confirmed GCash payment
+    with pytest.raises(rules.Refused):
+        gc.request(order, pay_to, "me", now)
+
+    # A new version needs a new request; the old one stays on record and no longer counts.
+    order["version"] = 2
+    with pytest.raises(rules.Refused):
+        gc.current(order)
+    assert rules.reusable_payment(order) is None
+    order |= gc.request(order, pay_to, "me", now)
+    assert order["manual_payment"]["version"] == 2 and order["manual_payment_history"][0]["status"] == "seller_confirmed"
+
+    # A PayMongo-verified payment for this version wins.
+    paid = {**order, "payment": {"status": "verified", "version": 2}}
+    with pytest.raises(rules.Refused):
+        gc.request({**paid, "manual_payment": None}, pay_to, "me", now)
+    assert main.order_action(paid) is None
+
+
+def test_gcash_qr_and_settings():
+    import pytest
+
+    import orders as rules
+    import receipts as gc
+
+    # Decoded from a real GCash "Receive money" QR.
+    qr = "00020101021127830012com.p2pqrpay0111GXCHPHM2XXX02089996440303152170200000006560417DWQM4TK3JDNWF205D5204601653036085802PH5912KE**N G** S.6014BARANGGAY 61-A6104123463048CB7"
+    assert gc.crc16(qr[:-4]) == "8CB7"
+    assert gc.parse_qr(qr) == {"masked_name": "KE**N G** S.", "user_id": "DWQM4TK3JDNWF205D", "payload": qr}
+    with pytest.raises(rules.Refused):
+        gc.parse_qr(qr.replace("KE**N", "JO**N"))  # tampered: checksum no longer matches
+    other_bank = qr.replace("GXCHPHM2XXX", "BNORPHMMXXX")[:-4]
+    with pytest.raises(rules.Refused, match="not for a GCash"):
+        gc.parse_qr(other_bank + gc.crc16(other_bank))
+    with pytest.raises(rules.Refused):
+        gc.parse_qr("https://example.com")
+
+    saved = gc.settings(gc.Settings(name="Kevin Gil Soriano", mobile="0927 256 1234", qr=qr))
+    assert saved["qr"]["masked_name"] == "KE**N G** S." and saved["mobile"] == "639272561234"
+    with pytest.raises(rules.Refused, match="KE\\*\\*N"):
+        gc.settings(gc.Settings(name="Juan Dela Cruz", mobile="0927 256 1234", qr=qr))  # typed name does not fit the QR
+    assert gc.settings(gc.Settings(name="Kevin Soriano", mobile="09272561234"))["qr"] is None  # QR is optional
+
+
+def test_packing_accepts_a_seller_confirmed_gcash_payment():
+    import pytest
+
+    import orders as rules
+    import packing as pack
+
+    order = {"status": "confirmed", "version": 2, "draft": {"items": [{"name": "mug", "variant": None, "quantity": 1}]}}
+    with pytest.raises(rules.Refused):
+        pack.require_ready(order)
+    assert pack.paid_by({**order, "manual_payment": {"status": "claimed", "version": 2}}) is None  # a screenshot alone is not enough
+    assert pack.paid_by({**order, "manual_payment": {"status": "seller_confirmed", "version": 1}}) is None  # an older version
+    confirmed = {**order, "manual_payment": {"status": "seller_confirmed", "version": 2}}
+    assert pack.paid_by(confirmed) == "gcash_seller_confirmed" and pack.require_ready(confirmed)["version"] == 2
+    assert pack.paid_by({**confirmed, "payment": {"status": "verified", "version": 2}}) == "paymongo"

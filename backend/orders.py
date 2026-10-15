@@ -124,6 +124,9 @@ def reusable_payment(order: dict) -> dict | None:
         raise Refused("This order is already paid")
     if payment and payment["status"] == "mismatched":
         raise Refused("A payment for this order needs the seller's review")
+    manual = order.get("manual_payment") or {}
+    if manual.get("status") == "seller_confirmed" and manual.get("version") == order["version"]:
+        raise Refused("The seller already confirmed a direct GCash payment for this order")
     return payment if payment and payment["status"] == "pending" else None
 
 

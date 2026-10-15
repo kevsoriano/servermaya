@@ -52,13 +52,22 @@ class Report(BaseModel):
     suggestions: list[str] = Field(description="Extra photos that would help")
 
 
+def paid_by(order: dict) -> str | None:
+    """How this version of the order was paid: PayMongo verified it, or the seller confirmed a direct GCash payment."""
+    payment, manual = order.get("payment") or {}, order.get("manual_payment") or {}
+    if payment.get("status") == "verified" and payment.get("version") == order.get("version"):
+        return "paymongo"
+    if manual.get("status") == "seller_confirmed" and manual.get("version") == order.get("version"):
+        return "gcash_seller_confirmed"
+    return None
+
+
 def require_ready(order: dict) -> dict:
-    """Packing starts only for a confirmed order with a PayMongo-verified payment for this version."""
-    payment = order.get("payment") or {}
+    """Packing starts only for a confirmed order paid for this version, by PayMongo or by a seller-confirmed GCash payment."""
     if order["status"] != "confirmed":
         raise Refused("Packing starts after the customer confirms the order")
-    if payment.get("status") != "verified" or payment.get("version") != order["version"]:
-        raise Refused("Packing starts after PayMongo verifies payment for this version of the order")
+    if not paid_by(order):
+        raise Refused("Packing starts after PayMongo verifies payment, or you confirm a GCash payment, for this version of the order")
     packing = order.get("packing")
     if packing and packing["version"] == order["version"]:
         return packing

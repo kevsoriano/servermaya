@@ -2,6 +2,7 @@ import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type 
 import { useEffect, useState } from 'react'
 import Conversations from './Conversations'
 import Orders from './Orders'
+import GcashSettings from './GcashSettings'
 import { api, auth } from './firebase'
 
 type Me = { uid: string; email: string; name: string | null }
@@ -11,7 +12,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>()
   const [me, setMe] = useState<Me>()
   const [error, setError] = useState('')
-  const [tab, setTab] = useState<'conversations' | 'orders'>('conversations')
+  const [tab, setTab] = useState<'conversations' | 'orders' | 'settings'>('conversations')
 
   useEffect(
     () =>
@@ -49,10 +50,13 @@ export default function App() {
           </button>{' '}
           <button onClick={() => setTab('orders')} aria-current={tab === 'orders'}>
             Orders
+          </button>{' '}
+          <button onClick={() => setTab('settings')} aria-current={tab === 'settings'}>
+            Settings
           </button>
         </nav>
       )}
-      {me && (tab === 'conversations' ? <Conversations /> : <Orders />)}
+      {me && (tab === 'conversations' ? <Conversations /> : tab === 'orders' ? <Orders /> : <GcashSettings />)}
       {user && <button onClick={() => signOut(auth)}>Sign out</button>}
     </main>
   )

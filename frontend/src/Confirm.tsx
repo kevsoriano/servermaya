@@ -11,6 +11,7 @@ type Summary = {
   delivery_instructions: string | null
   payment: 'pending' | 'verified' | 'mismatched' | 'expired' | null
   test_mode: boolean
+  gcash_confirmed: boolean
 }
 
 export default function Confirm({ token }: { token: string }) {
@@ -73,9 +74,9 @@ export default function Confirm({ token }: { token: string }) {
             {busy ? 'Confirming…' : 'Yes, this is correct'}
           </button>
         </>
-      ) : order.payment === 'verified' ? (
+      ) : order.payment === 'verified' || order.gcash_confirmed ? (
         <p role="status">
-          <strong>Payment received. Thank you!</strong> The seller will prepare your order.
+          <strong>Payment received{order.payment !== 'verified' && ' by GCash'}. Thank you!</strong> The seller will prepare your order.
         </p>
       ) : order.payment === 'mismatched' ? (
         <p role="status">We received a payment that does not match this order. The seller will contact you.</p>
