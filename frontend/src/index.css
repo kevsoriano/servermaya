@@ -183,3 +183,67 @@ button[aria-current='true'] {
   font: inherit;
   padding: 0.25rem;
 }
+
+.packing {
+  margin: 1rem 0;
+}
+
+.packing table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  vertical-align: top;
+}
+
+.packing td,
+.packing th {
+  padding: 0.25rem 0.5rem 0.25rem 0;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  vertical-align: top;
+}
+
+.packing .photos {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
+  gap: 0.5rem;
+}
+
+.packing figure {
+  margin: 0;
+}
+
+.packing img,
+.packing .placeholder {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 0.25rem;
+}
+
+.packing .placeholder {
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.packing .upload {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0.5rem 0;
+}
+
+.result {
+  font-weight: 600;
+}
+
+.result.matched {
+  color: green;
+}
+
+.result.conflict {
+  color: #c0392b;
+}
+
+.result.insufficient_visibility {
+  color: #b9770e;
+}

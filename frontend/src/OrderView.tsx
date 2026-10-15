@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { load, peso, STATUS } from './firebase'
 import Reply from './Reply'
 import Signals from './Signals'
+import Packing, { type PackingState } from './Packing'
 
 type Sourced = { value: string | null; sources: string[] }
 type Item = { name: string; variant: string | null; quantity: number; unit_price: number | null; sources: string[] }
@@ -26,6 +27,8 @@ export type Order = {
     problem?: string
   } | null
   payment_review?: { payment_id: string; paid_amount: number; reason: string }[]
+  packing: PackingState | null
+  packing_blocked: string | null
   messages: { id: string; text: string; from_page: boolean }[]
   draft: {
     items: Item[]
@@ -311,6 +314,7 @@ export default function OrderView({ order, onChange }: { order: Order; onChange:
               )}
             </div>
           )}
+          <Packing order={order} onChange={onChange} />
           {link && (
             <p>
               {order.status === 'confirmed' ? 'Customer link (order summary and payment):' : 'Send this link to the customer:'}

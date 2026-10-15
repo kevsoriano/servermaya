@@ -300,3 +300,68 @@ def test_signals_keep_only_cited_customer_messages_and_resolve_on_payment():
     assert [(risk.is_open(s), bool(s["reviewed"]), s["resolved"]) for s in reviewed] == [(True, False, None), (False, True, None)]
     moved = [{**got[1], "sources": ["c1"]}]  # re-analysis now rests on a different message
     assert risk.is_open(risk.resolve(moved, [], {"pressure:c2": {"by": "s", "note": "x"}})[0])
+
+
+def test_packing_rules():
+    from datetime import datetime, timezone
+
+    import pytest
+
+    import orders as rules
+    import packing as pack
+
+    now = datetime.now(timezone.utc)
+    items = [{"name": "mug", "variant": "blue", "quantity": 2, "unit_price": 18000, "sources": []},
+             {"name": "tumbler", "variant": None, "quantity": 1, "unit_price": 35000, "sources": []}]
+    order = {"status": "confirmed", "version": 1, "draft": {"items": items}, "payment": {"status": "pending", "version": 1}}
+    with pytest.raises(rules.Refused):
+        pack.require_ready(order)  # not paid yet
+    order["payment"] = {"status": "verified", "version": 1}
+    with pytest.raises(rules.Refused):
+        pack.complete(order, "me", now)  # no photos
+    order |= pack.add_photo(order, {"id": "p1"})
+    order |= pack.add_photo(order, {"id": "p2"})
+
+    seen = lambda line, **k: pack.Seen(**{"line": line, "visible": True, "counts": [], "damage": None, "photos": [1], "note": "", **k})
+    c = lambda *pairs: [pack.Count(variant=v, quantity=q) for v, q in pairs]
+    # The PRD case: two blue mugs expected, one blue and one red in the photo.
+    report = pack.Report(lines=[seen(1, counts=c(("blue", 1), ("red", 1))), seen(2, counts=c((None, 1)), photos=[7])], suggestions=["Lay the mugs side by side"])
+    order |= pack.apply_check(order, report, "m", now)
+    assert [r["auto_result"] for r in order["packing"]["rows"]] == ["conflict", "insufficient_visibility"]
+    assert order["packing"]["rows"][1]["photos"] == []  # citation of a photo that does not exist is dropped
+
+    blue2 = {"variant": "blue", "quantity": 2}
+    assert pack.result(blue2, seen(1, counts=c(("Blue", 2)))) == "matched"
+    assert pack.result(blue2, seen(1, counts=c(("light blue", 1), ("blue", 1)))) == "matched"
+    assert pack.result(blue2, seen(1, counts=c(("red", 2)))) == "conflict"
+    assert pack.result(blue2, seen(1, counts=c(("blue", 1)))) == "conflict"  # missing one
+    assert pack.result(blue2, seen(1, counts=c(("blue", 3)))) == "conflict"  # one too many
+    assert pack.result(blue2, seen(1, counts=c(("blue", 2)), damage="chipped rim")) == "conflict"
+    assert pack.result(blue2, seen(1, counts=c((None, 2)))) == "insufficient_visibility"
+    assert pack.result(blue2, seen(1, counts=[])) == "insufficient_visibility"  # could not count
+    assert pack.result(blue2, seen(1, counts=c(("blue", 2)), photos=[])) == "insufficient_visibility"  # no photo cited
+    assert pack.result({"variant": None, "quantity": 1}, seen(2, visible=False, counts=c((None, 1)))) == "insufficient_visibility"
+    assert pack.result({"variant": None, "quantity": 1}, seen(2, counts=c((None, 1)))) == "matched"
+    assert pack.result(blue2, None) == "insufficient_visibility"
+
+    with pytest.raises(rules.Refused):
+        pack.complete(order, "me", now)  # mug conflict unresolved
+    order |= pack.confirm_row(order, 1, "me", "Swapped the red mug for a blue one", now)
+    with pytest.raises(rules.Refused):
+        pack.complete(order, "me", now)  # tumbler still unresolved
+    with pytest.raises(rules.Refused):
+        pack.confirm_row(order, 2, "me", "  ", now)
+    order |= pack.confirm_row(order, 2, "me", "Checked tumbler by hand, sealed box", now)
+    row = order["packing"]["rows"][1]
+    assert pack.status(row) == "seller_confirmed" and row["auto_result"] == "insufficient_visibility"  # both kept
+    order |= pack.complete(order, "me", now)
+    assert order["packing"]["completed"]["by"] == "me"
+    with pytest.raises(rules.Refused):
+        pack.add_photo(order, {"id": "p3"})
+
+    # Changing the order voids packing but keeps it on record.
+    body = rules.Edit(items=[{"name": "mug", "variant": "blue", "quantity": 3, "unit_price": 18000}])
+    full = {**order, "draft": {**order["draft"], "total": 36000, "recipient_name": {"value": None, "sources": []}, "phone": {"value": None, "sources": []},
+                                "address": {"value": None, "sources": []}, "delivery_instructions": {"value": None, "sources": []}}}
+    up = rules.edit(full, body)
+    assert up["packing"] is None and up["packing_history"][0]["completed"]

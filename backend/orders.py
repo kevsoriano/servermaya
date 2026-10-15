@@ -64,6 +64,10 @@ def edit(order: dict, body: Edit) -> dict:
     if draft == old:
         return {}
     updates = {"draft": draft, "version": order["version"] + 1, "status": "draft", "confirm_token": None}
+    if order.get("packing"):
+        # Packing checks were for the old version. Keep them on record and start again.
+        updates["packing"] = None
+        updates["packing_history"] = order.get("packing_history", []) + [order["packing"]]
     if (order.get("payment") or {}).get("status") == "pending":
         updates["payment"] = None  # the unpaid request was for the old version; the caller expires it at PayMongo
     return updates

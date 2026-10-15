@@ -8,10 +8,11 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
 import requests
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from google import genai
-from google.cloud import firestore
+from google.cloud import firestore, storage
+from google.genai import types
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 from pydantic import BaseModel, Field
@@ -19,6 +20,7 @@ from pydantic import BaseModel, Field
 import extraction
 import signals as risk
 import orders as rules
+import packing as pack
 
 PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "servermaya-ai-builder-cup")
 # Comma-separated. Empty means nobody gets in.
@@ -32,6 +34,7 @@ STORE = "main"
 PAYMONGO_KEY = os.environ.get("PAYMONGO_SECRET_KEY", "")
 PAYMONGO_WEBHOOK_SECRET = os.environ.get("PAYMONGO_WEBHOOK_SECRET", "")
 LALAMOVE_KEY = os.environ.get("LALAMOVE_API_KEY", "")
+EVIDENCE_BUCKET = os.environ.get("EVIDENCE_BUCKET", "servermaya-ai-builder-cup-evidence")
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "https://servermaya-ai-builder-cup.web.app")
 
 app = FastAPI()
@@ -283,7 +286,11 @@ def version_doc(draft: dict, origin: str, by: str) -> dict:
 def present(snap) -> dict:
     # Defaults cover drafts saved before confirmations existed.
     order = {"confirmations": [], "confirm_token": None, **snap.to_dict()}
-    return {**order, "id": snap.id, "missing": rules.missing(order["draft"])}
+    try:
+        packing, blocked = pack.require_ready(order), None  # the checklist to show, even before the first photo
+    except rules.Refused as e:
+        packing, blocked = order.get("packing"), str(e)
+    return {**order, "id": snap.id, "missing": rules.missing(order["draft"]), "packing": packing, "packing_blocked": blocked}
 
 
 def change(ref, rule, by: str = "") -> dict:
@@ -526,3 +533,104 @@ async def lalamove_webhook(request: Request):
         except Exception:
             pass  # duplicate delivery of an event we already have
     return {"received": True}
+
+
+# Packing. Photos are evidence: stored once, never overwritten, with a SHA-256 of the original bytes.
+@lru_cache
+def bucket():
+    return storage.Client(project=PROJECT_ID).bucket(EVIDENCE_BUCKET)
+
+
+def loaded(order_id: str) -> tuple:
+    snap = orders().document(order_id).get()
+    if not snap.exists:
+        raise HTTPException(404, "Order not found")
+    return snap.reference, snap.to_dict()
+
+
+def ready(order: dict) -> dict:
+    try:
+        return pack.require_ready(order)
+    except rules.Refused as e:
+        raise HTTPException(409, str(e))
+
+
+@app.post("/api/orders/{order_id}/packing/photos")
+async def upload_packing_photo(order_id: str, request: Request, user: dict = Depends(current_user)):
+    """The body is the image itself. X-Claimed-Captured-At is what the device says; it proves nothing and is stored apart from upload time."""
+    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if content_type not in pack.IMAGE_TYPES:
+        raise HTTPException(415, "Upload a JPEG, PNG, WebP or HEIC photo")
+    data = await request.body()
+    if not data or len(data) > pack.MAX_PHOTO_BYTES:
+        raise HTTPException(413, "Photos must be under 10 MB")
+    ref, order = await run_in_threadpool(loaded, order_id)
+    ready(order)
+    photo_id = secrets.token_hex(8)
+    path = f"stores/{STORE}/orders/{order_id}/packing/{photo_id}"
+    # if_generation_match=0: refuse to overwrite an existing object
+    await run_in_threadpool(lambda: bucket().blob(path).upload_from_string(data, content_type=content_type, if_generation_match=0))
+    now = datetime.now(timezone.utc)
+    photo = {
+        "id": photo_id,
+        "path": path,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "content_type": content_type,
+        "size": len(data),
+        "uploaded_at": now,
+        "uploaded_by": user["email"],
+        "claimed_captured_at": request.headers.get("x-claimed-captured-at", "")[:40] or None,
+    }
+    return await run_in_threadpool(change, ref, lambda o: pack.add_photo(o, photo))
+
+
+@app.get("/api/orders/{order_id}/packing/photos/{photo_id}")
+def packing_photo(order_id: str, photo_id: str, user: dict = Depends(current_user)):
+    _, order = loaded(order_id)
+    sessions = [order.get("packing") or {}] + order.get("packing_history", [])
+    photo = next((p for s in sessions for p in s.get("photos", []) if p["id"] == photo_id), None)
+    if not photo:
+        raise HTTPException(404, "Photo not found")
+    return Response(bucket().blob(photo["path"]).download_as_bytes(), media_type=photo["content_type"], headers={"Cache-Control": "private, max-age=3600"})
+
+
+@app.post("/api/orders/{order_id}/packing/check")
+def check_packing(order_id: str, user: dict = Depends(current_user)):
+    ref, order = loaded(order_id)
+    packing = ready(order)
+    if not packing["photos"]:
+        raise HTTPException(409, "Add at least one packing photo")
+    checklist = "\n".join(
+        f"[{r['line']}] {r['expected']['quantity']} x {r['expected']['name']}" + (f" ({r['expected']['variant']})" if r["expected"]["variant"] else "")
+        for r in packing["rows"]
+    )
+    contents = [f"<order>\n{checklist}\n</order>"]
+    for n, p in enumerate(packing["photos"], 1):
+        contents += [f"Photo {n}:", types.Part.from_bytes(data=bucket().blob(p["path"]).download_as_bytes(), mime_type=p["content_type"])]
+    try:
+        response = clients()[0].models.generate_content(
+            model=GEMINI_MODEL,
+            contents=contents,
+            config={"system_instruction": pack.SYSTEM, "response_mime_type": "application/json", "response_schema": pack.Report, "temperature": 0},
+        )
+        report = pack.Report.model_validate_json(response.text)
+    except Exception:
+        raise HTTPException(502, "Could not check the photos. Try again.")
+    now = datetime.now(timezone.utc)
+    return change(ref, lambda o: pack.apply_check(o, report, GEMINI_MODEL, now))
+
+
+class Inspection(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+
+@app.post("/api/orders/{order_id}/packing/lines/{line}/confirm")
+def confirm_packing_line(order_id: str, line: int, body: Inspection, user: dict = Depends(current_user)):
+    now = datetime.now(timezone.utc)
+    return change(orders().document(order_id), lambda o: pack.confirm_row(o, line, user["email"], body.reason, now))
+
+
+@app.post("/api/orders/{order_id}/packing/complete")
+def complete_packing(order_id: str, user: dict = Depends(current_user)):
+    now = datetime.now(timezone.utc)
+    return change(orders().document(order_id), lambda o: pack.complete(o, user["email"], now))
