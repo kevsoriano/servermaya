@@ -48,7 +48,10 @@ export default function Signals({ conversationId, messages, latest }: Props) {
 
   const isOpen = (s: Signal) => !s.resolved && !s.reviewed
   const open = signals?.filter(isOpen) ?? []
-  const done = signals?.filter((s) => !isOpen(s)) ?? []
+  // Every kind is listed, so the seller sees what was looked for. A kind with nothing found is "not seen", never a pass:
+  // the AI missing something is not the same as code checking it.
+  const found = signals && [...open, ...signals.filter((s) => !isOpen(s))]
+  const unseen = Object.keys(LABEL).filter((kind) => !signals?.some((s) => s.kind === kind))
 
   const review = (body: { key: string; note?: string; reopen?: boolean }) => {
     setBusy(true)
@@ -70,51 +73,81 @@ export default function Signals({ conversationId, messages, latest }: Props) {
 
   return (
     <section className="signals" aria-label="Checks before shipping">
-      <h3>Checks before shipping{signals && ` (${open.length} open)`}</h3>
+      <h3>Checks before shipping{signals && ` (${open.length} to verify)`}</h3>
       {error && <p role="alert">{error}</p>}
       {!signals && !error && <p>Reading the conversation…</p>}
-      {signals?.length === 0 && <p>Nothing in this conversation needs checking.</p>}
-      {[...open, ...done].map((s) => (
-        <div key={s.key} className={isOpen(s) ? 'signal' : 'signal done'}>
-          <strong>{LABEL[s.kind] ?? s.kind}</strong>
-          <p>{s.summary}</p>
-          {s.sources.map((id) => quote(id) && <blockquote key={id}>{quote(id)}</blockquote>)}
-          {s.resolved ? (
-            <p>Settled: {s.resolved}.</p>
-          ) : s.reviewed ? (
-            <p>
-              Reviewed by {s.reviewed.by} on {new Date(s.reviewed.at).toLocaleString()}: {s.reviewed.note}{' '}
-              <button disabled={busy} onClick={() => review({ key: s.key, reopen: true })}>
-                Reopen
-              </button>
-            </p>
-          ) : (
-            <p>Check: {s.check}</p>
-          )}
-          {isOpen(s) &&
-            (reviewing === s.key ? (
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault()
-                  review({ key: s.key, note })
-                }}
+      {found && (
+        <ul className="checks">
+          {found.map((s) => (
+            <li key={s.key} className={isOpen(s) ? 'to-verify' : undefined}>
+              <span
+                className={`result ${isOpen(s) ? 'open' : 'pass'}`}
+                aria-label={isOpen(s) ? 'To verify' : s.resolved ? 'Settled' : 'Reviewed'}
+                title={isOpen(s) ? 'To verify' : s.resolved ? 'Settled' : 'Reviewed'}
               >
-                <label>
-                  Why is this fine?
-                  <input required autoFocus value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />
-                </label>
-                <button disabled={busy || !note.trim()}>Mark reviewed</button>{' '}
-                <button type="button" onClick={() => setReviewing(undefined)}>
-                  Cancel
-                </button>
-              </form>
-            ) : (
-              <button onClick={() => (setReviewing(s.key), setNote(''))}>Mark reviewed…</button>
-            ))}
-        </div>
-      ))}
+                {isOpen(s) ? '!' : '✓'}
+              </span>
+              <div>
+                <strong>{LABEL[s.kind] ?? s.kind}</strong>
+                {s.resolved ? (
+                  <p>Settled: {s.resolved}.</p>
+                ) : s.reviewed ? (
+                  <p>
+                    Reviewed by {s.reviewed.by}: {s.reviewed.note}{' '}
+                    <button disabled={busy} onClick={() => review({ key: s.key, reopen: true })}>
+                      Reopen
+                    </button>
+                  </p>
+                ) : (
+                  s.sources.slice(0, 1).map((id) => quote(id) && <blockquote key={id}>{quote(id)}</blockquote>)
+                )}
+                <details>
+                  <summary>{isOpen(s) ? 'What to check' : 'Details'}</summary>
+                  <p>{s.summary}</p>
+                  {s.sources.slice(isOpen(s) ? 1 : 0).map((id) => quote(id) && <blockquote key={id}>{quote(id)}</blockquote>)}
+                  <p>{s.check}</p>
+                </details>
+                {isOpen(s) &&
+                  (reviewing === s.key ? (
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault()
+                        review({ key: s.key, note })
+                      }}
+                    >
+                      <label>
+                        Why is this fine?
+                        <input required autoFocus value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />
+                      </label>
+                      <button disabled={busy || !note.trim()}>Mark reviewed</button>{' '}
+                      <button type="button" onClick={() => setReviewing(undefined)}>
+                        Cancel
+                      </button>
+                    </form>
+                  ) : (
+                    <button onClick={() => (setReviewing(s.key), setNote(''))}>Mark reviewed…</button>
+                  ))}
+              </div>
+            </li>
+          ))}
+          {unseen.map((kind) => (
+            <li key={kind} className="unseen">
+              <span className="result none" aria-label="Not seen" title="Not seen">
+                –
+              </span>
+              <div>
+                <strong>{LABEL[kind]}</strong>
+                <p>Not seen in the chat</p>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
       <p>
-        <small>AI reading of what was said, to help you decide what to verify. Not a judgement of the customer, and it never blocks an order.</small>
+        <small>
+          AI reading of what was said, to help you decide what to verify. "Not seen" means the AI did not spot it, not that it was
+          checked. Never a judgement of the customer, and it never blocks an order.
+        </small>
       </p>
     </section>
   )

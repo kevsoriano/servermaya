@@ -35,6 +35,8 @@ Only these kinds, and only when a CUSTOMER message concretely shows it:
 
 Rules:
 - Ordinary questions, polite urgency with no link to payment ("kailangan ko bukas" alone), and a clear single correction are not signals.
+- Urgency that comes with a claim of having paid ("already paid, please ship today") is pressure as well as a payment_claim:
+  the payment is not verified yet, so it is a request to ship first. Report both.
 - Describe what was said in neutral English. Never judge the customer's honesty, intent or character, and never use words like scam, fraud or suspicious.
 - Cite the numbers of the CUSTOMER messages that show it. One signal per distinct issue.
 - If nothing applies, return an empty list."""

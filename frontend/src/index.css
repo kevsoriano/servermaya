@@ -553,25 +553,26 @@ mark.status.confirmed {
 }
 
 /* Checks before shipping */
-.signal {
-  border-left: 4px solid var(--warn);
+.checks li.to-verify {
   background: var(--warn-bg);
-  padding: 0.5rem 0.75rem;
-  margin: 0.5rem 0;
-  border-radius: 0 8px 8px 0;
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
 }
 
-.signal.done {
-  border-left-color: var(--ok);
-  background: none;
-  opacity: 0.8;
+.checks li.unseen strong {
+  font-weight: 500;
+  color: var(--muted);
 }
 
-.signal p {
-  margin: 0.25rem 0;
+.checks .result.open {
+  color: var(--warn);
 }
 
-.signal blockquote {
+.checks .result.none {
+  color: var(--muted);
+}
+
+.checks blockquote {
   margin: 0.25rem 0;
   padding-left: 0.5rem;
   border-left: 2px solid var(--line);
@@ -579,12 +580,21 @@ mark.status.confirmed {
   color: var(--muted);
 }
 
-.signal label {
+.checks details {
+  margin: 0.25rem 0;
+}
+
+.checks summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.signals label {
   display: grid;
   margin: 0.5rem 0;
 }
 
-.signal input {
+.signals input {
   padding: 0.35rem 0.5rem;
 }
 
@@ -866,24 +876,24 @@ mark.source.provider {
   background: color-mix(in srgb, var(--ok) 12%, transparent);
   color: var(--ok);
 }
-.viewer-checks {
+.checks {
   list-style: none;
   margin: 0.75rem 0;
   padding: 0;
   display: grid;
   gap: 0.6rem;
 }
-.viewer-checks li {
+.checks li {
   display: grid;
   grid-template-columns: 1.5rem 1fr;
   gap: 0.4rem;
 }
-.viewer-checks .result {
+.checks .result {
   font-size: 1.2rem;
   line-height: 1.2;
   text-align: center;
 }
-.viewer-checks p {
+.checks p {
   margin: 0.15rem 0 0;
   color: var(--muted);
 }

@@ -84,7 +84,7 @@ export default function ScreenshotView({ url, alt, messageId, fromCustomer, orde
                   </small>
                 </p>
               )}
-              <ul className="viewer-checks">
+              <ul className="checks">
                 {claim.checks.map((k) => (
                   <li key={k.check}>
                     <span className={`result ${k.result}`} aria-label={RESULT[k.result]} title={RESULT[k.result]}>
