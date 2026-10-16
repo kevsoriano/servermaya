@@ -303,18 +303,22 @@ export default function Conversations() {
             ))}
           </ol>
         </div>
-        {openId && messages && (
+        {openId && messages && thread?.demo && (
+          <div className="composers">
+            <Reply conversationId={openId} text={asCustomer} setText={setAsCustomer} asCustomer onSent={reloadMessages} />
+            <Reply conversationId={openId} text={reply} setText={setReply} onSent={reloadMessages} />
+          </div>
+        )}
+        {openId && messages && !thread?.demo && (
           <Reply
             conversationId={openId}
             text={reply}
             setText={setReply}
-            until={thread?.demo ? undefined : replyUntil(messages)}
+            until={replyUntil(messages)}
             onSent={reloadMessages}
           />
         )}
-        {openId && messages && thread?.demo && (
-          <Reply conversationId={openId} text={asCustomer} setText={setAsCustomer} asCustomer onSent={reloadMessages} />
-        )}
+
       </section>
       {openId && messages && (
         <aside className="pane side">

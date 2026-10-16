@@ -112,7 +112,7 @@ main {
   gap: 0.75rem;
   padding: 0.75rem;
   box-sizing: border-box;
-  max-width: 1200px;
+  max-width: 1280px;
   margin: 0 auto;
 }
 
@@ -157,7 +157,7 @@ main {
 
 .inbox {
   display: grid;
-  grid-template-columns: 22rem 1fr 24rem;
+  grid-template-columns: 18rem minmax(0, 1fr) 21rem; /* the chat gets the most room */
   min-height: 0;
   background: var(--surface);
   border-radius: 12px;
@@ -165,7 +165,7 @@ main {
 }
 
 .inbox.two {
-  grid-template-columns: 22rem 1fr;
+  grid-template-columns: 18rem minmax(0, 1fr);
 }
 
 .pane {
@@ -376,7 +376,6 @@ mark.status.confirmed {
 
 /* Demo chats: the judge also writes as the customer, in a box that can't be mistaken for the seller's. */
 .reply.as-customer {
-  margin-top: 0;
   border-style: dashed;
 }
 
@@ -413,10 +412,39 @@ mark.status.confirmed {
 }
 
 .reply .attach {
-  display: inline;
+  display: inline-flex;
   margin: 0;
+  padding: 0.25rem;
+  border-radius: 6px;
+  color: var(--muted);
   cursor: pointer;
-  text-decoration: underline;
+}
+
+.reply .attach:hover,
+.reply .attach:focus-within {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Demo chats: customer box on the left and seller box on the right, the same sides as their messages. */
+.composers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin: 0.75rem 1rem 1rem;
+}
+
+.composers .reply {
+  margin: 0;
 }
 
 .side .reply {
@@ -656,7 +684,8 @@ mark.status.confirmed {
   }
 
   .inbox,
-  .inbox.two {
+  .inbox.two,
+  .composers {
     grid-template-columns: 1fr;
   }
 

@@ -74,7 +74,7 @@ export default function Reply({ conversationId, text, setText, orderId, until, o
       />
       <div className="reply-foot">
         <small>
-          {demo ? (asCustomer ? 'You play the customer in a demo chat.' : 'Demo chat: kept in this app, never sent to Messenger.') : closed
+          {demo ? (asCustomer ? 'You play the customer.' : 'Not sent to Messenger.') : closed
             ? <>Messenger only allows replies within 24 hours of the customer's last message{until && <> (closed {until.toLocaleString()})</>}.</>
             : until && <>You can reply until {until.toLocaleString()}.</>}
         </small>
@@ -87,8 +87,11 @@ export default function Reply({ conversationId, text, setText, orderId, until, o
             </button>
           </span>
         ) : (
-          <label className="attach">
-            Attach image
+          <label className="attach" title="Attach image">
+            <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+            </svg>
+            <span className="sr-only">Attach image</span>
             <input key={picker} type="file" accept={demo ? DEMO_IMAGE_TYPES : IMAGE_TYPES} disabled={closed} hidden onChange={(e) => setImage(e.target.files?.[0])} />
           </label>
         )}
