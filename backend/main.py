@@ -868,7 +868,8 @@ def check_packing(order_id: str, user: dict = Depends(current_user)):
     if not packing["photos"]:
         raise HTTPException(409, "Add at least one packing photo")
     checklist = "\n".join(
-        f"[{r['line']}] {r['expected']['quantity']} x {r['expected']['name']}" + (f" ({r['expected']['variant']})" if r["expected"]["variant"] else "")
+        f"[{r['line']}] {r['expected']['quantity']} x {extraction.inline(r['expected']['name'])}"
+        + (f" ({extraction.inline(r['expected']['variant'])})" if r["expected"]["variant"] else "")
         for r in packing["rows"]
     )
     contents = [f"<order>\n{checklist}\n</order>"]

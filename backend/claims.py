@@ -10,6 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from extraction import inline
 from orders import Refused
 
 TYPES = {
@@ -120,18 +121,18 @@ def evidence(order: dict, messages: list[dict], c: dict) -> tuple[list[str], lis
     d = order["draft"]
     blocks, images = [], []
     agreed = [x for x in order.get("confirmations", []) if x["version"] == order["version"]]
-    items = "; ".join(f"{i['quantity']} x {i['name']}" + (f" ({i['variant']})" if i["variant"] else "") for i in d["items"])
-    blocks.append(f"[V{order['version']}] Order version {order['version']}: {items}. Total {money(d['total'])}. Recipient {d['recipient_name']['value']}, "
-                  f"address {d['address']['value']}. " + (f"Confirmed by {agreed[-1]['kind'].replace('_', ' ')} at {agreed[-1]['at']}." if agreed else "Not confirmed."))
+    items = "; ".join(f"{i['quantity']} x {inline(i['name'])}" + (f" ({inline(i['variant'])})" if i["variant"] else "") for i in d["items"])
+    blocks.append(f"[V{order['version']}] Order version {order['version']}: {items}. Total {money(d['total'])}. Recipient {inline(d['recipient_name']['value'])}, "
+                  f"address {inline(d['address']['value'])}. " + (f"Confirmed by {agreed[-1]['kind'].replace('_', ' ')} at {agreed[-1]['at']}." if agreed else "Not confirmed."))
     for n, m in enumerate(messages, 1):
         who = "Seller" if m["from_page"] else "Customer"
         extra = f" [{len(m.get('attachments') or [])} attachment(s)]" if m.get("attachments") else ""
-        blocks.append(f"[M{n}] {who} at {m.get('created_time')}: {m.get('text') or ''}{extra}")
+        blocks.append(f"[M{n}] {who} at {m.get('created_time')}: {inline(m.get('text'))}{extra}")
     payment, manual = order.get("payment") or {}, order.get("manual_payment") or {}
     if payment.get("status") == "verified":
         blocks.append(f"[PAY] PayMongo verified a payment of {money(payment.get('paid_amount', payment['amount']))} (payment {payment.get('payment_id')}).")
     elif manual.get("status") == "seller_confirmed":
-        blocks.append(f"[PAY] The seller confirmed a direct GCash payment of {money(manual['amount'])}, reference {manual['confirmed'].get('reference')}. Not verified by PayMongo.")
+        blocks.append(f"[PAY] The seller confirmed a direct GCash payment of {money(manual['amount'])}, reference {inline(manual['confirmed'].get('reference'))}. Not verified by PayMongo.")
     else:
         blocks.append("[PAY] No verified or seller-confirmed payment.")
     packed = [p for p in [order.get("packing")] + order.get("packing_history", [])[::-1] if p and p.get("completed")]
@@ -139,11 +140,11 @@ def evidence(order: dict, messages: list[dict], c: dict) -> tuple[list[str], lis
         p = packed[0]
         for r in p["rows"]:
             seen = r["observed"] or {}
-            counts = ", ".join(f"{x['quantity']} {x['variant'] or ''}".strip() for x in seen.get("counts", [])) or "not counted"
-            manual_check = f" Seller inspected: {r['manual']['reason']}." if r["manual"] else ""
-            blocks.append(f"[K{r['line']}] Packing line {r['line']}: expected {r['expected']['quantity']} x {r['expected']['name']}"
-                          f"{' (' + r['expected']['variant'] + ')' if r['expected']['variant'] else ''}. Photo check: {r['auto_result']}; seen {counts}"
-                          f"{'; damage: ' + seen['damage'] if seen.get('damage') else ''}.{manual_check}")
+            counts = ", ".join(f"{x['quantity']} {inline(x['variant'])}".strip() for x in seen.get("counts", [])) or "not counted"
+            manual_check = f" Seller inspected: {inline(r['manual']['reason'])}." if r["manual"] else ""
+            blocks.append(f"[K{r['line']}] Packing line {r['line']}: expected {r['expected']['quantity']} x {inline(r['expected']['name'])}"
+                          f"{' (' + inline(r['expected']['variant']) + ')' if r['expected']['variant'] else ''}. Photo check: {r['auto_result']}; seen {counts}"
+                          f"{'; damage: ' + inline(seen['damage']) if seen.get('damage') else ''}.{manual_check}")
         for n, photo in enumerate(p["photos"][:4], 1):
             images.append((f"KP{n}", photo))
         blocks.append(f"[KP] Packing photos KP1 to KP{min(len(p['photos']), 4)}, packed at {p['completed']['at']}.")
@@ -152,15 +153,15 @@ def evidence(order: dict, messages: list[dict], c: dict) -> tuple[list[str], lis
     f = shipment(order, c["fulfillment_id"])
     if f:
         for n, e in enumerate(f["events"], 1):
-            blocks.append(f"[D{n}] Delivery status {e['status']} (raw {e['raw_status']}), source {e['source']}, at {e['at']}.")
+            blocks.append(f"[D{n}] Delivery status {e['status']} (raw {inline(e['raw_status'])}), source {e['source']}, at {e['at']}.")
         if f.get("pod"):
-            blocks.append(f"[POD] Proof of delivery from {f['courier']}: {f['pod'].get('status')}, delivered at {f['pod'].get('delivered_at')}.")
+            blocks.append(f"[POD] Proof of delivery from {f['courier']}: {inline(f['pod'].get('status'))}, delivered at {f['pod'].get('delivered_at')}.")
     else:
         blocks.append("[D] No shipment on record.")
     receipt = order.get("receipt") or {}
     blocks.append(f"[R] Customer confirmed receipt at {receipt['at']}." if receipt.get("fulfillment_id") == c["fulfillment_id"] and c["fulfillment_id"]
                   else "[R] The customer has not confirmed receipt.")
-    blocks.append(f"[C] Claim ({TYPES[c['type']]}), from {c['source'].replace('_', ' ')} at {c['created_at']}: {c['narrative']}")
+    blocks.append(f"[C] Claim ({TYPES[c['type']]}), from {c['source'].replace('_', ' ')} at {c['created_at']}: {inline(c['narrative'])}")
     for n, photo in enumerate(c["photos"], 1):
         images.append((f"CP{n}", photo))
     return blocks, images

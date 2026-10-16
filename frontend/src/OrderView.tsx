@@ -8,7 +8,15 @@ import Dispatch, { type Fulfillment } from './Dispatch'
 import Claims, { type Claim, type Refund } from './Claims'
 
 type Sourced = { value: string | null; sources: string[] }
-type Item = { name: string; variant: string | null; quantity: number; unit_price: number | null; sources: string[] }
+type Item = {
+  name: string
+  variant: string | null
+  quantity: number
+  unit_price: number | null
+  sources: string[]
+  /** Gemini read a price, but no seller message writes it, so it was left blank. */
+  price_withheld?: boolean
+}
 export type Order = {
   id: string
   status: 'draft' | 'awaiting_confirmation' | 'confirmed' | 'cancelled'
@@ -145,6 +153,12 @@ export default function OrderView({ order, onChange }: { order: Order; onChange:
       </sup>
     )
 
+  // Read the actual words behind each value: a citation only proves the message exists, not that it says what the draft claims.
+  const citedIds = new Set(
+    [...draft.items.flatMap((i) => i.sources), ...FIELDS.flatMap(([key]) => draft[key].sources), ...draft.claims.flatMap((c) => c.sources)],
+  )
+  const cited = messages.map((m, k) => ({ n: k + 1, m })).filter(({ m }) => citedIds.has(m.id))
+
   const cancel = () => {
     const reason = prompt('Cancel this order? The record is kept. Reason (optional):')
     if (reason === null) return
@@ -239,7 +253,10 @@ export default function OrderView({ order, onChange }: { order: Order; onChange:
                     {src(i.sources)}
                   </td>
                   <td>{i.quantity}</td>
-                  <td>{peso(i.unit_price)}</td>
+                  <td>
+                    {peso(i.unit_price)}
+                    {i.price_withheld && <small className="withheld"> None of your messages states this price. Enter it with Edit.</small>}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -261,6 +278,19 @@ export default function OrderView({ order, onChange }: { order: Order; onChange:
           <p>
             <small>Numbers in brackets are the chat messages each value came from.</small>
           </p>
+          {cited.length > 0 && (
+            <details className="cited">
+              <summary>Cited messages ({cited.length})</summary>
+              {cited.map(({ n, m }) => (
+                <blockquote key={m.id}>
+                  <strong>
+                    [{n}] {m.from_page ? 'You' : 'Customer'}:
+                  </strong>{' '}
+                  {m.text}
+                </blockquote>
+              ))}
+            </details>
+          )}
         </>
       )}
 
