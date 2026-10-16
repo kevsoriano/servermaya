@@ -113,23 +113,17 @@ def review_claim(order_id: str, cid: str, user: dict = Depends(auth.current_user
         except HTTPException:
             pass  # the snapshot taken when the order was drafted
     blocks, images = cases.evidence(order, messages, c)
-    parts = [types.Part.from_text(text="Records:\n" + "\n".join(blocks))]
     shown = []
     for label, photo in images:
         try:
-            parts += [
-                types.Part.from_text(text=f"Image {label}:"),
-                types.Part.from_bytes(data=db.bucket().blob(photo["path"]).download_as_bytes(), mime_type=photo["content_type"]),
-            ]
-            shown.append((label, photo))
+            data = db.bucket().blob(photo["path"]).download_as_bytes()
+            shown.append((label, types.Part.from_bytes(data=data, mime_type=photo["content_type"])))
         except Exception:
             pass  # an image that cannot be loaded cannot be cited
-    auth.ai_budget(user)
+    auth.ai_budget(user)  # one review; the agent's tool turns make a few Gemini calls, counted as one like any other read
     now = datetime.now(UTC)
     try:
-        review = claim_agent.review(
-            claim_agent.gemini_agent(config.GEMINI_MODEL, config.PROJECT_ID), config.GEMINI_MODEL, parts, cases.ids(blocks, shown), now
-        )
+        review = claim_agent.review(claim_agent.gemini(config.GEMINI_MODEL, config.PROJECT_ID), config.GEMINI_MODEL, blocks, shown, now)
     except Exception:
         raise HTTPException(502, "Could not review this claim. Try again.")
     # The text behind each citation, so the seller can check it without hunting.

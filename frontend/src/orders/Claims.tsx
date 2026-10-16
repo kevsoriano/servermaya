@@ -28,6 +28,7 @@ export type Claim = {
     draft_reply: string
     questions: string[]
     sources?: Record<string, string>
+    read?: string[] // the records the agent fetched with its tools; missing on reviews made before it had them
     model: string
     at: string
   } | null
@@ -84,8 +85,9 @@ function Review({ c, onDecide }: { c: Claim; onDecide: (a: Action, amount: numbe
     <div className="review">
       <p>
         <small>
-          AI review by {r.model}, {new Date(r.at).toLocaleString()}. Every statement cites the records below it; check them before you
-          decide.
+          AI review by {r.model}, {new Date(r.at).toLocaleString()}.
+          {r.read && <> It read the order's {r.read.length ? r.read.join(', ') : 'no'} records.</>} Every statement cites the records below
+          it; check them before you decide.
           {c.review_stale && <strong> New evidence arrived since: review again.</strong>}
         </small>
       </p>

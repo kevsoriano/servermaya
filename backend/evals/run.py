@@ -5,7 +5,7 @@ Run: make eval [RUNS=3]   (needs gcloud application-default credentials for the 
 - 33 conversations (20, plus 13 harder ones) through extraction and checks before shipping: ordinary orders, discrepancies
   the seller should verify, prompt injection, and returning customers (since_last_order and carry_over, as the draft route
   runs them).
-- 7 claim reviews through the ADK agent, with its citation check.
+- 7 claim reviews through the ADK agent, which fetches the order's records with its tools, with its citation check.
 - 4 customer GCash receipt screenshots through the receipt prompt and receipts.check_receipt, three with planted text.
 - 18 packing checks on generated images, through packing.unclear and packing.apply_check as the route runs them. They are
   drawings, not photos: they test counting, colour, damage and visibility rules, not real-world photo quality.
@@ -1013,19 +1013,20 @@ CLAIMS += [
 ]
 
 
-def run_claim(reviewer, case: dict) -> dict:
+def run_claim(model: tuple[str, str], case: dict) -> dict:
     order = claim_order(**case["order"])
     photos = [{"id": "cp1"}] if case.get("photo") else []
     order |= cases.open_claim(order, "c1", cases.ClaimIn(type=case["type"], narrative=case["narrative"]), "customer_link", "customer", NOW, photos)
     blocks, images = cases.evidence(order, messages(CHAT), order["claims"][-1])
-    parts = [types.Part.from_text(text="Records:\n" + "\n".join(blocks))]
     mugs = [("mug", 150 + 300 * n, 280, BLUE) for n in range(case["order"]["blue_mugs"])]
-    shown = [(label, p) for label, p in images if label in ("KP1", "CP1")]
-    for label, _ in shown:  # KP1: the seller's packing photo of the order's blue mugs. CP1: the customer's photo.
-        data = photo(mugs) if label == "KP1" else photo(case["photo"])
-        parts += [types.Part.from_text(text=f"Image {label}:"), types.Part.from_bytes(data=data, mime_type="image/png")]
+    # KP1: the seller's packing photo of the order's blue mugs. CP1: the customer's photo.
+    shown = [
+        (label, types.Part.from_bytes(data=photo(mugs) if label == "KP1" else photo(case["photo"]), mime_type="image/png"))
+        for label, _ in images
+        if label in ("KP1", "CP1")
+    ]
     start = time.monotonic()
-    review = claim_agent.review(reviewer, MODEL, parts, cases.ids(blocks, shown), NOW)
+    review = claim_agent.review(claim_agent.gemini(*model), MODEL, blocks, shown, NOW)
     seconds = time.monotonic() - start
     findings = review["findings"]
     action = review["recommendation"]["action"]
@@ -1038,6 +1039,7 @@ def run_claim(reviewer, case: dict) -> dict:
         "findings": len(findings),
         "cited": sum(len(f["evidence"]) for f in findings) + len(review["recommendation"]["evidence"]),
         "statuses": ", ".join(f["status"] for f in findings if not f.get("withheld")),
+        "read": review["read"],
     }
 
 
@@ -1174,6 +1176,7 @@ def report(convs: list[list[dict]], claims_: list[list[dict]], packs: list[list[
         f"| | Cases correct in every run (harder cases) | {every(convs, conv_ok)}/{len(convs)} ({every(hard(convs), conv_ok)}/{len(hard(convs))}) |",
         f"| Claim reviews ({len(claims_)} cases, ADK) | Recommendation within the acceptable actions | {pct(sum(r['ok'] for r in gk), len(flat(claims_)))} |",
         f"| | Findings withheld for citing no real record | {sum(r['withheld'] for r in gk)} of {sum(r['findings'] for r in gk)} |",
+        f"| | Reviews that fetched no records with the agent's tools | {sum(not r['read'] for r in gk)} of {len(gk)} |",
         f"| | Cases correct in every run (harder cases) | {every(claims_, claim_ok)}/{len(claims_)} ({every(hard(claims_), claim_ok)}/{len(hard(claims_))}) |",
         f"| Packing ({len(packs)} cases) | Line result as expected | {pct(sum(res in exp for res, exp in lines), len(lines))} |",
         f"| | **False matches** (passed when it should not) | {false_match} |",
@@ -1201,12 +1204,13 @@ def report(convs: list[list[dict]], claims_: list[list[dict]], packs: list[list[
             f"| {sum(r['caught'] for r in ok)}/{sum(r['expected'] for r in ok)} | {sum(r['false_alarms'] for r in ok)} "
             f"| {outcome(runs, conv_ok)} | {notes(runs)} |"
         )
-    out += ["", "## Claim reviews", "", "| Case | Recommended | Acceptable | Withheld | Result |", "|---|---|---|---|---|"]
+    out += ["", "## Claim reviews", "", "| Case | Recommended | Acceptable | Records fetched | Withheld | Result |", "|---|---|---|---|---|---|"]
     for runs in claims_:
         c = runs[0]["case"]
         acts = ", ".join(r.get("action") or "error" for r in runs)
+        fetched = "; ".join(dict.fromkeys(", ".join(r["read"]) or "none" for r in good(runs)))
         out.append(
-            f"| {name(c)} | {acts} | {', '.join(sorted(c['allowed']))} | {sum(r.get('withheld', 0) for r in runs)} | {outcome(runs, claim_ok)} |"
+            f"| {name(c)} | {acts} | {', '.join(sorted(c['allowed']))} | {fetched} | {sum(r.get('withheld', 0) for r in runs)} | {outcome(runs, claim_ok)} |"
         )
     out += ["", "## Packing", "", "| Case | Expected | Results | Seen | Result |", "|---|---|---|---|---|"]
     for runs in packs:
@@ -1231,14 +1235,17 @@ def report(convs: list[list[dict]], claims_: list[list[dict]], packs: list[list[
 
 def main() -> int:
     client = genai.Client(vertexai=True, project=PROJECT, location="global", http_options={"timeout": 90_000})  # a hung call fails its case
-    reviewer = claim_agent.gemini_agent(MODEL, PROJECT)
 
     def each(fn, arg, cases_: list[dict]) -> list[list[dict]]:
         flat = list(pool.map(lambda c: safely(fn, arg, c), [c for c in cases_ for _ in range(RUNS)]))
         return [flat[n * RUNS : (n + 1) * RUNS] for n in range(len(cases_))]
 
     with ThreadPoolExecutor(4) as pool:  # 8 hit the Vertex rate limit at 3 runs
-        convs, packs, claims_ = each(run_conversation, client, CONVERSATIONS), each(run_packing, client, PACKING), each(run_claim, reviewer, CLAIMS)
+        convs, packs, claims_ = (
+            each(run_conversation, client, CONVERSATIONS),
+            each(run_packing, client, PACKING),
+            each(run_claim, (MODEL, PROJECT), CLAIMS),
+        )
         shots = each(run_receipt, client, RECEIPTS)
     text = report(convs, claims_, packs, shots)
     OUT.write_text(text)

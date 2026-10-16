@@ -1,13 +1,14 @@
 """The claim review as a Google ADK agent.
 
-One LlmAgent reads the evidence blocks and images and answers in claims.Review. It has no tools: it can only read what
-it is given and cite it. Its after-agent callback runs claims.checked in code, so a citation to a record that does not
-exist is dropped before the review leaves the agent, and nothing it recommends is carried out.
+The agent starts with the claim and the customer's photos only. It fetches the order's records with four read-only tools
+(the order and payment, the chat, packing with its photos, delivery), choosing what the claim needs. Nothing it can call
+changes anything. Its after-agent callback runs claims.checked in code with only the IDs it was given or fetched, so a
+citation to a record it never saw is dropped before the review leaves the agent, and nothing it recommends is carried out.
 """
 
 import asyncio
+import re
 from datetime import datetime
-from functools import lru_cache
 
 from google.adk.agents import LlmAgent
 from google.adk.models import BaseLlm, Gemini
@@ -20,45 +21,101 @@ from . import claims as cases
 APP = "claim_review"
 USER = "seller"
 
+# Which tool returns a record, by the letters of its evidence ID. C and CP (the claim and its photos) come with the request.
+SECTIONS = {"V": "order", "PAY": "order", "M": "chat", "K": "packing", "KP": "packing", "D": "delivery", "POD": "delivery", "R": "delivery"}
 
-def guard(callback_context) -> None:
-    """Code, not the model, decides which citations stand: claims.checked keeps only IDs that were given to the agent."""
-    state = callback_context.state
-    raw = state.get("review")
-    if raw is None:
-        return None  # no answer; the caller reports the failure
-    found = cases.Review.model_validate_json(raw) if isinstance(raw, str) else cases.Review.model_validate(raw)
-    state["checked"] = cases.checked(found, set(state["evidence_ids"]), state["model"], state["now"])
-    return None
+TOOLS = """
+You start with the claim [C] and any photos the customer sent with it [CP1, CP2, ...]. The order's records are not in the
+message: fetch them with the tools read_order, read_chat, read_packing and read_delivery. Call every tool whose records could
+support or contradict the claim; when unsure, call it. You can cite only IDs you were given or fetched; any other is dropped."""
 
 
-def agent(model: str | BaseLlm, project: str = "") -> LlmAgent:
-    llm = model if isinstance(model, BaseLlm) else Gemini(model=model, client_kwargs={"vertexai": True, "project": project, "location": "global"})
+def section(label: str) -> str:
+    return SECTIONS.get(re.match(r"[A-Z]+", label)[0], "claim")
+
+
+def agent(llm: BaseLlm, records: dict[str, list], read: list[str]) -> LlmAgent:
+    """An agent for one review. records: section -> [(evidence ID, text or image Part)]. read: filled with the sections it fetches."""
+
+    def fetch(name: str) -> dict:
+        if name not in read:
+            read.append(name)
+        got = records.get(name, [])
+        texts = [r for _, r in got if isinstance(r, str)]
+        photos = [(label, r) for label, r in got if not isinstance(r, str)]
+        # Images go back as Parts, which ADK hands to Gemini as media; each one's label is in the texts, in the same order.
+        texts += [f"[{label}] Photo {n} attached to this result." for n, (label, _) in enumerate(photos, 1)]
+        return {"records": texts or [f"No {name} records."], "images": [p for _, p in photos]}
+
+    def read_order() -> dict:
+        """The order as confirmed: items, total, recipient and address [V], and how it was paid [PAY]."""
+        return fetch("order")
+
+    def read_chat() -> dict:
+        """The customer's chat with the seller, oldest first [M1, M2, ...]."""
+        return fetch("chat")
+
+    def read_packing() -> dict:
+        """The packing record: each line's photo check and the seller's inspection [K1, ...], and the packing photos [KP1, ...]."""
+        return fetch("packing")
+
+    def read_delivery() -> dict:
+        """The shipment's status events [D1, ...], any courier proof of delivery [POD], and whether the customer confirmed receipt [R]."""
+        return fetch("delivery")
+
+    def guard(callback_context) -> None:
+        """Code, not the model, decides which citations stand: claims.checked keeps only IDs the agent was given or fetched."""
+        state = callback_context.state
+        raw = state.get("review")
+        if raw is None:
+            return None  # no answer; the caller reports the failure
+        found = cases.Review.model_validate_json(raw) if isinstance(raw, str) else cases.Review.model_validate(raw)
+        seen = set(state["given"]) | {i for name in read for i, _ in records.get(name, [])}
+        state["checked"] = cases.checked(found, seen, state["model"], state["now"])
+        return None
+
     return LlmAgent(
         name="claim_reviewer",
-        description="Compares a customer's claim with the order's records and cites them by evidence ID.",
+        description="Fetches an order's records, compares the customer's claim with them, and cites them by evidence ID.",
         model=llm,
-        instruction=lambda _ctx: cases.SYSTEM,  # a provider, so the brackets in the evidence IDs are never read as state placeholders
+        instruction=lambda _ctx: cases.SYSTEM + TOOLS,  # a provider, so the brackets in the evidence IDs are never read as state placeholders
+        tools=[read_order, read_chat, read_packing, read_delivery],
         output_schema=cases.Review,
         output_key="review",
-        # 90 s: one Vertex request once hung for over 7 minutes; the route turns the timeout into a 502.
-        generate_content_config=types.GenerateContentConfig(temperature=0, http_options=types.HttpOptions(timeout=90_000)),
+        # 90 s: one Vertex request once hung for over 7 minutes; the route turns the timeout into a 502. LOW thinking: on the
+        # eval's claim cases it was as accurate as MEDIUM and the default, at a median of 7 s against 36 s and 52 s.
+        generate_content_config=types.GenerateContentConfig(
+            temperature=0, thinking_config=types.ThinkingConfig(thinking_level="LOW"), http_options=types.HttpOptions(timeout=90_000)
+        ),
         after_agent_callback=guard,
     )
 
 
-@lru_cache
-def gemini_agent(model: str, project: str) -> LlmAgent:
-    return agent(model, project)
+def gemini(model: str, project: str) -> Gemini:
+    """A new model per review: each review runs in its own event loop, and a client kept from an earlier one holds
+    connections bound to a loop that is already closed."""
+    return Gemini(model=model, client_kwargs={"vertexai": True, "project": project, "location": "global"})
 
 
-def review(reviewer: LlmAgent, model: str, parts: list[types.Part], ids: set[str], now: datetime) -> dict:
-    """Run one review in its own session and return the checked review. Raises if the agent gave no valid answer."""
+def review(llm: BaseLlm, model: str, blocks: list[str], images: list[tuple[str, types.Part]], now: datetime) -> dict:
+    """Run one review in its own session and return the checked review. Raises if the agent gave no valid answer.
+
+    blocks: claims.evidence's text records. images: (evidence ID, loaded image) for the photos that could be loaded."""
+    records: dict[str, list] = {}
+    for label, item in [(b[1 : b.index("]")], b) for b in blocks] + images:
+        records.setdefault(section(label), []).append((label, item))
+    given = records.pop("claim", [])
+    parts = []
+    for label, item in given:
+        parts += [types.Part.from_text(text=item)] if isinstance(item, str) else [types.Part.from_text(text=f"Image {label}:"), item]
+    read: list[str] = []
+    reviewer = agent(llm, records, read)
 
     async def run() -> dict | None:
         sessions = InMemorySessionService()
         runner = Runner(app_name=APP, agent=reviewer, session_service=sessions)
-        session = await sessions.create_session(app_name=APP, user_id=USER, state={"evidence_ids": sorted(ids), "model": model, "now": now})
+        state = {"given": [label for label, _ in given], "model": model, "now": now}
+        session = await sessions.create_session(app_name=APP, user_id=USER, state=state)
         async for _ in runner.run_async(user_id=USER, session_id=session.id, new_message=types.Content(role="user", parts=parts)):
             pass
         done = await sessions.get_session(app_name=APP, user_id=USER, session_id=session.id)
@@ -67,4 +124,4 @@ def review(reviewer: LlmAgent, model: str, parts: list[types.Part], ids: set[str
     checked = asyncio.run(run())  # the route runs in FastAPI's thread pool, where no event loop is running
     if checked is None:
         raise RuntimeError("The claim review agent returned no review")
-    return {**checked, "engine": "adk"}
+    return {**checked, "engine": "adk", "read": read}

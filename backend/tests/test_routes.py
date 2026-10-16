@@ -85,10 +85,14 @@ def test_customer_link_confirms_pays_and_the_webhook_verifies(monkeypatch):
 
 
 class Canned(BaseLlm):
-    """Stands in for Gemini inside the ADK claim reviewer. Keeps what it was asked in `asked`."""
+    """Stands in for Gemini inside the ADK claim reviewer: fetches every section, then answers. Keeps what it was asked in `asked`."""
 
     async def generate_content_async(self, llm_request, stream=False):
         asked.append(llm_request)
+        if not any(p.function_response for c in llm_request.contents for p in c.parts):
+            reads = [types.Part(function_call=types.FunctionCall(name=f"read_{n}", args={})) for n in ("order", "chat", "packing", "delivery")]
+            yield LlmResponse(content=types.Content(role="model", parts=reads))
+            return
         review = cases.Review(
             findings=[cases.Finding(statement="Delivered", status="supported", evidence=["C", "Z9"], uncertainty="")],
             recommendation=cases.Recommendation(action="partial_refund", amount_php=200.0, explanation="", evidence=["C"]),
@@ -133,7 +137,7 @@ def test_packing_delivery_claims_refunds_and_replacement(monkeypatch, seller):
     assert claim["photos"] == 1
     chat = [{"id": "m1", "from_page": False, "created_time": "t", "text": "cracked!"}]
     monkeypatch.setattr(messenger, "fetch_messages", lambda conversation_id: chat)
-    monkeypatch.setattr(claim_agent, "gemini_agent", lambda model, project: claim_agent.agent(Canned(model="canned")))
+    monkeypatch.setattr(claim_agent, "gemini", lambda model, project: Canned(model="canned"))
     review = client.post(f"/api/orders/o1/claims/{cid}/review", headers=SELLER).json()["claims"][0]["review"]
     assert review["findings"][0]["evidence"] == ["C"] and set(review["sources"]) == {"C"}
     decision = {"action": "partial_refund", "amount": 20000, "reason": "Cracked in the photo"}
@@ -260,7 +264,7 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     store, _ = fake_google(monkeypatch, gemini)
     assert fake_token(monkeypatch, firebase={"sign_in_provider": "anonymous"}).json()["demo"] is True
     monkeypatch.setattr(messenger, "graph", lambda *a, **k: (_ for _ in ()).throw(AssertionError("demo visitors never reach Messenger")))
-    monkeypatch.setattr(claim_agent, "gemini_agent", lambda model, project: claim_agent.agent(Canned(model="canned")))
+    monkeypatch.setattr(claim_agent, "gemini", lambda model, project: Canned(model="canned"))
 
     chats = {c["customer"]["name"]: c for c in client.get("/api/conversations", headers=SELLER).json()}  # the first visit seeds
     assert len(chats) == 7 and chats["Bea Villanueva"]["order_actions"] == ["Review a customer claim"]
@@ -274,8 +278,10 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     asked.clear()
     claim = client.post(f"/api/orders/{bea['id']}/claims/{bea['claims'][0]['id']}/review", headers=SELLER).json()["claims"][0]
     assert claim["status"] == "under_review" and claim["review"]["findings"][0]["evidence"] == ["C"]
-    images = [p for c in asked[0].contents for p in c.parts if p.inline_data]
-    assert len(images) == 2  # the claim photo and the packing photo, both loaded from Storage
+    up_front = [p for c in asked[0].contents for p in c.parts if p.inline_data]
+    fetched = [r for c in asked[-1].contents for p in c.parts if p.function_response for r in p.function_response.parts or []]
+    assert len(up_front) == 1 and len(fetched) == 1  # her photo comes with the claim; the packing photo, when the agent reads packing
+    assert claim["review"]["read"] == ["order", "chat", "packing", "delivery"]
 
     # Nico: one click checks his packing photo, and code holds it back as too shaky, whatever Gemini read.
     nico = orders["Nico Ramos"]

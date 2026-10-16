@@ -68,7 +68,7 @@ def test_claim_review_citations_decisions_and_outcomes():
     assert conversations.order_action(order) == "Review a customer claim"
 
 
-def test_claim_review_runs_as_an_adk_agent_with_the_citation_guard():
+def test_claim_review_agent_fetches_records_with_its_tools_and_cites_only_what_it_read():
     from datetime import datetime
 
     from google.adk.models import BaseLlm, LlmResponse
@@ -79,32 +79,46 @@ def test_claim_review_runs_as_an_adk_agent_with_the_citation_guard():
 
     seen = []
 
-    class Canned(BaseLlm):
-        """Stands in for Gemini: answers with a review that cites one real record, one made-up one, and nothing."""
+    class Scripted(BaseLlm):
+        """Stands in for Gemini: first fetches delivery and packing, then answers citing what it read, what it did not
+        read (the chat, M1), and something made up."""
 
         async def generate_content_async(self, llm_request, stream=False):
             seen.append(llm_request)
+            if len(seen) == 1:
+                calls = [types.Part(function_call=types.FunctionCall(name=n, args={})) for n in ("read_delivery", "read_packing")]
+                yield LlmResponse(content=types.Content(role="model", parts=calls))
+                return
             review = cases.Review(
                 findings=[
                     cases.Finding(statement="Delivered", status="supported", evidence=["D1", "Z9"], uncertainty="Courier status only"),
-                    cases.Finding(statement="Invented", status="supported", evidence=["NOPE"], uncertainty=""),
+                    cases.Finding(statement="She said so in chat", status="supported", evidence=["M1"], uncertainty=""),
                 ],
-                recommendation=cases.Recommendation(action="refund", amount_php=None, explanation="", evidence=["C", "X1"]),
+                recommendation=cases.Recommendation(action="refund", amount_php=None, explanation="", evidence=["C", "KP1", "X1"]),
                 draft_reply="Sorry",
                 questions=["Can you send a photo?"],
             )
-            yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text=review.model_dump_json())]))
+            call = types.FunctionCall(name="set_model_response", args=review.model_dump())
+            yield LlmResponse(content=types.Content(role="model", parts=[types.Part(function_call=call)]))
 
     now = datetime(2026, 10, 16, tzinfo=UTC)
-    reviewer = claim_agent.agent(Canned(model="canned"))
-    assert reviewer.output_schema is cases.Review and not reviewer.tools  # it can only read what it is given and cite it
-    parts = [types.Part.from_text(text="Records:\n[C] Claim\n[D1] Delivered")]
-    review = claim_agent.review(reviewer, "canned", parts, {"C", "D1"}, now)
+    blocks = ["[V1] Order version 1", "[M1] Customer: cracked", "[K1] Packing line 1", "[D1] Delivered", "[C] Claim: cracked"]
+    packed, sent = types.Part.from_bytes(data=b"kp", mime_type="image/png"), types.Part.from_bytes(data=b"cp", mime_type="image/png")
+    review = claim_agent.review(Scripted(model="canned"), "canned", blocks, [("KP1", packed), ("CP1", sent)], now)
 
-    request = seen[0]
-    assert request.config.system_instruction.startswith(cases.SYSTEM) and request.config.temperature == 0  # ADK appends the agent's name
-    assert request.contents[-1].parts[0].text.startswith("Records:")
-    # The after-agent callback ran claims.checked: made-up citations are gone and the uncited finding is withheld.
-    assert review["findings"][0]["evidence"] == ["D1"]
-    assert review["findings"][1]["withheld"] and review["recommendation"]["evidence"] == ["C"]
-    assert (review["engine"], review["model"], review["at"], review["evidence_ids"]) == ("adk", "canned", now, ["C", "D1"])
+    first, second = seen
+    assert first.config.system_instruction.startswith(cases.SYSTEM) and first.config.temperature == 0  # ADK appends the agent's name
+    asked = first.contents[-1].parts
+    assert asked[0].text.startswith("[C] Claim") and asked[2].inline_data.data == b"cp"  # only the claim and its photo up front
+    assert not any("[V1]" in (p.text or "") for p in asked)
+    assert {t.name for t in first.config.tools[0].function_declarations} >= {"read_order", "read_chat", "read_packing", "read_delivery"}
+    answers = {p.function_response.name: p.function_response for c in second.contents for p in c.parts if p.function_response}
+    assert answers["read_delivery"].response["records"] == ["[D1] Delivered"]
+    assert answers["read_packing"].response["records"] == ["[K1] Packing line 1", "[KP1] Photo 1 attached to this result."]
+    assert answers["read_packing"].parts[0].inline_data.data == b"kp"  # the packing photo reaches the model as an image
+
+    # The after-agent callback ran claims.checked with only what it was given or fetched: M1 was never read, Z9 and X1 never existed.
+    assert review["read"] == ["delivery", "packing"] and review["engine"] == "adk"
+    assert review["findings"][0]["evidence"] == ["D1"] and review["findings"][1]["withheld"]
+    assert review["recommendation"]["evidence"] == ["C", "KP1"]
+    assert (review["model"], review["at"], review["evidence_ids"]) == ("canned", now, ["C", "CP1", "D1", "K1", "KP1"])
