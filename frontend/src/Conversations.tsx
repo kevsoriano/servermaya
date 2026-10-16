@@ -305,7 +305,14 @@ export default function Conversations() {
         </div>
         {openId && messages && thread?.demo && (
           <div className="composers">
-            <Reply conversationId={openId} text={asCustomer} setText={setAsCustomer} asCustomer onSent={reloadMessages} />
+            <Reply
+              conversationId={openId}
+              text={asCustomer}
+              setText={setAsCustomer}
+              asCustomer
+              gcashWaiting={order?.manual_payment?.status === 'requested' || order?.manual_payment?.status === 'claimed'}
+              onSent={reloadMessages}
+            />
             <Reply conversationId={openId} text={reply} setText={setReply} onSent={reloadMessages} />
           </div>
         )}

@@ -14,10 +14,12 @@ type Props = {
   onSent?: () => void
   /** Demo chats only: write as the customer instead of the seller. */
   asCustomer?: boolean
+  /** Demo chats only: this chat's order has a GCash request waiting, so sample receipts can be sent. */
+  gcashWaiting?: boolean
 }
 
 /** Sends one message as the Page. Nothing is sent without the seller pressing Send. In a demo chat the message is only stored. */
-export default function Reply({ conversationId, text, setText, orderId, until, onSent, asCustomer }: Props) {
+export default function Reply({ conversationId, text, setText, orderId, until, onSent, asCustomer, gcashWaiting }: Props) {
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
   const [image, setImage] = useState<File>()
@@ -85,14 +87,21 @@ export default function Reply({ conversationId, text, setText, orderId, until, o
         rows={2}
         disabled={closed}
       />
-      {asCustomer && (
+      {asCustomer && (gcashWaiting ? (
         <p className="samples">
           <small>Sample GCash receipt:</small>
           <button type="button" disabled={busy} onClick={() => sample('matching')}>Matching</button>
           <button type="button" disabled={busy} onClick={() => sample('wrong_amount')}>Wrong amount</button>
           <button type="button" disabled={busy} onClick={() => sample('wrong_recipient')}>Wrong recipient</button>
         </p>
-      )}
+      ) : (
+        <p className="samples">
+          <small>
+            Sample GCash receipts unlock once the seller asks for GCash: create the draft order, create the confirmation link, confirm it as the
+            customer, then press Ask for GCash payment.
+          </small>
+        </p>
+      ))}
       <div className="reply-foot">
         <small>
           {demo ? (asCustomer ? 'You play the customer.' : 'Not sent to Messenger.') : closed

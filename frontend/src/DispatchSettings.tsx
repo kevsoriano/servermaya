@@ -51,7 +51,7 @@ export default function DispatchSettings() {
         </label>
         <button disabled={busy}>Save</button>
       </form>
-      {saved && (
+      {saved?.updated_at && (
         <p>
           <small>
             Last saved by {saved.updated_by} on {new Date(saved.updated_at).toLocaleString()}.
