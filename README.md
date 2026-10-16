@@ -32,7 +32,7 @@ A small Philippine online seller keeps the order in a Messenger thread, the paym
 | **Payment** | A PayMongo webhook with a verified signature is the only thing that marks a payment as verified. For direct GCash, a customer's screenshot is transcribed by Gemini and checked in code (recipient name and number, amount, date, reference format). It is still only a claim until the seller finds it in their own GCash history, either by screenshot or by uploading the GCash history PDF, which is parsed in code with running-balance checks. If the customer says they paid before being asked, receipts count from the start of the conversation about the order instead of from the request. |
 | **Packing** | The seller photographs the packed items. Gemini reports what it can see per order line; code compares that with the confirmed order, and anything uncertain waits for the seller. |
 | **Dispatch and delivery** | Booking through Lalamove (sandbox), with status from its signed webhook, or a seller-reported courier. Every delivery event is labelled with its source, and "delivered" (the courier) is kept apart from "received" (the customer). |
-| **Claims** | The customer reports a problem with photos. Gemini reviews an evidence pack (chat, payment, packing photos, delivery events) and recommends an outcome, citing evidence IDs. Code drops any citation that doesn't exist and holds back findings left without one. |
+| **Claims** | The customer reports a problem with photos. An ADK agent reviews an evidence pack (chat, payment, packing photos, delivery events) and recommends an outcome, citing evidence IDs. The agent has no tools. Its after-agent callback runs code that drops any citation that doesn't exist and holds back findings left without one. |
 | **Refunds and replacements** | Separate, explicit seller actions after a decision: a PayMongo API refund, a recorded manual refund, or a replacement shipment. Old records are kept, never overwritten. |
 | **Patterns** | Store-wide cards such as a payment reference reused across orders, or repeated claims. Each card shows its counts, the rest of the store for comparison, and its limitations. Cards never block anything. |
 
@@ -48,6 +48,7 @@ A small Philippine online seller keeps the order in a Messenger thread, the paym
 | Service | Use |
 |---|---|
 | **Gemini** (via Vertex AI on Agent Platform) | Six structured-output calls: chat-to-order extraction, checks before shipping, packing photo review, GCash receipt transcription, GCash history screenshot transcription, and the claim evidence review. |
+| **Agent Development Kit (ADK)** | The claim review runs as an ADK `LlmAgent` with a structured output schema and no tools, through an ADK `Runner` with one in-memory session per review. The citation check runs as the agent's after-agent callback. |
 | **Cloud Run** | The FastAPI backend: all API routes, the Messenger Graph API client, and the PayMongo and Lalamove webhooks. Scales to zero. |
 | **Firebase Hosting** | Serves the React frontend and routes `/api/**` to Cloud Run on the same domain. |
 | **Firebase Authentication** | Google sign-in for sellers, checked against an email allowlist, and anonymous sign-in for demo visitors. The backend verifies the ID token on every protected route and limits demo visitors to their own demo chats and orders. |
@@ -69,6 +70,7 @@ backend/    FastAPI on Cloud Run
   packing.py      packing photo checks
   delivery.py     dispatch gate and delivery events
   claims.py       evidence pack and claim review
+  claim_agent.py  the claim review as an ADK agent, with the citation check as its callback
   refunds.py      refunds
   patterns.py     store-wide pattern cards
   demo.py         demo chats, including the returning customer's earlier order

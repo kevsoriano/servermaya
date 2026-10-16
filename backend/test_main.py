@@ -1217,3 +1217,41 @@ def test_returning_customer_gets_a_new_order_from_new_messages_only():
     edited = {**old, "version": 2}
     assert rules.carry_over(draft, [("o2", edited), ("o1", old)])["phone"]["from_order"] == "o1"  # o2 was edited after she confirmed it
     assert not rules.done({"status": "confirmed"}) and rules.done({"status": "confirmed", "receipt": {"status": "customer_confirmed"}})
+
+
+def test_claim_review_runs_as_an_adk_agent_with_the_citation_guard():
+    from datetime import datetime, timezone
+
+    from google.adk.models import BaseLlm, LlmResponse
+    from google.genai import types
+
+    import claim_agent
+    import claims as cases
+
+    seen = []
+
+    class Canned(BaseLlm):
+        """Stands in for Gemini: answers with a review that cites one real record, one made-up one, and nothing."""
+
+        async def generate_content_async(self, llm_request, stream=False):
+            seen.append(llm_request)
+            review = cases.Review(findings=[
+                cases.Finding(statement="Delivered", status="supported", evidence=["D1", "Z9"], uncertainty="Courier status only"),
+                cases.Finding(statement="Invented", status="supported", evidence=["NOPE"], uncertainty=""),
+            ], recommendation=cases.Recommendation(action="refund", amount_php=None, explanation="", evidence=["C", "X1"]),
+               draft_reply="Sorry", questions=["Can you send a photo?"])
+            yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text=review.model_dump_json())]))
+
+    now = datetime(2026, 10, 16, tzinfo=timezone.utc)
+    reviewer = claim_agent.agent(Canned(model="canned"))
+    assert reviewer.output_schema is cases.Review and not reviewer.tools  # it can only read what it is given and cite it
+    parts = [types.Part.from_text(text="Records:\n[C] Claim\n[D1] Delivered")]
+    review = claim_agent.review(reviewer, "canned", parts, {"C", "D1"}, now)
+
+    request = seen[0]
+    assert request.config.system_instruction.startswith(cases.SYSTEM) and request.config.temperature == 0  # ADK appends the agent's name
+    assert request.contents[-1].parts[0].text.startswith("Records:")
+    # The after-agent callback ran claims.checked: made-up citations are gone and the uncited finding is withheld.
+    assert review["findings"][0]["evidence"] == ["D1"]
+    assert review["findings"][1]["withheld"] and review["recommendation"]["evidence"] == ["C"]
+    assert (review["engine"], review["model"], review["at"], review["evidence_ids"]) == ("adk", "canned", now, ["C", "D1"])

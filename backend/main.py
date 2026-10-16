@@ -28,6 +28,7 @@ import orders as rules
 import packing as pack
 import receipts as gcash
 import claims as cases
+import claim_agent
 import delivery
 import demo
 import samples
@@ -1717,7 +1718,7 @@ def claim_photo_file(order_id: str, cid: str, photo_id: str, user: dict = Depend
 
 @app.post("/api/orders/{order_id}/claims/{cid}/review")
 def review_claim(order_id: str, cid: str, user: dict = Depends(current_user)):
-    """Gemini compares the claim with the order's records. Citations are checked in code before anything is shown."""
+    """An ADK agent compares the claim with the order's records. Citations are checked in code before anything is shown."""
     ref, order = loaded(order_id)
     try:
         c = cases.claim(order, cid)
@@ -1730,24 +1731,20 @@ def review_claim(order_id: str, cid: str, user: dict = Depends(current_user)):
         except HTTPException:
             pass  # the snapshot taken when the order was drafted
     blocks, images = cases.evidence(order, messages, c)
-    contents: list = ["Records:\n" + "\n".join(blocks)]
+    parts = [types.Part.from_text(text="Records:\n" + "\n".join(blocks))]
     shown = []
     for label, photo in images:
         try:
-            contents += [f"Image {label}:", types.Part.from_bytes(data=bucket().blob(photo["path"]).download_as_bytes(), mime_type=photo["content_type"])]
+            parts += [types.Part.from_text(text=f"Image {label}:"),
+                      types.Part.from_bytes(data=bucket().blob(photo["path"]).download_as_bytes(), mime_type=photo["content_type"])]
             shown.append((label, photo))
         except Exception:
             pass  # an image that cannot be loaded cannot be cited
+    now = datetime.now(timezone.utc)
     try:
-        response = clients()[0].models.generate_content(
-            model=GEMINI_MODEL, contents=contents,
-            config={"system_instruction": cases.SYSTEM, "response_mime_type": "application/json", "response_schema": cases.Review, "temperature": 0},
-        )
-        found = cases.Review.model_validate_json(response.text)
+        review = claim_agent.review(claim_agent.gemini_agent(GEMINI_MODEL, PROJECT_ID), GEMINI_MODEL, parts, cases.ids(blocks, shown), now)
     except Exception:
         raise HTTPException(502, "Could not review this claim. Try again.")
-    now = datetime.now(timezone.utc)
-    review = cases.checked(found, cases.ids(blocks, shown), GEMINI_MODEL, now)
     # The text behind each citation, so the seller can check it without hunting.
     cited = {e for f in review["findings"] for e in f["evidence"]} | set(review["recommendation"]["evidence"])
     texts = {b[1 : b.index("]")]: b for b in blocks} | {label: f"[{label}] Photo" for label, _ in shown}

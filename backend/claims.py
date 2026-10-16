@@ -184,7 +184,7 @@ class Finding(BaseModel):
 
 class Recommendation(BaseModel):
     action: Literal["clarification", "refund", "partial_refund", "replacement", "redelivery", "escalation"]
-    amount_php: float | None = Field(description="Only for partial_refund")
+    amount_php: float | None = Field(default=None, description="Only for partial_refund")  # ADK leaves out null fields
     explanation: str
     evidence: list[str]
 
