@@ -193,7 +193,10 @@ def test_decision_memories_hold_the_sellers_decision_not_the_customers_words(mon
 
     created, searched = [], []
     at = datetime(2026, 10, 1, tzinfo=UTC)
-    found = lambda fact, distance: SimpleNamespace(distance=distance, memory=SimpleNamespace(fact=fact, update_time=at))
+    found = lambda fact, distance, order_id=None: SimpleNamespace(
+        distance=distance,
+        memory=SimpleNamespace(fact=fact, update_time=at, metadata=order_id and {"order_id": SimpleNamespace(string_value=order_id)}),
+    )
 
     class Memories:
         def create(self, **k):
@@ -201,7 +204,9 @@ def test_decision_memories_hold_the_sellers_decision_not_the_customers_words(mon
 
         def retrieve(self, **k):
             searched.append(k["scope"]["user_id"])
-            return [found("mine", 0.3), found("mine far", 0.9)] if k["scope"]["user_id"].startswith("demo_u") else [found("example", 0.1)]
+            assert k["similarity_search_params"]["top_k"] == memory.TOP_K + memory.SPARE
+            mine = [found("this order's own", 0.05, "o1"), found("mine", 0.3, "o7"), found("mine far", 0.9)]
+            return mine if k["scope"]["user_id"].startswith("demo_u") else [found("example", 0.1)]
 
     monkeypatch.setattr(config, "MEMORY_BANK", "projects/p/locations/global/memoryBanks/b1")
     monkeypatch.setattr(memory, "client", lambda: SimpleNamespace(memory_banks=SimpleNamespace(memories=Memories())))
@@ -209,9 +214,11 @@ def test_decision_memories_hold_the_sellers_decision_not_the_customers_words(mon
     demo = {**order, "source": {"type": "demo", "conversation_id": "demo_x", "owner": "u1"}}
     memory.remember(demo, fact)
     assert [c["scope"]["user_id"] for c in created] == ["store_main", "demo_u1"]
-    assert created[0]["config"] is None and created[1]["config"] == {"ttl": memory.DEMO_TTL}  # demo memories expire; the store's stay
+    tag = {"order_id": {"string_value": "o1"}}
+    assert created[0]["config"] == {"metadata": tag} and created[1]["config"] == {"metadata": tag, "ttl": memory.DEMO_TTL}  # demo ones expire
 
-    # A demo visitor recalls their own decisions and the shared examples, closest first; a seller only the store's.
+    # A demo visitor recalls their own decisions and the shared examples, closest first, leaving out this order's own decision
+    # (a repeat claim on one order is not the shop's practice with other customers); a seller recalls only the store's.
     assert memory.recall(demo, "q") == ["Decided 2026-10-01: example", "Decided 2026-10-01: mine", "Decided 2026-10-01: mine far"]
     assert searched == ["demo_u1", "demo_shop"]
     searched.clear()

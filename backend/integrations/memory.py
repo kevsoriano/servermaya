@@ -19,6 +19,7 @@ APP = "claim_decisions"
 DEMO_SHOP = "demo_shop"  # the shared examples every demo visitor can recall; written by setup, never by a visitor
 DEMO_TTL = "2592000s"  # 30 days: a demo visitor's decisions are kept that long, even across a demo reset
 TOP_K = 3
+SPARE = 5  # asked for beyond TOP_K, so an order's own decisions (up to its 5 open claims) can be left out and still leave TOP_K
 
 # ponytail: three made-up decisions so a new demo visitor's first review has a shop history; real stores start empty
 DEMO_EXAMPLES = {
@@ -48,23 +49,33 @@ def remember(order: dict, fact: str) -> None:
     if not config.MEMORY_BANK:
         return
     demo = (order.get("source") or {}).get("type") == "demo"
+    tags = {"metadata": {"order_id": {"string_value": order["id"]}}} | ({"ttl": DEMO_TTL} if demo else {})
     try:
-        client().memory_banks.memories.create(name=config.MEMORY_BANK, fact=fact, scope=scope(order), config={"ttl": DEMO_TTL} if demo else None)
+        client().memory_banks.memories.create(name=config.MEMORY_BANK, fact=fact, scope=scope(order), config=tags)
     except Exception as e:
         print(f"Memory Bank write failed: {e}")
 
 
+def same_order(m, order: dict) -> bool:
+    """A decision on this very order is its own history, not the shop's practice with other customers."""
+    tag = (m.memory.metadata or {}).get("order_id")
+    return bool(tag) and tag.string_value == order.get("id")
+
+
 def recall(order: dict, query: str) -> list[str] | None:
-    """Up to TOP_K past decisions most like this claim, dated, closest first. None when Memory Bank is off or did not answer."""
+    """Up to TOP_K past decisions on other orders most like this claim, dated, closest first. None when Memory Bank is off or
+    did not answer."""
     if not config.MEMORY_BANK:
         return None
     scopes = [scope(order)] + ([{"app_name": APP, "user_id": DEMO_SHOP}] if (order.get("source") or {}).get("type") == "demo" else [])
     search = lambda s: list(
-        client().memory_banks.memories.retrieve(name=config.MEMORY_BANK, scope=s, similarity_search_params={"search_query": query, "top_k": TOP_K})
+        client().memory_banks.memories.retrieve(
+            name=config.MEMORY_BANK, scope=s, similarity_search_params={"search_query": query, "top_k": TOP_K + SPARE}
+        )
     )
     try:
         with ThreadPoolExecutor(len(scopes)) as pool:  # about 3 s each from here: a demo visitor's two scopes at once
-            found = [m for got in pool.map(search, scopes) for m in got]
+            found = [m for got in pool.map(search, scopes) for m in got if not same_order(m, order)]
     except Exception as e:
         print(f"Memory Bank search failed: {e}")
         return None
