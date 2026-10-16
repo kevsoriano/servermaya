@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { load } from './firebase'
 
 const IMAGE_TYPES = 'image/jpeg,image/png,image/gif' // what Messenger shows as an image
+const DEMO_IMAGE_TYPES = `${IMAGE_TYPES},image/webp`
 
 type Props = {
   conversationId: string
@@ -11,16 +12,19 @@ type Props = {
   /** When the 24-hour reply window closes. Unknown means the backend decides. */
   until?: Date | null
   onSent?: () => void
+  /** Demo chats only: write as the customer instead of the seller. */
+  asCustomer?: boolean
 }
 
-/** Sends one message as the Page. Nothing is sent without the seller pressing Send. */
-export default function Reply({ conversationId, text, setText, orderId, until, onSent }: Props) {
+/** Sends one message as the Page. Nothing is sent without the seller pressing Send. In a demo chat the message is only stored. */
+export default function Reply({ conversationId, text, setText, orderId, until, onSent, asCustomer }: Props) {
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
   const [image, setImage] = useState<File>()
   const [picker, setPicker] = useState(0) // remounts the file input so the same file can be picked again
   const [openedAt] = useState(() => Date.now())
-  const closed = until !== undefined && (!until || until.getTime() < openedAt)
+  const demo = conversationId.startsWith('demo_')
+  const closed = !demo && until !== undefined && (!until || until.getTime() < openedAt)
 
   const clearImage = () => (setImage(undefined), setPicker((n) => n + 1))
 
@@ -29,7 +33,7 @@ export default function Reply({ conversationId, text, setText, orderId, until, o
     e.preventDefault()
     setBusy(true)
     setStatus('')
-    const path = `/conversations/${conversationId}/reply`
+    const path = `/conversations/${conversationId}/${asCustomer ? 'customer' : 'reply'}`
     if (text.trim()) {
       await load(path, {
         method: 'POST',
@@ -58,10 +62,10 @@ export default function Reply({ conversationId, text, setText, orderId, until, o
       .finally(() => setBusy(false))
 
   return (
-    <form className="reply" onSubmit={submit}>
+    <form className={asCustomer ? "reply as-customer" : "reply"} onSubmit={submit}>
       <textarea
-        aria-label="Message to the customer on Messenger"
-        placeholder={closed ? 'Reply window closed' : 'Reply in Messenger…'}
+        aria-label={asCustomer ? 'Message from the customer' : demo ? 'Message to the customer' : 'Message to the customer on Messenger'}
+        placeholder={asCustomer ? 'Write as the customer…' : demo ? 'Reply as the seller…' : closed ? 'Reply window closed' : 'Reply in Messenger…'}
         value={text}
         onChange={(e) => setText(e.target.value)}
         maxLength={2000}
@@ -70,7 +74,7 @@ export default function Reply({ conversationId, text, setText, orderId, until, o
       />
       <div className="reply-foot">
         <small>
-          {closed
+          {demo ? (asCustomer ? 'You play the customer in a demo chat.' : 'Demo chat: kept in this app, never sent to Messenger.') : closed
             ? <>Messenger only allows replies within 24 hours of the customer's last message{until && <> (closed {until.toLocaleString()})</>}.</>
             : until && <>You can reply until {until.toLocaleString()}.</>}
         </small>
@@ -85,7 +89,7 @@ export default function Reply({ conversationId, text, setText, orderId, until, o
         ) : (
           <label className="attach">
             Attach image
-            <input key={picker} type="file" accept={IMAGE_TYPES} disabled={closed} hidden onChange={(e) => setImage(e.target.files?.[0])} />
+            <input key={picker} type="file" accept={demo ? DEMO_IMAGE_TYPES : IMAGE_TYPES} disabled={closed} hidden onChange={(e) => setImage(e.target.files?.[0])} />
           </label>
         )}
         <button className="primary" disabled={busy || closed || (!text.trim() && !image)}>{busy ? 'Sending…' : 'Send'}</button>

@@ -14,6 +14,7 @@ type Conversation = {
   awaiting_reply: boolean
   reply_until: string | null
   order_actions: string[]
+  demo?: boolean
 }
 type Message = { id: string; text: string; from_page: boolean; from_name: string; created_time: string; attachments: Attachment[] }
 type Attachment = { kind: 'image' | 'video' | 'audio' | 'file'; name: string | null; url: string; preview_url: string | null }
@@ -46,6 +47,73 @@ function replyUntil(messages: Message[]) {
 
 const HOUR = 3600 * 1000
 
+/** Demo chats live in this app only, so judges can try every step without Messenger. */
+function DemoTools({ onDone }: { onDone: (id?: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const [name, setName] = useState('')
+  const [chat, setChat] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const create = (e: React.FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setError('')
+    load<{ id: string }>('/demo/threads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim() || 'Demo customer', chat }),
+    })
+      .then(({ id }) => (setOpen(false), setName(''), setChat(''), onDone(id)), (e) => setError(e.message))
+      .finally(() => setBusy(false))
+  }
+
+  const reset = () => {
+    if (!confirm('Delete your demo chats and every order made from them, then load the starting demo chats again? Messenger chats and their orders are not touched.')) return
+    setBusy(true)
+    setError('')
+    load('/demo/reset', { method: 'POST' })
+      .then(() => onDone(), (e) => setError(e.message))
+      .finally(() => setBusy(false))
+  }
+
+  return (
+    <div className="demo-tools">
+      <p className="muted">
+        <small>Demo chats stay in this app. You write both sides; nothing is sent to Messenger.</small>
+      </p>
+      {open ? (
+        <form onSubmit={create}>
+          <label>
+            Customer name
+            <input value={name} onChange={(e) => setName(e.target.value)} maxLength={100} placeholder="Demo customer" />
+          </label>
+          <label>
+            Chat (optional): start each message with Customer: or Seller:
+            <textarea
+              rows={6}
+              value={chat}
+              onChange={(e) => setChat(e.target.value)}
+              maxLength={50000}
+              placeholder={'Customer: Hi, magkano po yung mug?\nSeller: ₱180 each po.'}
+            />
+          </label>
+          <p className="actions">
+            <button className="primary" disabled={busy}>Create</button>
+            <button type="button" onClick={() => setOpen(false)}>Cancel</button>
+          </p>
+        </form>
+      ) : (
+        <p className="actions">
+          <button onClick={() => setOpen(true)} disabled={busy}>New demo chat</button>
+          <button onClick={reset} disabled={busy}>{busy ? 'Resetting…' : 'Reset demo chats'}</button>
+        </p>
+      )}
+      {error && <p role="alert">{error}</p>}
+    </div>
+  )
+}
+
 export function Avatar({ name, src }: { name: string; src?: string | null }) {
   const [broken, setBroken] = useState(false) // Meta's photo links expire; fall back to initials
   if (src && !broken) return <img className="avatar" src={src} alt="" onError={() => setBroken(true)} />
@@ -77,6 +145,7 @@ export default function Conversations() {
   const [order, setOrder] = useState<Order>()
   const [drafting, setDrafting] = useState(false)
   const [reply, setReply] = useState('')
+  const [asCustomer, setAsCustomer] = useState('')
 
   useEffect(() => {
     load<Conversation[]>('/conversations').then(setList, (e) => setError(e.message))
@@ -117,8 +186,24 @@ export default function Conversations() {
     setMessages(undefined)
     setOrder(undefined)
     setReply('')
+    setAsCustomer('')
     setError('')
     load<Message[]>(`/conversations/${id}`).then(setMessages, (e) => setError(e.message))
+  }
+
+  const reloadMessages = () => load<Message[]>(`/conversations/${openId}`).then(setMessages, (e) => setError(e.message))
+
+  // After a new demo chat, open it; after a reset, close the open demo chat, which no longer exists.
+  const demoChanged = (id?: string) => {
+    if (!id && openId?.startsWith('demo_')) {
+      setOpenId(undefined)
+      setMessages(undefined)
+      setOrder(undefined)
+    }
+    load<Conversation[]>('/conversations').then((l) => {
+      setList(l)
+      if (id) open(id)
+    }, (e) => setError(e.message))
   }
 
   const createDraft = () => {
@@ -129,13 +214,14 @@ export default function Conversations() {
       .finally(() => setDrafting(false))
   }
 
-  const customer = list?.find((c) => c.id === openId)?.customer
+  const thread = list?.find((c) => c.id === openId)
+  const customer = thread?.customer
   const name = customer?.name ?? 'Unknown'
 
   return (
     <div className="inbox">
       <aside className="pane">
-        <h2 className="pane-title">Messenger</h2>
+        <h2 className="pane-title">Chats</h2>
         {!list && !error && <p className="muted">Loading…</p>}
         {list?.length === 0 && <p className="muted">No conversations yet.</p>}
         <ul className="threads">
@@ -154,6 +240,7 @@ export default function Conversations() {
                     </time>
                   </div>
                   <span className="snippet">{c.snippet}</span>
+                  {c.demo && <mark className="source demo">Demo</mark>}
                   {!!c.open_checks && <mark>{c.open_checks} {c.open_checks === 1 ? 'check' : 'checks'} before shipping</mark>}
                   {pending(c).map((p) => (
                     <mark key={p} className="pending">
@@ -165,6 +252,7 @@ export default function Conversations() {
             </li>
           ))}
         </ul>
+        {list && <DemoTools onDone={demoChanged} />}
       </aside>
       <section className="pane chat">
         {openId && (
@@ -197,9 +285,12 @@ export default function Conversations() {
             conversationId={openId}
             text={reply}
             setText={setReply}
-            until={replyUntil(messages)}
-            onSent={() => load<Message[]>(`/conversations/${openId}`).then(setMessages, (e) => setError(e.message))}
+            until={thread?.demo ? undefined : replyUntil(messages)}
+            onSent={reloadMessages}
           />
+        )}
+        {openId && messages && thread?.demo && (
+          <Reply conversationId={openId} text={asCustomer} setText={setAsCustomer} asCustomer onSent={reloadMessages} />
         )}
       </section>
       {openId && messages && (

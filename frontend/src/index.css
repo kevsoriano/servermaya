@@ -369,6 +369,23 @@ mark.status.confirmed {
   border-radius: 12px;
 }
 
+/* Demo chats: the judge also writes as the customer, in a box that can't be mistaken for the seller's. */
+.reply.as-customer {
+  margin-top: 0;
+  border-style: dashed;
+}
+
+.demo-tools {
+  margin-top: 1rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--line);
+}
+
+.demo-tools textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
 .reply textarea {
   width: 100%;
   box-sizing: border-box;

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { load, peso, STATUS } from './firebase'
+import { fromChat, load, peso, STATUS } from './firebase'
 import Reply from './Reply'
 import Signals from './Signals'
 import Packing, { type PackingState } from './Packing'
@@ -294,8 +294,8 @@ export default function OrderView({ order, onChange }: { order: Order; onChange:
         </>
       )}
 
-      {order.source?.type === 'messenger' && <Signals conversationId={order.source.conversation_id} messages={messages} />}
-      {order.source?.type !== 'messenger' && draft.claims.map((c, n) => (
+      {fromChat(order) && <Signals conversationId={order.source.conversation_id} messages={messages} />}
+      {!fromChat(order) && draft.claims.map((c, n) => (
         <p key={n} className="claim">
           <strong>Unverified {c.kind} claim.</strong> {c.text}
           {src(c.sources)}
@@ -379,7 +379,7 @@ export default function OrderView({ order, onChange }: { order: Order; onChange:
               </button>
             </p>
           )}
-          {order.source?.type === 'messenger' && (message || link) && (
+          {fromChat(order) && (message || link) && (
             <Reply conversationId={order.source.conversation_id} orderId={order.id} text={message} setText={setMessage} />
           )}
           <p className="actions">

@@ -29,6 +29,7 @@ import packing as pack
 import receipts as gcash
 import claims as cases
 import delivery
+import demo
 import patterns
 import refunds
 
@@ -122,7 +123,11 @@ def profile_pics(psids: list[str]) -> dict[str, str | None]:
 # ponytail: first page only (25 threads, 50 messages), add paging when a Page outgrows it
 @app.get("/api/conversations")
 def conversations(user: dict = Depends(current_user)):
-    data = graph(f"{PAGE_ID}/conversations", platform="messenger", fields="id,updated_time,snippet,participants,messages.limit(1){from,created_time}")
+    try:
+        data = graph(f"{PAGE_ID}/conversations", platform="messenger", fields="id,updated_time,snippet,participants,messages.limit(1){from,created_time}")
+    except HTTPException as e:
+        print(f"Messenger thread list failed: {e.detail}")  # demo chats still load, so the app stays usable
+        data = {}
     threads = data.get("data", [])
     seen, actions = read_marks(user), order_actions([c["id"] for c in threads])
     customers = {c["id"]: next((p for p in c.get("participants", {}).get("data", []) if p.get("id") != PAGE_ID), None) for c in threads}
@@ -145,7 +150,122 @@ def conversations(user: dict = Depends(current_user)):
             "reply_until": (at + REPLY_WINDOW).isoformat() if at else None,
             "order_actions": actions.get(c["id"], []),
         })
-    return out
+    return out + demo_list(user)
+
+
+def demo_threads():
+    return store_doc().collection("demoThreads")
+
+
+def seed_demo(user: dict):
+    batch = clients()[1].batch()
+    for t in demo.seed(user["uid"], datetime.now(timezone.utc)):
+        batch.set(demo_threads().document(demo.new_id()), t)
+    batch.commit()
+
+
+def demo_list(user: dict) -> list[dict]:
+    """This seller's demo chats, seeded the first time they open the inbox. Never read state or reply windows: nobody is waiting."""
+    try:
+        store_doc().collection("demoUsers").document(user["uid"]).create({"seeded_at": firestore.SERVER_TIMESTAMP})
+        seed_demo(user)
+    except AlreadyExists:
+        pass
+    docs = sorted(demo_threads().where(filter=firestore.FieldFilter("owner", "==", user["uid"])).stream(),
+                  key=lambda d: d.get("updated_time"), reverse=True)
+    actions = order_actions([d.id for d in docs])
+    return [{"id": d.id, "updated_time": d.get("updated_time"), "snippet": d.get("snippet"), "customer": {"id": d.id, "name": d.get("name"), "picture": None},
+             "open_checks": cached_open_checks(d.id), "unread": False, "awaiting_reply": False, "reply_until": None,
+             "order_actions": actions.get(d.id, []), "demo": True} for d in docs]
+
+
+def demo_doc(conversation_id: str) -> dict:
+    snap = demo_threads().document(conversation_id).get()
+    if not snap.exists:
+        raise HTTPException(404, "Demo chat not found")
+    return snap.to_dict()
+
+
+def demo_post(conversation_id: str, from_page: bool, text: str, attachment: dict | None = None) -> dict:
+    """Add a message to a demo chat. Nothing goes to Messenger."""
+    d = demo_doc(conversation_id)
+    if len(d["messages"]) >= demo.MAX_MESSAGES:
+        raise HTTPException(409, "This demo chat is full. Start a new one.")
+    m = demo.message(from_page, d["name"], text, datetime.now(timezone.utc), [attachment] if attachment else None)
+    demo_threads().document(conversation_id).update({"messages": firestore.ArrayUnion([m]), "updated_time": m["created_time"],
+                                                     "snippet": text or "Sent a photo"})
+    return {"message_id": m["id"]}
+
+
+DEMO_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+
+
+async def demo_image(conversation_id: str, request: Request, from_page: bool) -> dict:
+    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if content_type not in DEMO_IMAGE_TYPES:
+        raise HTTPException(415, "Send a JPEG, PNG, GIF or WebP image")
+    data = await request.body()
+    if not data or len(data) > pack.MAX_PHOTO_BYTES:
+        raise HTTPException(413, "Images must be under 10 MB")
+    sha = hashlib.sha256(data).hexdigest()
+    path = f"stores/{STORE}/demo/{sha}"
+    try:
+        await run_in_threadpool(lambda: bucket().blob(path).upload_from_string(data, content_type=content_type, if_generation_match=0))
+    except PreconditionFailed:
+        pass  # the same image was sent before
+    attachment = {"kind": "image", "mime_type": content_type, "name": None, "url": f"/api/public/demo/images/{sha}", "preview_url": None, "path": path}
+    return await run_in_threadpool(demo_post, conversation_id, from_page, "", attachment)
+
+
+# ponytail: public by hash so a plain <img> can show it; demo images only. Fetch with the seller's token if real photos ever land here.
+@app.get("/api/public/demo/images/{sha}")
+def demo_image_file(sha: str):
+    if not re.fullmatch(r"[0-9a-f]{64}", sha):
+        raise HTTPException(404, "Image not found")
+    blob = bucket().get_blob(f"stores/{STORE}/demo/{sha}")
+    if not blob:
+        raise HTTPException(404, "Image not found")
+    return Response(blob.download_as_bytes(), media_type=blob.content_type, headers={"Cache-Control": "private, max-age=86400"})
+
+
+class DemoChat(BaseModel):
+    name: str = Field(default="Demo customer", min_length=1, max_length=100)
+    chat: str = Field(default="", max_length=50_000)
+
+
+@app.post("/api/demo/threads")
+def new_demo_chat(body: DemoChat, user: dict = Depends(current_user)):
+    """A demo chat from pasted text, or an empty one to type into."""
+    try:
+        lines = demo.parse(body.chat)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    cid = demo.new_id()
+    demo_threads().document(cid).set(demo.thread(body.name.strip(), lines, user["uid"], datetime.now(timezone.utc)))
+    return {"id": cid}
+
+
+@app.post("/api/demo/reset")
+def reset_demo(user: dict = Depends(current_user)):
+    """Delete this seller's demo chats and every order made from them, then seed fresh ones. Real Messenger orders are never touched."""
+    ids = [d.id for d in demo_threads().where(filter=firestore.FieldFilter("owner", "==", user["uid"])).stream()]
+    db, order_ids = clients()[1], []
+    for i in range(0, len(ids), 30):  # Firestore caps an "in" filter at 30 values
+        for o in orders().where(filter=firestore.FieldFilter("source.conversation_id", "in", ids[i : i + 30])).stream():
+            order_ids.append(o.id)
+            db.recursive_delete(o.reference)
+        for s in store_doc().collection("sentMessages").where(filter=firestore.FieldFilter("conversation_id", "in", ids[i : i + 30])).stream():
+            s.reference.delete()
+    # Otherwise a receipt reused after the reset would be flagged as already used on a deleted order.
+    for name in ("gcashImages", "gcashReferences", "gcashReceiptDetails"):
+        for i in range(0, len(order_ids), 30):
+            for d in store_doc().collection(name).where(filter=firestore.FieldFilter("order_id", "in", order_ids[i : i + 30])).stream():
+                d.reference.delete()
+    for cid in ids:
+        signal_docs().document(cid).delete()
+        demo_threads().document(cid).delete()
+    seed_demo(user)
+    return {"deleted_chats": len(ids), "deleted_orders": len(order_ids)}
 
 
 def read_docs():
@@ -164,7 +284,7 @@ def read_marks(user: dict) -> dict:
 @app.post("/api/conversations/{conversation_id}/seen")
 def mark_seen(conversation_id: str, user: dict = Depends(current_user)):
     """Recorded in our database only. Nothing goes to Meta, so the customer never gets a "Seen" receipt."""
-    if not re.fullmatch(r"t_\d+", conversation_id):
+    if not (re.fullmatch(r"t_\d+", conversation_id) or demo.is_demo(conversation_id)):
         raise HTTPException(400, "Invalid conversation id")
     read_docs().document(user["uid"]).set({"seen": {conversation_id: datetime.now(timezone.utc)}}, merge=True)
     return {"ok": True}
@@ -224,10 +344,17 @@ def cached_open_checks(conversation_id: str) -> int | None:
 
 @app.get("/api/conversations/{conversation_id}")
 def conversation(conversation_id: str, user: dict = Depends(current_user)):
+    if demo.is_demo(conversation_id):
+        return demo_doc(conversation_id)["messages"]
     # The id goes into a Graph URL sent with the Page token, so only accept the thread-id shape.
     if not re.fullmatch(r"t_\d+", conversation_id):
         raise HTTPException(400, "Invalid conversation id")
     return fetch_messages(conversation_id)
+
+
+def thread_messages(conversation_id: str) -> list[dict]:
+    """Current messages of the chat an order came from, Messenger or demo."""
+    return demo_doc(conversation_id)["messages"] if demo.is_demo(conversation_id) else fetch_messages(conversation_id)
 
 
 def attachments(message: dict) -> list[dict]:
@@ -352,6 +479,8 @@ def record_sent(conversation_id: str, order_id: str | None, sent: dict, user: di
 @app.post("/api/conversations/{conversation_id}/reply")
 def reply(conversation_id: str, body: Reply, user: dict = Depends(current_user)):
     """Send one text message as the Page. Only ever called from an explicit seller click."""
+    if demo.is_demo(conversation_id):
+        return demo_post(conversation_id, True, body.text)
     customer = customer_to_reply(conversation_id, user)
     sent = graph(f"{PAGE_ID}/messages", send={"recipient": {"id": customer}, "messaging_type": "RESPONSE", "message": {"text": body.text}})
     return record_sent(conversation_id, body.order_id, sent, user, text=body.text)
@@ -363,6 +492,8 @@ REPLY_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif"}  # what Messenger s
 @app.post("/api/conversations/{conversation_id}/reply/image")
 async def reply_image(conversation_id: str, request: Request, order_id: str | None = None, user: dict = Depends(current_user)):
     """Send one image as the Page, such as the seller's GCash QR. The body is the image itself. Kept as evidence of what was sent."""
+    if demo.is_demo(conversation_id):
+        return await demo_image(conversation_id, request, True)
     content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
     if content_type not in REPLY_IMAGE_TYPES:
         raise HTTPException(415, "Send a JPEG, PNG or GIF image")
@@ -386,6 +517,24 @@ async def reply_image(conversation_id: str, request: Request, order_id: str | No
     )
     image = {"path": path, "sha256": sha, "content_type": content_type, "size": len(data)}
     return await run_in_threadpool(record_sent, conversation_id, order_id, sent, user, image=image)
+
+
+def demo_only(conversation_id: str):
+    if not demo.is_demo(conversation_id):
+        raise HTTPException(404, "Only demo chats take messages written as the customer")
+
+
+@app.post("/api/conversations/{conversation_id}/customer")
+def demo_customer(conversation_id: str, body: Reply, user: dict = Depends(current_user)):
+    """In a demo chat, the judge also plays the customer."""
+    demo_only(conversation_id)
+    return demo_post(conversation_id, False, body.text)
+
+
+@app.post("/api/conversations/{conversation_id}/customer/image")
+async def demo_customer_image(conversation_id: str, request: Request, user: dict = Depends(current_user)):
+    demo_only(conversation_id)
+    return await demo_image(conversation_id, request, False)
 
 
 @lru_cache
@@ -412,7 +561,7 @@ def draft_order(conversation_id: str, user: dict = Depends(current_user)):
     order = {
         "status": "draft",
         "version": 1,
-        "source": {"type": "messenger", "conversation_id": conversation_id},
+        "source": {"type": "demo" if demo.is_demo(conversation_id) else "messenger", "conversation_id": conversation_id},
         "messages": messages,  # snapshot of the evidence the draft was built from
         "draft": draft,  # copy of the current version, for listing
         "confirmations": [],
@@ -969,12 +1118,15 @@ def transcribe(data: bytes, content_type: str, system: str, schema: type[BaseMod
 
 def read_receipt(order_id: str, manual: dict, message: dict, attachment: dict, now: datetime) -> dict:
     """Copy one screenshot into our storage as evidence, have Gemini transcribe it, and run the checks."""
-    try:
-        r = requests.get(attachment["url"], timeout=20)
-        r.raise_for_status()
-    except requests.RequestException:
-        raise HTTPException(502, "Could not download a screenshot from Messenger. Try again.")
-    data, content_type = r.content, r.headers.get("content-type", "").split(";")[0].strip().lower()
+    if attachment.get("path"):  # a demo chat's image, already in our storage
+        data, content_type = bucket().blob(attachment["path"]).download_as_bytes(), attachment["mime_type"]
+    else:
+        try:
+            r = requests.get(attachment["url"], timeout=20)
+            r.raise_for_status()
+        except requests.RequestException:
+            raise HTTPException(502, "Could not download a screenshot from Messenger. Try again.")
+        data, content_type = r.content, r.headers.get("content-type", "").split(";")[0].strip().lower()
     if content_type not in pack.IMAGE_TYPES or len(data) > pack.MAX_PHOTO_BYTES:
         raise HTTPException(415, "A screenshot is not a supported image")
     sha = hashlib.sha256(data).hexdigest()
@@ -1015,12 +1167,12 @@ def read_gcash_receipts(order_id: str, user: dict = Depends(current_user)):
         manual = gcash.current(order)
     except rules.Refused as e:
         raise HTTPException(409, str(e))
-    if order.get("source", {}).get("type") != "messenger":
-        raise HTTPException(409, "This order did not come from Messenger")
+    if order.get("source", {}).get("type") not in ("messenger", "demo"):
+        raise HTTPException(409, "This order did not come from a chat")
     known = {c["message_id"] for c in manual["claims"]}
     images = [
         (m, a)
-        for m in fetch_messages(order["source"]["conversation_id"])
+        for m in thread_messages(order["source"]["conversation_id"])
         if not m["from_page"] and m["id"] not in known and datetime.fromisoformat(m["created_time"]) >= manual["requested_at"] - gcash.SLACK
         for a in m["attachments"][:1]
         if a["kind"] == "image" and a["name"] != "sticker"
@@ -1391,9 +1543,9 @@ def review_claim(order_id: str, cid: str, user: dict = Depends(current_user)):
     except rules.Refused as e:
         raise HTTPException(404, str(e))
     messages = order.get("messages", [])
-    if (order.get("source") or {}).get("type") == "messenger":
+    if (order.get("source") or {}).get("type") in ("messenger", "demo"):
         try:
-            messages = fetch_messages(order["source"]["conversation_id"])
+            messages = thread_messages(order["source"]["conversation_id"])
         except HTTPException:
             pass  # the snapshot taken when the order was drafted
     blocks, images = cases.evidence(order, messages, c)

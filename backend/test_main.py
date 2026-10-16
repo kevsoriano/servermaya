@@ -365,6 +365,7 @@ def test_thread_list_read_state_and_pending_actions(monkeypatch):
         thread("t_3", "7", now - timedelta(hours=2)),  # customer waiting, but seen since
     ]})
     monkeypatch.setattr(main, "cached_open_checks", lambda cid: None)
+    monkeypatch.setattr(main, "demo_list", lambda user: [])
     monkeypatch.setattr(main, "read_marks", lambda user: {"t_3": now - timedelta(hours=1)})
     monkeypatch.setattr(main, "order_actions", lambda ids: {"t_2": ["Waiting for payment"]})
     try:
@@ -1024,3 +1025,42 @@ def test_patterns_counts_denominators_and_counterexamples():
     changed = {**rush, "incidents_hash": "other"}
     shown = patterns.with_review([changed], reviewed)[0]
     assert shown["review"]["status"] == "new" and shown["previous_review"]["status"] == "superseded"
+
+
+def test_demo_chats_parse_seed_and_never_reach_messenger(monkeypatch):
+    from datetime import datetime, timezone
+
+    import demo
+
+    assert demo.parse("Customer: hi\n  2 pcs po\n\nseller: ₱180 each") == [(False, "hi\n2 pcs po"), (True, "₱180 each")]
+    assert demo.parse("") == []
+    for bad in ("hello", "Customer:"):
+        try:
+            demo.parse(bad)
+            assert False, bad
+        except ValueError:
+            pass
+    now = datetime.now(timezone.utc)
+    threads = demo.seed("u1", now)
+    assert len(threads) == len(demo.SEED) and all(t["owner"] == "u1" for t in threads)
+    m = threads[0]["messages"]
+    assert [x["created_time"] for x in m] == sorted(x["created_time"] for x in m) and m[-1]["created_time"] == now.isoformat()
+    assert {x["from_name"] for x in m} == {"Ana Reyes", demo.SHOP}
+    assert demo.is_demo(demo.new_id()) and not demo.is_demo("t_123") and not demo.is_demo("demo_x/../t_1")
+
+    main.app.dependency_overrides[main.current_user] = lambda: {"uid": "u1", "email": "s@example.com"}
+    posted = []
+    monkeypatch.setattr(main, "graph", lambda *a, **k: (_ for _ in ()).throw(AssertionError("demo chats never call Messenger")))
+    monkeypatch.setattr(main, "demo_doc", lambda cid: {"name": "Ana", "messages": [m[0]]})
+    monkeypatch.setattr(main, "demo_threads", lambda: type("C", (), {"document": lambda self, cid: type("D", (), {
+        "update": lambda self, u: posted.append(u)})()})())
+    try:
+        cid = demo.new_id()
+        assert client.get(f"/api/conversations/{cid}").json()[0]["id"] == m[0]["id"]
+        assert client.post("/api/conversations/t_1/customer", json={"text": "hi"}).status_code == 404  # only demo chats
+        assert client.post(f"/api/conversations/{cid}/customer", json={"text": "Bayad na po"}).status_code == 200
+        assert client.post(f"/api/conversations/{cid}/reply", json={"text": "Salamat po"}).status_code == 200
+        sent = [u["messages"].values[0] for u in posted]
+        assert [(x["from_page"], x["from_name"], x["text"]) for x in sent] == [(False, "Ana", "Bayad na po"), (True, demo.SHOP, "Salamat po")]
+    finally:
+        main.app.dependency_overrides.clear()

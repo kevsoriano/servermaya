@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { load, localMobile, peso } from './firebase'
+import { fromChat, load, localMobile, peso } from './firebase'
 import type { Order } from './OrderView'
 import { Photo } from './Packing'
 
@@ -230,7 +230,7 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
           ) : (
             <>
               <p className="actions">
-                <button disabled={!!busy || order.source?.type !== 'messenger'} onClick={() => run('Reading screenshots… about 10 seconds each', '/read')}>
+                <button disabled={!!busy || !fromChat(order)} onClick={() => run('Reading screenshots… about 10 seconds each', '/read')}>
                   Check receipt screenshots
                 </button>
               </p>

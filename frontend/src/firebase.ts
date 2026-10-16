@@ -53,3 +53,6 @@ export const CLAIM_TYPES: Record<string, string> = {
   cancellation: 'Cancellation',
   other: 'Other',
 }
+
+/** Orders drafted from a chat, real Messenger or demo, have messages to check and a thread to reply in. */
+export const fromChat = (o: { source?: { type: string } }) => o.source?.type === 'messenger' || o.source?.type === 'demo'
