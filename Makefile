@@ -44,7 +44,7 @@ test:
 	cd frontend && npm run lint && npm run build
 
 eval:
-	cd backend && uv run python eval.py
+	cd backend && uv run python eval.py $(or $(RUNS),3)
 
 deploy: deploy-backend deploy-frontend
 
