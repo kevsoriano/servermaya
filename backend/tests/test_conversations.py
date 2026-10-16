@@ -187,7 +187,11 @@ def test_thread_list_read_state_and_pending_actions(monkeypatch):
 
     assert conversations.order_action({"status": "draft"}) == "Send the draft order"
     assert conversations.order_action({"status": "confirmed"}) == "Request payment"
-    assert conversations.order_action({"status": "confirmed", "payment": {"status": "verified"}}) is None
+    paid = {"status": "confirmed", "version": 1, "payment": {"status": "verified", "version": 1}}
+    assert conversations.order_action(paid) == "Ready to pack"
+    assert conversations.order_action({**paid, "packing": {"version": 1, "completed": None}}) == "Ready to pack"  # photos, not done
+    v2 = {**paid, "version": 2, "payment": {"status": "verified", "version": 2}}
+    assert conversations.order_action({**v2, "packing": {"version": 1, "completed": {"by": "s"}}}) == "Ready to pack"  # packed for v1 only
     assert conversations.order_action({"status": "cancelled"}) is None
 
 

@@ -132,6 +132,9 @@ def order_action(order: dict) -> str | None:
                 return "Ready to dispatch"
         except rules.Refused:
             pass
+        packing = order.get("packing") or {}
+        if pack.paid_by(order) and not (packing.get("version") == order.get("version") and packing.get("completed")):
+            return "Ready to pack"
         manual = order.get("manual_payment") or {}
         if manual and manual["version"] == order.get("version") and (order.get("payment") or {}).get("status") != "verified":
             return GCASH_ACTIONS[manual["status"]]

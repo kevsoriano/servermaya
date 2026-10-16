@@ -183,7 +183,7 @@ def test_gcash_manual_payment_rules():
     order |= gc.confirm(order, "1012 3456 78901", "me", "", now, False)
     c = order["manual_payment"]["confirmed"]
     assert order["manual_payment"]["status"] == "seller_confirmed" and (c["reference"], c["claim_id"], c["reason"]) == ("1012345678901", "a", None)
-    assert conversations.order_action(order) is None
+    assert conversations.order_action(order) == "Ready to pack"
     assert gc.add_claims(order, [claim("c", "4012345678901")]) == {}  # nothing changes after confirming
     with pytest.raises(rules.Refused):
         rules.reusable_payment(order)  # no PayMongo request on top of a confirmed GCash payment
@@ -202,7 +202,7 @@ def test_gcash_manual_payment_rules():
     paid = {**order, "payment": {"status": "verified", "version": 2}}
     with pytest.raises(rules.Refused):
         gc.request({**paid, "manual_payment": None}, pay_to, "me", now)
-    assert conversations.order_action(paid) is None
+    assert conversations.order_action(paid) == "Ready to pack"
 
 
 def test_gcash_payment_the_customer_says_they_made():
