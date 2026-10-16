@@ -391,7 +391,9 @@ async def reply_image(conversation_id: str, request: Request, order_id: str | No
 @lru_cache
 def clients():
     """Created on first use so tests and Messenger-only routes need no Google credentials."""
-    return genai.Client(vertexai=True, project=PROJECT_ID, location="global"), firestore.Client(project=PROJECT_ID)
+    # 90 s: one Vertex request once hung for over 7 minutes; callers turn the timeout into a 502.
+    gemini = genai.Client(vertexai=True, project=PROJECT_ID, location="global", http_options={"timeout": 90_000})
+    return gemini, firestore.Client(project=PROJECT_ID)
 
 
 def orders():
