@@ -54,8 +54,11 @@ app = FastAPI()
 _http = google_requests.Request()
 
 
-def current_user(authorization: str = Header(default="")) -> dict:
-    """Verify the Firebase ID token and the email allowlist. Every protected route depends on this."""
+def current_user(request: Request, authorization: str = Header(default="")) -> dict:
+    """Verify the Firebase ID token and the email allowlist. Every protected route depends on this.
+
+    Anonymous Firebase sign-ins are demo visitors: they pass without the allowlist, but only reach their own demo chats and
+    the orders made from them (see demo_gate)."""
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token:
         raise HTTPException(401, "Missing bearer token")
@@ -65,10 +68,48 @@ def current_user(authorization: str = Header(default="")) -> dict:
         raise HTTPException(401, "Invalid token")
     if claims.get("iss") != f"https://securetoken.google.com/{PROJECT_ID}":
         raise HTTPException(401, "Invalid token")
+    if (claims.get("firebase") or {}).get("sign_in_provider") == "anonymous":
+        user = {"uid": claims["sub"], "email": "demo visitor", "name": "Demo visitor", "demo": True}
+        demo_gate(request, user)
+        return user
     email = (claims.get("email") or "").lower()
     if not claims.get("email_verified") or email not in ALLOWLIST:
         raise HTTPException(403, "This account is not allowed")
-    return {"uid": claims["sub"], "email": email, "name": claims.get("name")}
+    return {"uid": claims["sub"], "email": email, "name": claims.get("name"), "demo": False}
+
+
+# Routes a demo visitor may call that name no chat or order. Routes with a chat or order in the path are allowed only for
+# the visitor's own; every other route is refused, so a new route stays closed to demo visitors until it is listed here.
+DEMO_ROUTES = {
+    ("GET", "/api/me"), ("GET", "/api/conversations"), ("POST", "/api/demo/threads"), ("POST", "/api/demo/reset"),
+    ("GET", "/api/orders"), ("GET", "/api/settings/gcash"), ("GET", "/api/settings/dispatch"), ("GET", "/api/patterns"),
+    ("POST", "/api/gcash/statements"),
+}
+
+
+def demo_gate(request: Request, user: dict):
+    params = request.path_params
+    if "conversation_id" in params:
+        cid = params["conversation_id"]
+        if not demo.is_demo(cid) or demo_doc(cid).get("owner") != user["uid"]:
+            raise HTTPException(404, "Demo chat not found")
+    if "order_id" in params:
+        snap = orders().document(params["order_id"]).get()
+        if not snap.exists or not visible(snap.to_dict(), user):
+            raise HTTPException(404, "Order not found")
+    if not params.keys() & {"conversation_id", "order_id"} and (request.method, getattr(request.scope.get("route"), "path", "")) not in DEMO_ROUTES:
+        raise HTTPException(403, "Not available in the demo")
+
+
+def visible(order: dict, user: dict) -> bool:
+    """Demo orders belong to whoever made their chat; everything else is the store's, closed to demo visitors."""
+    source = order.get("source") or {}
+    return source.get("owner") == user["uid"] if source.get("type") == "demo" else not user.get("demo")
+
+
+# Fictional, so a demo visitor never sees the seller's real GCash account or pickup address.
+DEMO_GCASH = {"name": "Juan Dela Cruz", "mobile": "639171234567", "qr": None, "demo": True}
+DEMO_PICKUP = {"address": "6750 Ayala Ave., Makati City", "lat": 14.5547, "lng": 121.0244, "name": "Demo shop", "phone": "+639171234567", "demo": True}
 
 
 @app.get("/api/healthz")
@@ -123,6 +164,8 @@ def profile_pics(psids: list[str]) -> dict[str, str | None]:
 # ponytail: first page only (25 threads, 50 messages), add paging when a Page outgrows it
 @app.get("/api/conversations")
 def conversations(user: dict = Depends(current_user)):
+    if user.get("demo"):
+        return demo_list(user)
     try:
         data = graph(f"{PAGE_ID}/conversations", platform="messenger", fields="id,updated_time,snippet,participants,messages.limit(1){from,created_time}")
     except HTTPException as e:
@@ -558,10 +601,13 @@ def draft_order(conversation_id: str, user: dict = Depends(current_user)):
         draft = extraction.extract(clients()[0], GEMINI_MODEL, messages)
     except Exception:
         raise HTTPException(502, "Could not extract an order from this conversation")
+    source = {"type": "messenger", "conversation_id": conversation_id}
+    if demo.is_demo(conversation_id):
+        source = {"type": "demo", "conversation_id": conversation_id, "owner": demo_doc(conversation_id)["owner"]}
     order = {
         "status": "draft",
         "version": 1,
-        "source": {"type": "demo" if demo.is_demo(conversation_id) else "messenger", "conversation_id": conversation_id},
+        "source": source,
         "messages": messages,  # snapshot of the evidence the draft was built from
         "draft": draft,  # copy of the current version, for listing
         "confirmations": [],
@@ -621,8 +667,14 @@ def change(ref, rule, by: str = "") -> dict:
 
 @app.get("/api/orders")
 def list_orders(user: dict = Depends(current_user)):
-    docs = orders().order_by("created_at", direction=firestore.Query.DESCENDING).limit(25).stream()
-    return [present(d) for d in docs]
+    if user.get("demo"):
+        docs = orders().where(filter=firestore.FieldFilter("source.owner", "==", user["uid"])).stream()
+    else:
+        # ponytail: over-fetches to skip other people's demo orders; query by source.type once demo orders outnumber real ones
+        docs = orders().order_by("created_at", direction=firestore.Query.DESCENDING).limit(100).stream()
+    mine = [d for d in docs if visible(d.to_dict(), user)]
+    mine.sort(key=lambda d: d.get("created_at") or datetime.max.replace(tzinfo=timezone.utc), reverse=True)
+    return [present(d) for d in mine[:25]]
 
 
 def retiring(ref, rule, by: str = "") -> dict:
@@ -1062,6 +1114,8 @@ def store_doc():
 
 @app.get("/api/settings/gcash")
 def get_gcash(user: dict = Depends(current_user)):
+    if user.get("demo"):
+        return DEMO_GCASH
     return (store_doc().get().to_dict() or {}).get("gcash")
 
 
@@ -1258,13 +1312,14 @@ async def upload_gcash_statement(request: Request, x_pdf_password: str = Header(
         statement = gcash.parse_statement(text)
     except rules.Refused as e:
         raise HTTPException(422, str(e))
-    return await run_in_threadpool(apply_statement, statement, hashlib.sha256(data).hexdigest(), user["email"])
+    return await run_in_threadpool(apply_statement, statement, hashlib.sha256(data).hexdigest(), user["email"], user)
 
 
-def apply_statement(statement: dict, statement_id: str, by: str) -> dict:
+def apply_statement(statement: dict, statement_id: str, by: str, user: dict) -> dict:
     now = datetime.now(timezone.utc)
     store_doc().collection("gcashStatements").document(statement_id).set({**statement, "uploaded_by": by, "uploaded_at": now})
-    waiting = list(orders().where(filter=firestore.FieldFilter("manual_payment.status", "in", ["requested", "claimed", "seller_confirmed"])).stream())
+    waiting = [d for d in orders().where(filter=firestore.FieldFilter("manual_payment.status", "in", ["requested", "claimed", "seller_confirmed"])).stream()
+               if visible(d.to_dict(), user)]
     taken = {m["confirmed"]["reference"]: d.id for d in waiting if (m := d.to_dict()["manual_payment"]).get("confirmed")}
     result = {"start": statement["start"], "last_at": statement["last_at"], "received": len(statement["credits"])}
     for d in waiting:
@@ -1308,6 +1363,8 @@ class DispatchSettings(BaseModel):
 
 @app.get("/api/settings/dispatch")
 def get_dispatch_settings(user: dict = Depends(current_user)):
+    if user.get("demo"):
+        return DEMO_PICKUP
     return (store_doc().get().to_dict() or {}).get("dispatch")
 
 
@@ -1675,21 +1732,21 @@ def check_refunds(order_id: str, user: dict = Depends(current_user)):
 
 
 # Patterns. Recomputed on every load from the store's own orders.
-def pattern_cards(days: int) -> list[dict]:
+def pattern_cards(days: int, user: dict) -> list[dict]:
     # ponytail: reads every order on each load; keep a rolling aggregate when a store has thousands of orders
-    found = [{**d.to_dict(), "id": d.id} for d in orders().stream()]
+    found = [{**o, "id": d.id} for d in orders().stream() if visible(o := d.to_dict(), user)]
     reviews = {r["key"]: r for r in (d.to_dict() for d in store_doc().collection("patternReviews").stream())}
     return patterns.with_review(patterns.analyse(found, datetime.now(timezone.utc), days), reviews)
 
 
 @app.get("/api/patterns")
 def list_patterns(days: int = 30, user: dict = Depends(current_user)):
-    return pattern_cards(max(1, min(days, 365)))
+    return pattern_cards(max(1, min(days, 365)), user)
 
 
 @app.get("/api/orders/{order_id}/patterns")
 def order_patterns(order_id: str, user: dict = Depends(current_user)):
-    return [c for c in pattern_cards(30) if any(i["order_id"] == order_id for i in c["incidents"])]
+    return [c for c in pattern_cards(30, user) if any(i["order_id"] == order_id for i in c["incidents"])]
 
 
 class PatternReviewIn(BaseModel):

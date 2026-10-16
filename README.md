@@ -4,7 +4,14 @@ An assistant for small sellers who take orders in Messenger and get paid by GCas
 
 **Live app:** https://servermaya-ai-builder-cup.web.app
 
-<!-- TODO before submission: describe how judges sign in and where the demo data is (open items 2 and 3). -->
+## Try it
+
+Open the live app and press **Try the demo**. No account is needed.
+
+- You get three demo chats, each showing something the app is built to catch: a plain order, a customer who changes the order and says they paid, and a customer who writes a fake seller message. You play both sides: reply as the seller, or write as the customer in the dashed box (images too, such as a GCash receipt).
+- **New demo chat** pastes any chat in `Customer:` / `Seller:` lines. **Reset demo chats** starts over.
+- From a chat: create the draft order, send the confirmation link, open it as the customer, pay with PayMongo's **Simulate payment** (test mode), check packing photos, book a Lalamove sandbox delivery, mark it received, report a problem and review the claim.
+- Demo visitors only see their own demo chats and orders, with a made-up GCash account and pickup address. Messenger is live but limited to app testers while the Meta app is in development mode, so real chats are not part of the demo.
 
 ## The problem
 
@@ -38,7 +45,7 @@ A small Philippine online seller keeps the order in a Messenger thread, the paym
 | **Gemini** (via Vertex AI on Agent Platform) | Six structured-output calls: chat-to-order extraction, checks before shipping, packing photo review, GCash receipt transcription, GCash history screenshot transcription, and the claim evidence review. |
 | **Cloud Run** | The FastAPI backend: all API routes, the Messenger Graph API client, and the PayMongo and Lalamove webhooks. Scales to zero. |
 | **Firebase Hosting** | Serves the React frontend and routes `/api/**` to Cloud Run on the same domain. |
-| **Firebase Authentication** | Google sign-in for sellers; the backend verifies the ID token and an email allowlist on every protected route. |
+| **Firebase Authentication** | Google sign-in for sellers, checked against an email allowlist, and anonymous sign-in for demo visitors. The backend verifies the ID token on every protected route and limits demo visitors to their own demo chats and orders. |
 | **Firestore** | Orders with their full history, claims, refunds, delivery events, settings and webhook dedupe records. Security rules deny all browser access; everything goes through the backend. |
 | **Cloud Storage** | Evidence files: packing and claim photos, GCash screenshots, images sent in replies. Stored by content hash. |
 | **Secret Manager** | API keys (Messenger, PayMongo, Lalamove) reach Cloud Run as secrets, readable only by the service account. |

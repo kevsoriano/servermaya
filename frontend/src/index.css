@@ -116,6 +116,11 @@ main {
   margin: 0 auto;
 }
 
+/* The demo banner takes its own short row; the page below still fills the rest. */
+.app:has(> .demo-banner) {
+  grid-template-rows: auto auto 1fr;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -712,4 +717,12 @@ mark.source.provider {
   padding: 0.5rem;
   background: color-mix(in srgb, currentColor 5%, transparent);
   border-radius: 0.25rem;
+}
+
+.demo-banner {
+  margin: 0;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.9rem;
+  border-radius: 8px;
+  background: color-mix(in srgb, #f5d76e 35%, transparent);
 }

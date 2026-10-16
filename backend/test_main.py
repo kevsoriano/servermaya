@@ -1064,3 +1064,45 @@ def test_demo_chats_parse_seed_and_never_reach_messenger(monkeypatch):
         assert [(x["from_page"], x["from_name"], x["text"]) for x in sent] == [(False, "Ana", "Bayad na po"), (True, demo.SHOP, "Salamat po")]
     finally:
         main.app.dependency_overrides.clear()
+
+
+def test_demo_visitors_only_reach_their_own_demo_chats_and_orders(monkeypatch):
+    import demo
+
+    anon = {"firebase": {"sign_in_provider": "anonymous"}, "email": None, "email_verified": False}
+    assert fake_token(monkeypatch, email="ok@example.com").json()["demo"] is False
+    r = fake_token(monkeypatch, **anon)
+    assert r.status_code == 200 and r.json()["demo"] is True  # no allowlist needed
+
+    mine, theirs = demo.new_id(), demo.new_id()
+    threads = {mine: {"owner": "u1", "name": "Ana", "messages": []}, theirs: {"owner": "u2", "name": "Ben", "messages": []}}
+    monkeypatch.setattr(main, "demo_doc", lambda cid: threads[cid] if cid in threads else (_ for _ in ()).throw(main.HTTPException(404, "x")))
+    found = {"o_mine": {"source": {"type": "demo", "owner": "u1"}}, "o_theirs": {"source": {"type": "demo", "owner": "u2"}},
+             "o_real": {"source": {"type": "messenger"}}}
+
+    class Snap:
+        def __init__(self, oid):
+            self.exists, self._d = oid in found, found.get(oid)
+
+        def to_dict(self):
+            return self._d
+
+    monkeypatch.setattr(main, "orders", lambda: type("C", (), {"document": lambda self, oid: type("D", (), {"get": lambda self: Snap(oid)})()})())
+    monkeypatch.setattr(main, "graph", lambda *a, **k: (_ for _ in ()).throw(AssertionError("demo visitors never reach Messenger")))
+    h = {"Authorization": "Bearer x"}
+    assert client.get(f"/api/conversations/{mine}", headers=h).status_code == 200
+    assert client.get(f"/api/conversations/{theirs}", headers=h).status_code == 404
+    assert client.get("/api/conversations/t_123", headers=h).status_code == 404  # a real Messenger thread
+    monkeypatch.setattr(main, "loaded", lambda oid: (None, found[oid]))
+    assert client.get("/api/orders/o_theirs/patterns", headers=h).status_code == 404
+    assert client.get("/api/orders/o_real/patterns", headers=h).status_code == 404
+    assert client.post("/api/orders/o_real/refunds", headers=h, json={}).status_code == 404
+    assert client.put("/api/settings/gcash", headers=h, json={"name": "X", "mobile": "09171234567"}).status_code == 403
+    assert client.put("/api/settings/dispatch", headers=h, json={}).status_code == 403
+    assert client.post("/api/patterns/review", headers=h, json={}).status_code == 403
+    assert client.get("/api/settings/gcash", headers=h).json() == main.DEMO_GCASH
+    assert client.get("/api/settings/dispatch", headers=h).json() == main.DEMO_PICKUP
+
+    me, seller = {"uid": "u1", "demo": True}, {"uid": "s1", "demo": False}
+    assert [main.visible(o, me) for o in found.values()] == [True, False, False]
+    assert [main.visible(o, seller) for o in found.values()] == [False, False, True]

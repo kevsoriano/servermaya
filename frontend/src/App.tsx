@@ -1,4 +1,4 @@
-import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth'
+import { GoogleAuthProvider, onAuthStateChanged, signInAnonymously, signInWithPopup, signOut, type User } from 'firebase/auth'
 import { useEffect, useState } from 'react'
 import Conversations from './Conversations'
 import Orders from './Orders'
@@ -7,7 +7,7 @@ import DispatchSettings from './DispatchSettings'
 import GcashSettings from './GcashSettings'
 import { api, auth } from './firebase'
 
-type Me = { uid: string; email: string; name: string | null }
+type Me = { uid: string; email: string; name: string | null; demo: boolean }
 
 export default function App() {
   // undefined = still loading, null = signed out
@@ -36,6 +36,9 @@ export default function App() {
 
   const signIn = () =>
     signInWithPopup(auth, new GoogleAuthProvider()).catch((e) => setError(e.message))
+  const tryDemo = () => signInAnonymously(auth).catch((e) => setError(e.message))
+  // A demo visitor who signs out cannot come back to the same demo, so say so first.
+  const leave = () => (!me?.demo || confirm('Signing out ends this demo. Your demo chats and orders will not come back.')) && signOut(auth)
 
   if (user === undefined) return <main className="card">Loading…</main>
 
@@ -44,7 +47,20 @@ export default function App() {
       <main className="card">
         <h1>Seller Evidence Assistant</h1>
         {error && <p role="alert">{error}</p>}
-        {user ? <button onClick={() => signOut(auth)}>Sign out</button> : <button className="primary" onClick={signIn}>Sign in with Google</button>}
+        {user ? (
+          <button onClick={() => signOut(auth)}>Sign out</button>
+        ) : (
+          <>
+            <p>
+              Try it with demo chats: you play both the seller and the customer. Nothing reaches real customers, Messenger, or real
+              money.
+            </p>
+            <p className="actions">
+              <button className="primary" onClick={tryDemo}>Try the demo</button>
+              <button onClick={signIn}>Seller sign-in with Google</button>
+            </p>
+          </>
+        )}
       </main>
     )
 
@@ -69,8 +85,13 @@ export default function App() {
         <span className="me" title={`${me.email}, verified by the backend`}>
           {me.name ?? me.email}
         </span>
-        <button onClick={() => signOut(auth)}>Sign out</button>
+        <button onClick={leave}>Sign out</button>
       </header>
+      {me.demo && (
+        <p className="demo-banner" role="note">
+          Demo: you see only your own demo chats and orders. Payments are PayMongo test mode and deliveries are the Lalamove sandbox.
+        </p>
+      )}
       {tab === 'conversations' ? (
         <Conversations />
       ) : tab === 'orders' ? (
@@ -79,6 +100,11 @@ export default function App() {
         <Patterns />
       ) : (
         <div className="page">
+          {me.demo && (
+            <p className="demo-banner" role="note">
+              Demo settings: a made-up GCash account and pickup address. They can't be changed in the demo.
+            </p>
+          )}
           <GcashSettings />
           <DispatchSettings />
         </div>
