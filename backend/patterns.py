@@ -46,8 +46,17 @@ def incidents(orders: list[dict], since: datetime) -> list[dict]:
             if c["created_at"] < since or key in seen:
                 continue
             seen.add(key)
-            out.append({"order_id": o["id"], "claim_id": c["id"], "fulfillment_id": c.get("fulfillment_id"), "type": c["type"],
-                        "at": c["created_at"], "outcome": (c.get("decision") or {}).get("action"), "status": c["status"]})
+            out.append(
+                {
+                    "order_id": o["id"],
+                    "claim_id": c["id"],
+                    "fulfillment_id": c.get("fulfillment_id"),
+                    "type": c["type"],
+                    "at": c["created_at"],
+                    "outcome": (c.get("decision") or {}).get("action"),
+                    "status": c["status"],
+                }
+            )
     return out
 
 
@@ -58,8 +67,16 @@ def rate(n: int, d: int) -> float | None:
 def card(rule: str, kind: str, value: str, label: str, linked: list[dict], **fields) -> dict:
     key = f"{rule}:{kind}:{value}"
     digest = hashlib.sha256("|".join(sorted(i["claim_id"] if "claim_id" in i else i["order_id"] for i in linked)).encode()).hexdigest()[:16]
-    return {"key": key, "rule": rule, "rule_version": RULE_VERSION, "entity": {"kind": kind, "value": value, "label": label},
-            "incidents": linked, "incidents_hash": digest, "alternatives": ALTERNATIVES[rule], **fields}
+    return {
+        "key": key,
+        "rule": rule,
+        "rule_version": RULE_VERSION,
+        "entity": {"kind": kind, "value": value, "label": label},
+        "incidents": linked,
+        "incidents_hash": digest,
+        "alternatives": ALTERNATIVES[rule],
+        **fields,
+    }
 
 
 def reference_reuse(orders: list[dict], since: datetime) -> list[dict]:
@@ -78,10 +95,22 @@ def reference_reuse(orders: list[dict], since: datetime) -> list[dict]:
     for (kind, value), by_order in seen.items():
         if len(by_order) > 1:
             label = f"GCash reference {value}" if kind == "reference" else f"Screenshot file {value[:12]}…"
-            out.append(card("payment_reference_reuse", kind, value, label, list(by_order.values()),
-                            numerator=len(by_order), denominator=None, rate=None, baseline=None, elevated=False,
-                            limitations=["Counts orders that received the same reference or file; it is not a rate."],
-                            suggested_review=f"Check your GCash history for {label.lower()}: which order did that payment pay for?"))
+            out.append(
+                card(
+                    "payment_reference_reuse",
+                    kind,
+                    value,
+                    label,
+                    list(by_order.values()),
+                    numerator=len(by_order),
+                    denominator=None,
+                    rate=None,
+                    baseline=None,
+                    elevated=False,
+                    limitations=["Counts orders that received the same reference or file; it is not a rate."],
+                    suggested_review=f"Check your GCash history for {label.lower()}: which order did that payment pay for?",
+                )
+            )
     return out
 
 
@@ -99,13 +128,24 @@ def recurring_claims(orders: list[dict], since: datetime, found: list[dict]) -> 
         rest_n, rest_d = total_n - len(mine), total_d - d
         elevated = d >= MIN_SHIPMENTS and rest_d > 0 and rate(len(mine), d) >= ELEVATED * (rest_n / rest_d)
         outcomes = {k: sum(1 for i in mine if i["outcome"] == k) for k in {i["outcome"] for i in mine}}
-        out.append(card("recurring_customer_claims", "customer", who, "One customer's Messenger thread", mine,
-                        numerator=len(mine), denominator=d, rate=rate(len(mine), d),
-                        baseline={"numerator": rest_n, "denominator": rest_d, "rate": rate(rest_n, rest_d), "of": "the rest of the store"},
-                        elevated=elevated, outcomes=outcomes,
-                        limitations=([f"Only {d} delivered shipment(s): too little history to compare rates."] if d < MIN_SHIPMENTS else [])
-                        + ["Claims made are not findings of error or abuse; see each claim's outcome."],
-                        suggested_review="Compare these claims and how each was resolved. Do not refuse a genuine claim because of history."))
+        out.append(
+            card(
+                "recurring_customer_claims",
+                "customer",
+                who,
+                "One customer's Messenger thread",
+                mine,
+                numerator=len(mine),
+                denominator=d,
+                rate=rate(len(mine), d),
+                baseline={"numerator": rest_n, "denominator": rest_d, "rate": rate(rest_n, rest_d), "of": "the rest of the store"},
+                elevated=elevated,
+                outcomes=outcomes,
+                limitations=([f"Only {d} delivered shipment(s): too little history to compare rates."] if d < MIN_SHIPMENTS else [])
+                + ["Claims made are not findings of error or abuse; see each claim's outcome."],
+                suggested_review="Compare these claims and how each was resolved. Do not refuse a genuine claim because of history.",
+            )
+        )
     return out
 
 
@@ -144,11 +184,22 @@ def loss_concentration(orders: list[dict], since: datetime, found: list[dict]) -
         if kind == "driver" or without_driver:
             limitations.append(f"{without_driver} of {total_d} delivered shipment(s) have no driver ID and are left out of driver groups.")
         label = {"courier": "Courier", "driver": "Lalamove driver", "product": "Product"}[kind] + f" {value}"
-        out.append(card("loss_concentration", kind, value, label, [by_shipment[r["id"]] for r in mine if r["lost"]],
-                        numerator=n, denominator=d, rate=rate(n, d),
-                        baseline={"numerator": rest_n, "denominator": rest_d, "rate": rate(rest_n, rest_d), "of": "other delivered shipments"},
-                        elevated=elevated, limitations=limitations,
-                        suggested_review="Compare the packing photos and delivery records of these parcels, and the products they had in common."))
+        out.append(
+            card(
+                "loss_concentration",
+                kind,
+                value,
+                label,
+                [by_shipment[r["id"]] for r in mine if r["lost"]],
+                numerator=n,
+                denominator=d,
+                rate=rate(n, d),
+                baseline={"numerator": rest_n, "denominator": rest_d, "rate": rate(rest_n, rest_d), "of": "other delivered shipments"},
+                elevated=elevated,
+                limitations=limitations,
+                suggested_review="Compare the packing photos and delivery records of these parcels, and the products they had in common.",
+            )
+        )
     return out
 
 

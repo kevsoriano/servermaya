@@ -61,15 +61,27 @@ def reserve(order: dict, op_id: str, body: RefundIn, by: str, now: datetime) -> 
     if any(r["status"] in ("submitting", "uncertain") for r in order.get("refunds", [])):
         raise Refused("Another refund is still being submitted. Check its status first.")
     c = approved(order, body.claim_id, body.amount)
-    record = {"id": op_id, "claim_id": c["id"], "method": "paymongo_api", "payment_id": payment["payment_id"], "amount": body.amount,
-              "reason": body.reason, "status": "submitting", "provider_refund_id": None, "by": by, "at": now}
+    record = {
+        "id": op_id,
+        "claim_id": c["id"],
+        "method": "paymongo_api",
+        "payment_id": payment["payment_id"],
+        "amount": body.amount,
+        "reason": body.reason,
+        "status": "submitting",
+        "provider_refund_id": None,
+        "by": by,
+        "at": now,
+    }
     return {"refunds": order.get("refunds", []) + [record], **put(order, {**c, "status": "executing"}, by, now)}
 
 
 def submitted(order: dict, op_id: str, answer: dict, now: datetime) -> dict:
     """PayMongo's answer: {"refund": {id, status}} accepted, {"refused": detail} refused, or {} when no answer came."""
+
     def update(**fields):
         return {"refunds": [{**r, **fields, "updated_at": now} if r["id"] == op_id else r for r in order.get("refunds", [])]}
+
     if "refund" in answer:
         return update(status=answer["refund"]["status"], provider_refund_id=answer["refund"]["id"])
     if "refused" in answer:
@@ -85,9 +97,19 @@ def manual(order: dict, op_id: str, body: ManualIn, by: str, now: datetime) -> d
     payment = order.get("payment") or {}
     if body.method == "paymongo_dashboard" and payment.get("status") != "verified":
         raise Refused("This order was not paid through PayMongo")
-    record = {"id": op_id, "claim_id": c["id"], "method": body.method, "payment_id": payment.get("payment_id"), "amount": body.amount,
-              "status": "awaiting_reconcile" if body.method == "paymongo_dashboard" else "seller_reported",
-              "reference": body.reference.strip() or None, "note": body.note.strip() or None, "provider_refund_id": None, "by": by, "at": now}
+    record = {
+        "id": op_id,
+        "claim_id": c["id"],
+        "method": body.method,
+        "payment_id": payment.get("payment_id"),
+        "amount": body.amount,
+        "status": "awaiting_reconcile" if body.method == "paymongo_dashboard" else "seller_reported",
+        "reference": body.reference.strip() or None,
+        "note": body.note.strip() or None,
+        "provider_refund_id": None,
+        "by": by,
+        "at": now,
+    }
     return {"refunds": order.get("refunds", []) + [record], **put(order, {**c, "status": "executing"}, by, now)}
 
 
@@ -105,9 +127,20 @@ def reconcile(order: dict, provider: list[dict], now: datetime) -> dict:
         if mine:
             mine.update(status=p["status"], provider_refund_id=p["id"], updated_at=now)
         else:
-            refunds.append({"id": p["id"], "claim_id": None, "method": "paymongo_dashboard", "payment_id": (order.get("payment") or {}).get("payment_id"),
-                            "amount": p["amount"], "status": p["status"], "provider_refund_id": p["id"], "by": "PayMongo", "at": now,
-                            "note": "Found at PayMongo; not started in this app"})
+            refunds.append(
+                {
+                    "id": p["id"],
+                    "claim_id": None,
+                    "method": "paymongo_dashboard",
+                    "payment_id": (order.get("payment") or {}).get("payment_id"),
+                    "amount": p["amount"],
+                    "status": p["status"],
+                    "provider_refund_id": p["id"],
+                    "by": "PayMongo",
+                    "at": now,
+                    "note": "Found at PayMongo; not started in this app",
+                }
+            )
     for r in refunds:
         # A "submitting" refund may still be in flight, so its absence proves nothing until it is old enough to have stalled.
         lost = r["status"] == "uncertain" or (r["status"] == "submitting" and now - r["at"] > STALLED)

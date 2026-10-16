@@ -6,7 +6,7 @@ import os
 import re
 import secrets
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Literal
 
@@ -16,24 +16,24 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from google import genai
 from google.api_core.exceptions import AlreadyExists, PreconditionFailed
+from google.auth.transport import requests as google_requests
 from google.cloud import firestore, storage
 from google.genai import types
-from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 from pydantic import BaseModel, Field
 
-import extraction
-import signals as risk
-import orders as rules
-import packing as pack
-import receipts as gcash
-import claims as cases
 import claim_agent
+import claims as cases
 import delivery
 import demo
-import samples
+import extraction
+import orders as rules
+import packing as pack
 import patterns
+import receipts as gcash
 import refunds
+import samples
+import signals as risk
 
 PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "servermaya-ai-builder-cup")
 # Comma-separated. Empty means nobody gets in.
@@ -83,9 +83,16 @@ def current_user(request: Request, authorization: str = Header(default="")) -> d
 # Routes a demo visitor may call that name no chat or order. Routes with a chat or order in the path are allowed only for
 # the visitor's own; every other route is refused, so a new route stays closed to demo visitors until it is listed here.
 DEMO_ROUTES = {
-    ("GET", "/api/me"), ("GET", "/api/conversations"), ("POST", "/api/demo/threads"), ("POST", "/api/demo/reset"),
-    ("GET", "/api/orders"), ("GET", "/api/settings/gcash"), ("GET", "/api/settings/dispatch"), ("GET", "/api/patterns"),
-    ("POST", "/api/gcash/statements"), ("GET", "/api/demo/sample-statement"),
+    ("GET", "/api/me"),
+    ("GET", "/api/conversations"),
+    ("POST", "/api/demo/threads"),
+    ("POST", "/api/demo/reset"),
+    ("GET", "/api/orders"),
+    ("GET", "/api/settings/gcash"),
+    ("GET", "/api/settings/dispatch"),
+    ("GET", "/api/patterns"),
+    ("POST", "/api/gcash/statements"),
+    ("GET", "/api/demo/sample-statement"),
 }
 
 
@@ -111,7 +118,14 @@ def visible(order: dict, user: dict) -> bool:
 
 # Fictional, so a demo visitor never sees the seller's real GCash account or pickup address. Demo orders always use these.
 DEMO_GCASH = {"name": "Juan Dela Cruz", "mobile": "639171234567", "qr": None, "demo": True}
-DEMO_PICKUP = {"address": "6750 Ayala Ave., Makati City", "lat": 14.5547, "lng": 121.0244, "name": "Demo shop", "phone": "+639171234567", "demo": True}
+DEMO_PICKUP = {
+    "address": "6750 Ayala Ave., Makati City",
+    "lat": 14.5547,
+    "lng": 121.0244,
+    "name": "Demo shop",
+    "phone": "+639171234567",
+    "demo": True,
+}
 
 
 def ai_budget(user: dict, n: int = 1):
@@ -161,7 +175,12 @@ def graph(path: str, send: dict | None = None, files: dict | None = None, **para
     body = {"data": form, "files": files} if files else {"json": send}
     try:
         r = requests.request(
-            "POST" if send else "GET", f"{GRAPH}/{path}", params=params, headers={"Authorization": f"Bearer {PAGE_TOKEN}"}, timeout=30 if files else 10, **body
+            "POST" if send else "GET",
+            f"{GRAPH}/{path}",
+            params=params,
+            headers={"Authorization": f"Bearer {PAGE_TOKEN}"},
+            timeout=30 if files else 10,
+            **body,
         )
         body = r.json()
     except (requests.RequestException, ValueError):
@@ -197,7 +216,9 @@ def conversations(user: dict = Depends(current_user)):
     if user.get("demo"):
         return demo_list(user)
     try:
-        data = graph(f"{PAGE_ID}/conversations", platform="messenger", fields="id,updated_time,snippet,participants,messages.limit(1){from,created_time}")
+        data = graph(
+            f"{PAGE_ID}/conversations", platform="messenger", fields="id,updated_time,snippet,participants,messages.limit(1){from,created_time}"
+        )
     except HTTPException as e:
         print(f"Messenger thread list failed: {e.detail}")  # demo chats still load, so the app stays usable
         data = {}
@@ -212,17 +233,19 @@ def conversations(user: dict = Depends(current_user)):
         # The newest message is the customer's, so the seller owes a reply.
         waiting = bool(last) and last.get("from", {}).get("id") != PAGE_ID
         at = datetime.fromisoformat(last["created_time"]) if waiting and last.get("created_time") else None
-        out.append({
-            "id": c["id"],
-            "updated_time": c.get("updated_time"),
-            "snippet": c.get("snippet", ""),
-            "customer": customer and {**customer, "picture": pics.get(customer.get("id"))},
-            "open_checks": cached_open_checks(c["id"]),
-            "unread": bool(at) and (c["id"] not in seen or seen[c["id"]] < at),
-            "awaiting_reply": waiting,
-            "reply_until": (at + REPLY_WINDOW).isoformat() if at else None,
-            "order_actions": actions.get(c["id"], []),
-        })
+        out.append(
+            {
+                "id": c["id"],
+                "updated_time": c.get("updated_time"),
+                "snippet": c.get("snippet", ""),
+                "customer": customer and {**customer, "picture": pics.get(customer.get("id"))},
+                "open_checks": cached_open_checks(c["id"]),
+                "unread": bool(at) and (c["id"] not in seen or seen[c["id"]] < at),
+                "awaiting_reply": waiting,
+                "reply_until": (at + REPLY_WINDOW).isoformat() if at else None,
+                "order_actions": actions.get(c["id"], []),
+            }
+        )
     return out + demo_list(user)
 
 
@@ -232,7 +255,7 @@ def demo_threads():
 
 def seed_demo(user: dict):
     batch = clients()[1].batch()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for t in demo.seed(user["uid"], now):
         batch.set(demo_threads().document(demo.new_id()), t)
     cid = demo.new_id()
@@ -249,8 +272,11 @@ def seed_demo(user: dict):
     batch.set(ref, order)
     batch.set(ref.collection("versions").document("1"), version_doc(order["draft"], "demo_seed", demo.SHOP))
     # His payment reached the demo account, so it is in the sample GCash history like any matching sample receipt.
-    batch.set(store_doc().collection("demoUsers").document(user["uid"]),
-              {"samples": firestore.ArrayUnion([{"reference": reference, "amount": 25000, "at": paid_at, "sender": samples.sender(chat["name"])}])}, merge=True)
+    batch.set(
+        store_doc().collection("demoUsers").document(user["uid"]),
+        {"samples": firestore.ArrayUnion([{"reference": reference, "amount": 25000, "at": paid_at, "sender": samples.sender(chat["name"])}])},
+        merge=True,
+    )
     batch.commit()
 
 
@@ -259,8 +285,16 @@ def packing_sample(order_id: str) -> dict:
     data, photo_id = samples.packing_png(), secrets.token_hex(8)
     path = f"stores/{STORE}/orders/{order_id}/packing/{photo_id}"
     bucket().blob(path).upload_from_string(data, content_type="image/png", if_generation_match=0)
-    return {"id": photo_id, "path": path, "sha256": hashlib.sha256(data).hexdigest(), "content_type": "image/png", "size": len(data),
-            "uploaded_at": datetime.now(timezone.utc), "uploaded_by": demo.SHOP, "claimed_captured_at": None}
+    return {
+        "id": photo_id,
+        "path": path,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "content_type": "image/png",
+        "size": len(data),
+        "uploaded_at": datetime.now(UTC),
+        "uploaded_by": demo.SHOP,
+        "claimed_captured_at": None,
+    }
 
 
 def demo_list(user: dict) -> list[dict]:
@@ -270,12 +304,25 @@ def demo_list(user: dict) -> list[dict]:
         seed_demo(user)
     except AlreadyExists:
         pass
-    docs = sorted(demo_threads().where(filter=firestore.FieldFilter("owner", "==", user["uid"])).stream(),
-                  key=lambda d: d.get("updated_time"), reverse=True)
+    docs = sorted(
+        demo_threads().where(filter=firestore.FieldFilter("owner", "==", user["uid"])).stream(), key=lambda d: d.get("updated_time"), reverse=True
+    )
     actions = order_actions([d.id for d in docs])
-    return [{"id": d.id, "updated_time": d.get("updated_time"), "snippet": d.get("snippet"), "customer": {"id": d.id, "name": d.get("name"), "picture": None},
-             "open_checks": cached_open_checks(d.id), "unread": False, "awaiting_reply": False, "reply_until": None,
-             "order_actions": actions.get(d.id, []), "demo": True} for d in docs]
+    return [
+        {
+            "id": d.id,
+            "updated_time": d.get("updated_time"),
+            "snippet": d.get("snippet"),
+            "customer": {"id": d.id, "name": d.get("name"), "picture": None},
+            "open_checks": cached_open_checks(d.id),
+            "unread": False,
+            "awaiting_reply": False,
+            "reply_until": None,
+            "order_actions": actions.get(d.id, []),
+            "demo": True,
+        }
+        for d in docs
+    ]
 
 
 def demo_doc(conversation_id: str) -> dict:
@@ -290,9 +337,10 @@ def demo_post(conversation_id: str, from_page: bool, text: str, attachment: dict
     d = demo_doc(conversation_id)
     if len(d["messages"]) >= demo.MAX_MESSAGES:
         raise HTTPException(409, "This demo chat is full. Start a new one.")
-    m = demo.message(from_page, d["name"], text, datetime.now(timezone.utc), [attachment] if attachment else None)
-    demo_threads().document(conversation_id).update({"messages": firestore.ArrayUnion([m]), "updated_time": m["created_time"],
-                                                     "snippet": text or "Sent a photo"})
+    m = demo.message(from_page, d["name"], text, datetime.now(UTC), [attachment] if attachment else None)
+    demo_threads().document(conversation_id).update(
+        {"messages": firestore.ArrayUnion([m]), "updated_time": m["created_time"], "snippet": text or "Sent a photo"}
+    )
     return {"message_id": m["id"]}
 
 
@@ -345,7 +393,7 @@ def new_demo_chat(body: DemoChat, user: dict = Depends(current_user)):
     except ValueError as e:
         raise HTTPException(422, str(e))
     cid = demo.new_id()
-    demo_threads().document(cid).set(demo.thread(body.name.strip(), lines, user["uid"], datetime.now(timezone.utc)))
+    demo_threads().document(cid).set(demo.thread(body.name.strip(), lines, user["uid"], datetime.now(UTC)))
     return {"id": cid}
 
 
@@ -391,7 +439,7 @@ def mark_seen(conversation_id: str, user: dict = Depends(current_user)):
     """Recorded in our database only. Nothing goes to Meta, so the customer never gets a "Seen" receipt."""
     if not (re.fullmatch(r"t_\d+", conversation_id) or demo.is_demo(conversation_id)):
         raise HTTPException(400, "Invalid conversation id")
-    read_docs().document(user["uid"]).set({"seen": {conversation_id: datetime.now(timezone.utc)}}, merge=True)
+    read_docs().document(user["uid"]).set({"seen": {conversation_id: datetime.now(UTC)}}, merge=True)
     return {"ok": True}
 
 
@@ -468,7 +516,15 @@ def attachments(message: dict) -> list[dict]:
         mime = a.get("mime_type") or ""
         media = a.get("image_data") or a.get("video_data") or {}
         kind = mime.split("/")[0] if mime.split("/")[0] in ("image", "video", "audio") else "file"
-        out.append({"kind": kind, "mime_type": mime, "name": a.get("name"), "url": media.get("url") or a.get("file_url"), "preview_url": media.get("preview_url")})
+        out.append(
+            {
+                "kind": kind,
+                "mime_type": mime,
+                "name": a.get("name"),
+                "url": media.get("url") or a.get("file_url"),
+                "preview_url": media.get("preview_url"),
+            }
+        )
     if message.get("sticker"):
         out.append({"kind": "image", "mime_type": "", "name": "sticker", "url": message["sticker"], "preview_url": None})
     # ponytail: these are Meta's temporary links; copy the files into our own storage (with hashes) when evidence retention lands
@@ -476,7 +532,9 @@ def attachments(message: dict) -> list[dict]:
 
 
 def fetch_messages(conversation_id: str) -> list[dict]:
-    data = graph(f"{conversation_id}/messages", fields="id,message,from,created_time,sticker,attachments{id,mime_type,name,size,file_url,image_data,video_data}",
+    data = graph(
+        f"{conversation_id}/messages",
+        fields="id,message,from,created_time,sticker,attachments{id,mime_type,name,size,file_url,image_data,video_data}",
         limit=50,
     )
     return [
@@ -535,7 +593,7 @@ def review_signal(conversation_id: str, body: Review, user: dict = Depends(curre
     else:
         if not body.note.strip():
             raise HTTPException(422, "Say why this check is fine")
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         ref.set({"reviews": {body.key: {"by": user["email"], "at": now, "note": body.note.strip()}}}, merge=True)
     return conversation_signals(conversation_id, user)
 
@@ -557,7 +615,7 @@ def reply_until(messages: list[dict]) -> datetime | None:
 def customer_to_reply(conversation_id: str, user: dict) -> str:
     """The customer's PSID, if the 24-hour reply window is still open."""
     until = reply_until(conversation(conversation_id, user))
-    if not until or datetime.now(timezone.utc) > until:
+    if not until or datetime.now(UTC) > until:
         raise HTTPException(409, "Messenger only allows replies within 24 hours of the customer's last message.")
     participants = graph(conversation_id, fields="participants").get("participants", {}).get("data", [])
     customer = next((p["id"] for p in participants if p.get("id") != PAGE_ID), None)
@@ -568,8 +626,14 @@ def customer_to_reply(conversation_id: str, user: dict) -> str:
 
 def record_sent(conversation_id: str, order_id: str | None, sent: dict, user: dict, **what) -> dict:
     # Meta shows the reply as coming from the Page; this records which seller sent it.
-    record = {"conversation_id": conversation_id, "order_id": order_id, **what, "message_id": sent.get("message_id"), "sent_by": user["email"],
-              "sent_at": firestore.SERVER_TIMESTAMP}
+    record = {
+        "conversation_id": conversation_id,
+        "order_id": order_id,
+        **what,
+        "message_id": sent.get("message_id"),
+        "sent_by": user["email"],
+        "sent_at": firestore.SERVER_TIMESTAMP,
+    }
     clients()[1].collection("stores").document(STORE).collection("sentMessages").add(record)
     return {"message_id": sent.get("message_id")}
 
@@ -610,7 +674,11 @@ async def reply_image(conversation_id: str, request: Request, order_id: str | No
     sent = await run_in_threadpool(
         graph,
         f"{PAGE_ID}/messages",
-        {"recipient": {"id": customer}, "messaging_type": "RESPONSE", "message": {"attachment": {"type": "image", "payload": {"is_reusable": False}}}},
+        {
+            "recipient": {"id": customer},
+            "messaging_type": "RESPONSE",
+            "message": {"attachment": {"type": "image", "payload": {"is_reusable": False}}},
+        },
         {"filedata": (f"image.{content_type.split('/')[1]}", data, content_type)},
     )
     image = {"path": path, "sha256": sha, "content_type": content_type, "size": len(data)}
@@ -654,14 +722,15 @@ def demo_sample_receipt(conversation_id: str, body: SampleReceipt, user: dict = 
     if not waiting:
         raise HTTPException(409, "Ask for GCash payment on this chat's order first.")
     m = max(waiting, key=lambda m: m["requested_at"])
-    now, ref = datetime.now(timezone.utc), samples.new_reference()
+    now, ref = datetime.now(UTC), samples.new_reference()
     amount = m["amount"] - min(10000, m["amount"] // 2) if body.kind == "wrong_amount" else m["amount"]
     name, mobile = (samples.OTHER_NAME, samples.OTHER_MOBILE) if body.kind == "wrong_recipient" else (samples.PAY_TO_NAME, samples.PAY_TO_MOBILE)
     attachment = demo_attachment(samples.receipt_png(amount, ref, now, name, mobile), "image/png")
     if body.kind == "matching":  # only money that reached the demo account appears in the sample history
         sender = samples.sender(demo_doc(conversation_id)["name"])
         store_doc().collection("demoUsers").document(user["uid"]).set(
-            {"samples": firestore.ArrayUnion([{"reference": ref, "amount": amount, "at": now, "sender": sender}])}, merge=True)
+            {"samples": firestore.ArrayUnion([{"reference": ref, "amount": amount, "at": now, "sender": sender}])}, merge=True
+        )
     return demo_post(conversation_id, False, "", attachment)
 
 
@@ -687,7 +756,7 @@ def orders():
     return clients()[1].collection("stores").document(STORE).collection("orders")
 
 
-EPOCH = datetime.min.replace(tzinfo=timezone.utc)  # sorts orders saved without created_at last
+EPOCH = datetime.min.replace(tzinfo=UTC)  # sorts orders saved without created_at last
 
 
 def chat_orders(conversation_id: str) -> list[tuple[str, dict]]:
@@ -699,7 +768,11 @@ def chat_orders(conversation_id: str) -> list[tuple[str, dict]]:
 @app.get("/api/conversations/{conversation_id}/orders")
 def list_chat_orders(conversation_id: str, user: dict = Depends(current_user)):
     """Every order made from this chat, newest first, so a returning customer's earlier orders stay in view."""
-    snaps = [d for d in orders().where(filter=firestore.FieldFilter("source.conversation_id", "==", conversation_id)).stream() if visible(d.to_dict(), user)]
+    snaps = [
+        d
+        for d in orders().where(filter=firestore.FieldFilter("source.conversation_id", "==", conversation_id)).stream()
+        if visible(d.to_dict(), user)
+    ]
     return [present(d) for d in sorted(snaps, key=lambda d: d.to_dict().get("created_at") or EPOCH, reverse=True)]
 
 
@@ -757,8 +830,15 @@ def present(snap) -> dict:
         dispatch_blocked = None
     except rules.Refused as e:
         dispatch_blocked = str(e)
-    return {**order, "id": snap.id, "missing": rules.missing(order["draft"]), "packing": packing, "packing_blocked": blocked,
-            "dispatch_blocked": dispatch_blocked, "refundable": refunds.refundable(order)}
+    return {
+        **order,
+        "id": snap.id,
+        "missing": rules.missing(order["draft"]),
+        "packing": packing,
+        "packing_blocked": blocked,
+        "dispatch_blocked": dispatch_blocked,
+        "refundable": refunds.refundable(order),
+    }
 
 
 def change(ref, rule, by: str = "") -> dict:
@@ -790,7 +870,7 @@ def list_orders(user: dict = Depends(current_user)):
         # ponytail: over-fetches to skip other people's demo orders; query by source.type once demo orders outnumber real ones
         docs = orders().order_by("created_at", direction=firestore.Query.DESCENDING).limit(100).stream()
     mine = [d for d in docs if visible(d.to_dict(), user)]
-    mine.sort(key=lambda d: d.get("created_at") or datetime.max.replace(tzinfo=timezone.utc), reverse=True)
+    mine.sort(key=lambda d: d.get("created_at") or datetime.max.replace(tzinfo=UTC), reverse=True)
     return [present(d) for d in mine[:25]]
 
 
@@ -823,14 +903,14 @@ def send_confirmation(order_id: str, user: dict = Depends(current_user)):
 
 @app.post("/api/orders/{order_id}/assert-confirmation")
 def assert_confirmation(order_id: str, user: dict = Depends(current_user)):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     token = secrets.token_urlsafe(32)
     return change(orders().document(order_id), lambda o: rules.confirm(o, "seller_asserted", user["email"], now, token))
 
 
 @app.post("/api/orders/{order_id}/cancel")
 def cancel_order(order_id: str, body: rules.Cancel, user: dict = Depends(current_user)):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return retiring(orders().document(order_id), lambda o: rules.cancel(o, user["email"], body.reason, now))
 
 
@@ -864,15 +944,18 @@ def customer_view(order: dict) -> dict:
         # Before the first payment request, the key decides: PayMongo's test-mode QR codes are real and must not be scanned.
         "test_mode": order["payment"]["livemode"] is False if order.get("payment") else PAYMONGO_KEY.startswith("sk_test_"),
         "gcash_confirmed": pack.paid_by(order) == "gcash_seller_confirmed",
-        "shipment": shipment and {
+        "shipment": shipment
+        and {
             "status": shipment["status"],
             "courier": shipment["courier"],
             "simulated": shipment["courier"] == "simulator",
             "share_link": shipment.get("share_link"),  # only the customer holding this order's link sees it
         },
         "received": (order.get("receipt") or {}).get("fulfillment_id") == (shipment or {}).get("id") and bool(shipment),
-        "claims": [{"id": c["id"], "type": cases.TYPES[c["type"]], "status": c["status"], "created_at": c["created_at"], "photos": len(c["photos"])}
-                   for c in order.get("claims", [])],
+        "claims": [
+            {"id": c["id"], "type": cases.TYPES[c["type"]], "status": c["status"], "created_at": c["created_at"], "photos": len(c["photos"])}
+            for c in order.get("claims", [])
+        ],
     }
 
 
@@ -883,7 +966,7 @@ def public_order(token: str):
 
 @app.post("/api/public/orders/{token}/confirm")
 def public_confirm(token: str):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     def rule(order: dict) -> dict:
         if order.get("confirm_token") != token:  # edited between lookup and transaction
@@ -935,7 +1018,7 @@ def reconcile_session(session_id: str) -> dict:
         for p in a.get("payments", [])
         if p["attributes"].get("status") == "paid"
     ]
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return change(orders().document(order_id), lambda o: rules.reconcile(o, session_id, a["status"], paid, now))
 
 
@@ -969,7 +1052,7 @@ def public_pay(token: str):
         },
     )
     a = session["attributes"]
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     saved = change(snap.reference, lambda o: rules.request_payment(o, session["id"], a["checkout_url"], a["livemode"], now))
     if saved["payment"]["session_id"] != session["id"]:
         expire_session(session["id"])
@@ -1027,7 +1110,11 @@ def lalamove(method: str, path: str, body: dict | None = None) -> dict:
         raise HTTPException(503, "Lalamove is not configured")
     raw = json.dumps(body, separators=(",", ":")) if body else ""
     ts = str(int(time.time() * 1000))
-    headers = {"Authorization": f"hmac {LALAMOVE_KEY}:{ts}:{lalamove_signature(ts, method, path, raw)}", "Market": "PH", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"hmac {LALAMOVE_KEY}:{ts}:{lalamove_signature(ts, method, path, raw)}",
+        "Market": "PH",
+        "Content-Type": "application/json",
+    }
     try:
         r = requests.request(method, LALAMOVE_URL + path, data=raw or None, headers=headers, timeout=15)
     except requests.RequestException:
@@ -1047,7 +1134,7 @@ def lalamove(method: str, path: str, body: dict | None = None) -> dict:
 def lalamove_time(text: str | None) -> datetime:
     """Lalamove sends times like 2026-10-13T19:05.00Z; the minute is what is reliable."""
     found = re.match(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})", text or "")
-    return datetime.fromisoformat(found[1]).replace(tzinfo=timezone.utc) if found else datetime.now(timezone.utc)
+    return datetime.fromisoformat(found[1]).replace(tzinfo=UTC) if found else datetime.now(UTC)
 
 
 def lalamove_pod(provider_order_id: str) -> dict | None:
@@ -1060,8 +1147,13 @@ def lalamove_pod(provider_order_id: str) -> dict | None:
     if not pod:
         return None
     # ponytail: keeps Lalamove's image link, which may expire; copy the image into the evidence bucket when retention lands
-    return {"status": pod.get("status"), "image_url": pod.get("image"), "delivered_at": pod.get("deliveredAt"), "source": "lalamove",
-            "fetched_at": datetime.now(timezone.utc)}
+    return {
+        "status": pod.get("status"),
+        "image_url": pod.get("image"),
+        "delivered_at": pod.get("deliveredAt"),
+        "source": "lalamove",
+        "fetched_at": datetime.now(UTC),
+    }
 
 
 def shipment_ref(provider_order_id: str | None, quotation_id: str | None = None):
@@ -1075,7 +1167,7 @@ def shipment_ref(provider_order_id: str | None, quotation_id: str | None = None)
 
 def lalamove_rule(provider_order_id: str, raw_status: str | None, eid: str, at: datetime, order_data: dict):
     """Link the Lalamove order to its shipment if this is the first we hear of it, then record the status event."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     status = delivery.LALAMOVE.get(raw_status or "") or ("driver_assigned" if raw_status == "DRIVER_ASSIGNED" else None)
     pod = lalamove_pod(provider_order_id) if status == "delivered" else None
 
@@ -1086,7 +1178,9 @@ def lalamove_rule(provider_order_id: str, raw_status: str | None, eid: str, at: 
             order = {**order, **updates}
         if status:
             ev = delivery.event(eid, "provider", raw_status, status, at, now)
-            updates.update(delivery.apply_event(order, ev, driver_id=order_data.get("driverId") or None, share_link=order_data.get("shareLink"), pod=pod))
+            updates.update(
+                delivery.apply_event(order, ev, driver_id=order_data.get("driverId") or None, share_link=order_data.get("shareLink"), pod=pod)
+            )
         return updates
 
     return rule
@@ -1165,7 +1259,7 @@ async def upload_packing_photo(order_id: str, request: Request, user: dict = Dep
     path = f"stores/{STORE}/orders/{order_id}/packing/{photo_id}"
     # if_generation_match=0: refuse to overwrite an existing object
     await run_in_threadpool(lambda: bucket().blob(path).upload_from_string(data, content_type=content_type, if_generation_match=0))
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     photo = {
         "id": photo_id,
         "path": path,
@@ -1186,7 +1280,9 @@ def packing_photo(order_id: str, photo_id: str, user: dict = Depends(current_use
     photo = next((p for s in sessions for p in s.get("photos", []) if p["id"] == photo_id), None)
     if not photo:
         raise HTTPException(404, "Photo not found")
-    return Response(bucket().blob(photo["path"]).download_as_bytes(), media_type=photo["content_type"], headers={"Cache-Control": "private, max-age=3600"})
+    return Response(
+        bucket().blob(photo["path"]).download_as_bytes(), media_type=photo["content_type"], headers={"Cache-Control": "private, max-age=3600"}
+    )
 
 
 @app.post("/api/orders/{order_id}/packing/check")
@@ -1214,7 +1310,7 @@ def check_packing(order_id: str, user: dict = Depends(current_user)):
         report = pack.Report.model_validate_json(response.text)
     except Exception:
         raise HTTPException(502, "Could not check the photos. Try again.")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     too_unclear = pack.unclear(photos)
     return change(ref, lambda o: pack.apply_check(o, report, GEMINI_MODEL, now, too_unclear))
 
@@ -1225,13 +1321,13 @@ class Inspection(BaseModel):
 
 @app.post("/api/orders/{order_id}/packing/lines/{line}/confirm")
 def confirm_packing_line(order_id: str, line: int, body: Inspection, user: dict = Depends(current_user)):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return change(orders().document(order_id), lambda o: pack.confirm_row(o, line, user["email"], body.reason, now))
 
 
 @app.post("/api/orders/{order_id}/packing/complete")
 def complete_packing(order_id: str, user: dict = Depends(current_user)):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return change(orders().document(order_id), lambda o: pack.complete(o, user["email"], now))
 
 
@@ -1253,7 +1349,7 @@ def put_gcash(body: gcash.Settings, user: dict = Depends(current_user)):
         found = gcash.settings(body)
     except rules.Refused as e:
         raise HTTPException(422, str(e))
-    saved = {**found, "updated_by": user["email"], "updated_at": datetime.now(timezone.utc)}
+    saved = {**found, "updated_by": user["email"], "updated_at": datetime.now(UTC)}
     store_doc().set({"gcash": saved}, merge=True)
     return saved
 
@@ -1267,7 +1363,7 @@ def request_gcash(order_id: str, body: GcashRequest | None = None, user: dict = 
     pay_to = DEMO_GCASH if demo_order(order_id) else get_gcash(user)
     if not pay_to:
         raise HTTPException(409, "Add your GCash name and number in Settings first")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     qr = pay_to.get("qr") or {}
     snapshot = {"name": pay_to["name"], "mobile": pay_to["mobile"], "masked_name": qr.get("masked_name"), "user_id": qr.get("user_id")}
     says_paid = bool(body and body.says_paid)
@@ -1375,7 +1471,7 @@ def read_gcash_receipts(order_id: str, user: dict = Depends(current_user)):
     if not images:
         raise HTTPException(409, "No new images from the customer since you asked for GCash payment")
     ai_budget(user, len(images))
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     claims = [read_receipt(order_id, manual, m, a, now, index_scope(order)) for m, a in images]
     return change(ref, lambda o: gcash.add_claims(o, claims))
 
@@ -1389,7 +1485,9 @@ def gcash_screenshot(order_id: str, claim_id: str, user: dict = Depends(current_
     if not claim:
         raise HTTPException(404, "Screenshot not found")
     image = claim["image"]
-    return Response(bucket().blob(image["path"]).download_as_bytes(), media_type=image["content_type"], headers={"Cache-Control": "private, max-age=3600"})
+    return Response(
+        bucket().blob(image["path"]).download_as_bytes(), media_type=image["content_type"], headers={"Cache-Control": "private, max-age=3600"}
+    )
 
 
 @app.post("/api/orders/{order_id}/gcash/history")
@@ -1442,7 +1540,7 @@ def history_read(order_id: str, data: bytes, content_type: str, user: dict) -> d
         "entry": entry.model_dump(),
         "reference": gcash.reference(entry.reference) or None,
         "checks": gcash.check_history(entry, manual["amount"], *gcash.window(manual)),
-        "read_at": datetime.now(timezone.utc),
+        "read_at": datetime.now(UTC),
         "read_by": user["email"],
         "model": GEMINI_MODEL,
     }
@@ -1482,10 +1580,13 @@ async def upload_gcash_statement(request: Request, x_pdf_password: str = Header(
 
 
 def apply_statement(statement: dict, statement_id: str, by: str, user: dict) -> dict:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     store_doc().collection("gcashStatements").document(statement_id).set({**statement, "uploaded_by": by, "uploaded_at": now})
-    waiting = [d for d in orders().where(filter=firestore.FieldFilter("manual_payment.status", "in", ["requested", "claimed", "seller_confirmed"])).stream()
-               if visible(d.to_dict(), user)]
+    waiting = [
+        d
+        for d in orders().where(filter=firestore.FieldFilter("manual_payment.status", "in", ["requested", "claimed", "seller_confirmed"])).stream()
+        if visible(d.to_dict(), user)
+    ]
     taken = {m["confirmed"]["reference"]: d.id for d in waiting if (m := d.to_dict()["manual_payment"]).get("confirmed")}
     result = {"start": statement["start"], "last_at": statement["last_at"], "received": len(statement["credits"])}
     for d in waiting:
@@ -1493,7 +1594,7 @@ def apply_statement(statement: dict, statement_id: str, by: str, user: dict) -> 
         # check outside the transaction first, so unchanged orders cost no write
         if not gcash.reconcile(d.to_dict(), statement, statement_id, others, by, now):
             continue
-        saved = change(d.reference, lambda o: gcash.reconcile(o, statement, statement_id, others, by, now))
+        saved = change(d.reference, lambda o, others=others: gcash.reconcile(o, statement, statement_id, others, by, now))
         m = saved["manual_payment"]
         status = "confirmed" if m["confirmed"].get("statement") == statement_id else m["history_check"]["status"]
         result.setdefault(status, []).append(d.id)
@@ -1516,7 +1617,7 @@ def confirm_gcash(order_id: str, body: GcashConfirm, user: dict = Depends(curren
     _, order = loaded(order_id)
     others = orders().where(filter=firestore.FieldFilter("manual_payment.confirmed.reference", "==", ref)).stream()
     elsewhere = any(d.id != order_id and index_scope(d.to_dict()) == index_scope(order) for d in others)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return change(orders().document(order_id), lambda o: gcash.confirm(o, ref, user["email"], body.reason, now, elsewhere, body.invno))
 
 
@@ -1543,8 +1644,15 @@ def put_dispatch_settings(body: DispatchSettings, user: dict = Depends(current_u
         phone = delivery.e164(body.phone)
     except rules.Refused as e:
         raise HTTPException(422, str(e))
-    saved = {"address": body.address.strip(), "lat": lat, "lng": lng, "name": body.name.strip(), "phone": phone,
-             "updated_by": user["email"], "updated_at": datetime.now(timezone.utc)}
+    saved = {
+        "address": body.address.strip(),
+        "lat": lat,
+        "lng": lng,
+        "name": body.name.strip(),
+        "phone": phone,
+        "updated_by": user["email"],
+        "updated_at": datetime.now(UTC),
+    }
     store_doc().set({"dispatch": saved}, merge=True)
     return saved
 
@@ -1570,17 +1678,26 @@ def quote_delivery(order_id: str, body: QuoteIn, user: dict = Depends(current_us
         lat, lng = delivery.parse_pin(body.pin)
     except rules.Refused as e:
         raise HTTPException(409, str(e))
-    stops = [{"coordinates": {"lat": str(pickup["lat"]), "lng": str(pickup["lng"])}, "address": pickup["address"]},
-             {"coordinates": {"lat": str(lat), "lng": str(lng)}, "address": order["draft"]["address"]["value"]}]
+    stops = [
+        {"coordinates": {"lat": str(pickup["lat"]), "lng": str(pickup["lng"])}, "address": pickup["address"]},
+        {"coordinates": {"lat": str(lat), "lng": str(lng)}, "address": order["draft"]["address"]["value"]},
+    ]
     try:
         q = lalamove("POST", "/v3/quotations", {"data": {"serviceType": body.service, "language": "en_PH", "stops": stops}})
     except LalamoveNoAnswer:
         raise HTTPException(502, "Lalamove did not answer. Try again.")
     price = q.get("priceBreakdown") or {}
-    quotation = {"id": q["quotationId"], "service": body.service, "price": centavos_of(price.get("total", "0")), "currency": price.get("currency", "PHP"),
-                 "expires_at": lalamove_time(q.get("expiresAt")), "stop_ids": [s["stopId"] for s in q.get("stops", [])], "dropoff": [lat, lng],
-                 "livemode": "sandbox" not in LALAMOVE_URL}
-    now = datetime.now(timezone.utc)
+    quotation = {
+        "id": q["quotationId"],
+        "service": body.service,
+        "price": centavos_of(price.get("total", "0")),
+        "currency": price.get("currency", "PHP"),
+        "expires_at": lalamove_time(q.get("expiresAt")),
+        "stop_ids": [s["stopId"] for s in q.get("stops", [])],
+        "dropoff": [lat, lng],
+        "livemode": "sandbox" not in LALAMOVE_URL,
+    }
+    now = datetime.now(UTC)
     fid = ((order.get("fulfillment") or {}).get("id")) or secrets.token_hex(8)
     return change(ref, lambda o: delivery.start(o, fid, "lalamove", user["email"], now, quotation=quotation))
 
@@ -1597,29 +1714,39 @@ def book_delivery(order_id: str, user: dict = Depends(current_user)):
         raise HTTPException(409, f"Recipient phone: {e}")
     if not pickup or len((f.get("quotation") or {}).get("stop_ids", [])) != 2:
         raise HTTPException(409, "Get a Lalamove quote first")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     change(ref, lambda o: delivery.begin_booking(o, now))
     q = f["quotation"]
-    payload = {"data": {
-        "quotationId": q["id"],
-        "sender": {"stopId": q["stop_ids"][0], "name": pickup["name"], "phone": pickup["phone"]},
-        "recipients": [{"stopId": q["stop_ids"][1], "name": d["recipient_name"]["value"], "phone": phone, "remarks": d["delivery_instructions"]["value"] or ""}],
-        "isPODEnabled": True,
-        "metadata": {"orderId": order_id, "fulfillmentId": f["id"]},
-    }}
+    payload = {
+        "data": {
+            "quotationId": q["id"],
+            "sender": {"stopId": q["stop_ids"][0], "name": pickup["name"], "phone": pickup["phone"]},
+            "recipients": [
+                {
+                    "stopId": q["stop_ids"][1],
+                    "name": d["recipient_name"]["value"],
+                    "phone": phone,
+                    "remarks": d["delivery_instructions"]["value"] or "",
+                }
+            ],
+            "isPODEnabled": True,
+            "metadata": {"orderId": order_id, "fulfillmentId": f["id"]},
+        }
+    }
     try:
         placed = lalamove("POST", "/v3/orders", payload)
     except LalamoveNoAnswer:
         return change(ref, delivery.booking_uncertain)  # Lalamove's ORDER_CREATED event, matched by quotation, settles it
     except HTTPException as e:
-        change(ref, lambda o: delivery.booking_failed(o, e.detail))
+        problem = e.detail
+        change(ref, lambda o: delivery.booking_failed(o, problem))
         raise
-    return change(ref, lambda o: delivery.booked(o, placed["orderId"], placed.get("shareLink"), datetime.now(timezone.utc)))
+    return change(ref, lambda o: delivery.booked(o, placed["orderId"], placed.get("shareLink"), datetime.now(UTC)))
 
 
 @app.post("/api/orders/{order_id}/dispatch/release")
 def release_delivery(order_id: str, user: dict = Depends(current_user)):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return change(orders().document(order_id), lambda o: delivery.release_booking(o, now))
 
 
@@ -1636,7 +1763,7 @@ def refresh_delivery(order_id: str, user: dict = Depends(current_user)):
         raise HTTPException(502, "Lalamove did not answer. Status unchanged.")
     raw = o.get("status")
     eid = f"lalamove:{f['provider_order_id']}:poll:{raw}"  # one event per status seen by polling
-    return change(ref, lalamove_rule(f["provider_order_id"], raw, eid, datetime.now(timezone.utc), o))
+    return change(ref, lalamove_rule(f["provider_order_id"], raw, eid, datetime.now(UTC), o))
 
 
 class StartIn(BaseModel):
@@ -1649,9 +1776,11 @@ def start_delivery(order_id: str, body: StartIn, user: dict = Depends(current_us
     """The delivery simulator (every event labelled demo) or another courier whose updates the seller reports."""
     if body.courier == "other" and not body.tracking.strip():
         raise HTTPException(422, "Enter the courier and tracking number")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     fid = secrets.token_hex(8)
-    return change(orders().document(order_id), lambda o: delivery.start(o, fid, body.courier, user["email"], now, tracking=body.tracking.strip() or None))
+    return change(
+        orders().document(order_id), lambda o: delivery.start(o, fid, body.courier, user["email"], now, tracking=body.tracking.strip() or None)
+    )
 
 
 class StepIn(BaseModel):
@@ -1661,7 +1790,7 @@ class StepIn(BaseModel):
 
 @app.post("/api/orders/{order_id}/dispatch/step")
 def step_delivery(order_id: str, body: StepIn, user: dict = Depends(current_user)):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     def rule(o: dict) -> dict:
         source = "demo" if (o.get("fulfillment") or {}).get("courier") == "simulator" else "seller_reported"
@@ -1681,13 +1810,13 @@ def cancel_delivery(order_id: str, body: rules.Cancel, user: dict = Depends(curr
             lalamove("DELETE", f"/v3/orders/{f['provider_order_id']}")
         except LalamoveNoAnswer:
             raise HTTPException(502, "Lalamove did not answer. The booking may still be active; try again.")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return change(ref, lambda o: delivery.cancel(o, user["email"], body.reason, now))
 
 
 @app.post("/api/public/orders/{token}/received")
 def public_received(token: str):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return customer_view(change(by_token(token).reference, lambda o: delivery.acknowledge(o, "customer_link", now)))
 
 
@@ -1706,12 +1835,19 @@ def claim_photo(order_id: str, cid: str, data: bytes, content_type: str, source:
         bucket().blob(path).upload_from_string(data, content_type=content_type, if_generation_match=0)
     except PreconditionFailed:
         pass  # the same photo again
-    return {"id": sha[:16], "path": path, "sha256": sha, "content_type": content_type, "size": len(data), "source": source,
-            "uploaded_at": datetime.now(timezone.utc)}
+    return {
+        "id": sha[:16],
+        "path": path,
+        "sha256": sha,
+        "content_type": content_type,
+        "size": len(data),
+        "source": source,
+        "uploaded_at": datetime.now(UTC),
+    }
 
 
 def new_claim(ref, body: cases.ClaimIn, source: str, by: str) -> dict:
-    now, cid = datetime.now(timezone.utc), secrets.token_hex(6)
+    now, cid = datetime.now(UTC), secrets.token_hex(6)
 
     def rule(o: dict) -> dict:
         if sum(c["status"] != "resolved" for c in o.get("claims", [])) >= MAX_OPEN_CLAIMS:
@@ -1730,8 +1866,10 @@ def public_claim(token: str, body: cases.ClaimIn):
 async def public_claim_photo(token: str, cid: str, request: Request):
     snap = await run_in_threadpool(by_token, token)
     data = await request.body()
-    photo = await run_in_threadpool(claim_photo, snap.id, cid, data, request.headers.get("content-type", "").split(";")[0].strip().lower(), "customer")
-    now = datetime.now(timezone.utc)
+    photo = await run_in_threadpool(
+        claim_photo, snap.id, cid, data, request.headers.get("content-type", "").split(";")[0].strip().lower(), "customer"
+    )
+    now = datetime.now(UTC)
     return customer_view(await run_in_threadpool(change, snap.reference, lambda o: cases.add_photos(o, cid, [photo], "customer", now)))
 
 
@@ -1744,7 +1882,7 @@ def seller_claim(order_id: str, body: cases.ClaimIn, user: dict = Depends(curren
 async def seller_claim_photo(order_id: str, cid: str, request: Request, user: dict = Depends(current_user)):
     data = await request.body()
     photo = await run_in_threadpool(claim_photo, order_id, cid, data, request.headers.get("content-type", "").split(";")[0].strip().lower(), "seller")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return await run_in_threadpool(change, orders().document(order_id), lambda o: cases.add_photos(o, cid, [photo], user["email"], now))
 
 
@@ -1755,7 +1893,9 @@ def claim_photo_file(order_id: str, cid: str, photo_id: str, user: dict = Depend
         photo = next(p for p in cases.claim(order, cid)["photos"] if p["id"] == photo_id)
     except (rules.Refused, StopIteration):
         raise HTTPException(404, "Photo not found")
-    return Response(bucket().blob(photo["path"]).download_as_bytes(), media_type=photo["content_type"], headers={"Cache-Control": "private, max-age=3600"})
+    return Response(
+        bucket().blob(photo["path"]).download_as_bytes(), media_type=photo["content_type"], headers={"Cache-Control": "private, max-age=3600"}
+    )
 
 
 @app.post("/api/orders/{order_id}/claims/{cid}/review")
@@ -1777,13 +1917,15 @@ def review_claim(order_id: str, cid: str, user: dict = Depends(current_user)):
     shown = []
     for label, photo in images:
         try:
-            parts += [types.Part.from_text(text=f"Image {label}:"),
-                      types.Part.from_bytes(data=bucket().blob(photo["path"]).download_as_bytes(), mime_type=photo["content_type"])]
+            parts += [
+                types.Part.from_text(text=f"Image {label}:"),
+                types.Part.from_bytes(data=bucket().blob(photo["path"]).download_as_bytes(), mime_type=photo["content_type"]),
+            ]
             shown.append((label, photo))
         except Exception:
             pass  # an image that cannot be loaded cannot be cited
     ai_budget(user)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     try:
         review = claim_agent.review(claim_agent.gemini_agent(GEMINI_MODEL, PROJECT_ID), GEMINI_MODEL, parts, cases.ids(blocks, shown), now)
     except Exception:
@@ -1797,13 +1939,13 @@ def review_claim(order_id: str, cid: str, user: dict = Depends(current_user)):
 
 @app.post("/api/orders/{order_id}/claims/{cid}/wait")
 def wait_claim(order_id: str, cid: str, user: dict = Depends(current_user)):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return change(orders().document(order_id), lambda o: cases.wait_for_evidence(o, cid, user["email"], now))
 
 
 @app.post("/api/orders/{order_id}/claims/{cid}/decide")
 def decide_claim(order_id: str, cid: str, body: cases.DecisionIn, user: dict = Depends(current_user)):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return change(orders().document(order_id), lambda o: cases.decide(o, cid, body, user["email"], now))
 
 
@@ -1814,13 +1956,13 @@ class EscalateIn(BaseModel):
 
 @app.post("/api/orders/{order_id}/claims/{cid}/escalate")
 def escalate_claim(order_id: str, cid: str, body: EscalateIn, user: dict = Depends(current_user)):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return change(orders().document(order_id), lambda o: cases.escalate(o, cid, body.owner, body.next_action, user["email"], now))
 
 
 @app.post("/api/orders/{order_id}/claims/{cid}/replacement")
 def replace_claim(order_id: str, cid: str, user: dict = Depends(current_user)):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return change(orders().document(order_id), lambda o: cases.start_replacement(o, cid, user["email"], now))
 
 
@@ -1830,7 +1972,7 @@ class ResolveIn(BaseModel):
 
 @app.post("/api/orders/{order_id}/claims/{cid}/resolve")
 def resolve_claim(order_id: str, cid: str, body: ResolveIn, user: dict = Depends(current_user)):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return change(orders().document(order_id), lambda o: cases.resolve(o, cid, body.note, user["email"], now))
 
 
@@ -1838,8 +1980,21 @@ def resolve_claim(order_id: str, cid: str, body: ResolveIn, user: dict = Depends
 def paymongo_refund(payment_id: str, amount: int, reason: str, op_id: str, order_id: str) -> dict:
     """{"refund": {id, status}} if accepted, {"refused": detail} if PayMongo said no, {} if no answer came."""
     try:
-        r = requests.post("https://api.paymongo.com/v1/refunds", auth=(PAYMONGO_KEY, ""), timeout=20, json={"data": {"attributes": {
-            "amount": amount, "payment_id": payment_id, "reason": reason, "metadata": {"operation_id": op_id, "order_id": order_id}}}})
+        r = requests.post(
+            "https://api.paymongo.com/v1/refunds",
+            auth=(PAYMONGO_KEY, ""),
+            timeout=20,
+            json={
+                "data": {
+                    "attributes": {
+                        "amount": amount,
+                        "payment_id": payment_id,
+                        "reason": reason,
+                        "metadata": {"operation_id": op_id, "order_id": order_id},
+                    }
+                }
+            },
+        )
         body = r.json()
     except (requests.RequestException, ValueError):
         return {}
@@ -1855,16 +2010,16 @@ def submit_refund(order_id: str, body: refunds.RefundIn, user: dict = Depends(cu
     if not PAYMONGO_KEY:
         raise HTTPException(503, "Payments are not configured")
     ref = orders().document(order_id)
-    op_id, now = "op_" + secrets.token_hex(8), datetime.now(timezone.utc)
+    op_id, now = "op_" + secrets.token_hex(8), datetime.now(UTC)
     saved = change(ref, lambda o: refunds.reserve(o, op_id, body, user["email"], now))
     payment_id = saved["payment"]["payment_id"]
     answer = paymongo_refund(payment_id, body.amount, body.reason, op_id, order_id)
-    return change(ref, lambda o: refunds.submitted(o, op_id, answer, datetime.now(timezone.utc)))
+    return change(ref, lambda o: refunds.submitted(o, op_id, answer, datetime.now(UTC)))
 
 
 @app.post("/api/orders/{order_id}/refunds/manual")
 def manual_refund(order_id: str, body: refunds.ManualIn, user: dict = Depends(current_user)):
-    op_id, now = "op_" + secrets.token_hex(8), datetime.now(timezone.utc)
+    op_id, now = "op_" + secrets.token_hex(8), datetime.now(UTC)
     return change(orders().document(order_id), lambda o: refunds.manual(o, op_id, body, user["email"], now))
 
 
@@ -1882,7 +2037,7 @@ def reconcile_refunds_for(payment_id: str) -> dict | None:
     if not found:
         return None
     listed = provider_refunds(payment_id)
-    return change(found[0].reference, lambda o: refunds.reconcile(o, listed, datetime.now(timezone.utc)))
+    return change(found[0].reference, lambda o: refunds.reconcile(o, listed, datetime.now(UTC)))
 
 
 @app.post("/api/orders/{order_id}/refunds/check")
@@ -1900,7 +2055,7 @@ def pattern_cards(days: int, user: dict) -> list[dict]:
     # ponytail: reads every order on each load; keep a rolling aggregate when a store has thousands of orders
     found = [{**o, "id": d.id} for d in orders().stream() if visible(o := d.to_dict(), user)]
     reviews = {r["key"]: r for r in (d.to_dict() for d in store_doc().collection("patternReviews").stream())}
-    return patterns.with_review(patterns.analyse(found, datetime.now(timezone.utc), days), reviews)
+    return patterns.with_review(patterns.analyse(found, datetime.now(UTC), days), reviews)
 
 
 @app.get("/api/patterns")
@@ -1923,6 +2078,6 @@ class PatternReviewIn(BaseModel):
 @app.post("/api/patterns/review")
 def review_pattern(body: PatternReviewIn, user: dict = Depends(current_user)):
     """The seller's review of one card, tied to the cases it covered. New cases make the card new again."""
-    record = {**body.model_dump(), "reason": body.reason.strip(), "by": user["email"], "at": datetime.now(timezone.utc)}
+    record = {**body.model_dump(), "reason": body.reason.strip(), "by": user["email"], "at": datetime.now(UTC)}
     store_doc().collection("patternReviews").document(hashlib.sha256(body.key.encode()).hexdigest()).set(record)
     return record

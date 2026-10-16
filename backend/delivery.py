@@ -98,8 +98,16 @@ def booked(order: dict, provider_order_id: str, share_link: str | None, now: dat
     if f.get("status") not in ("booking", "quoted"):
         raise Refused("No booking in progress")
     ev = event(f"lalamove:{provider_order_id}:created", "provider", "ORDER_CREATED", "booked", now, now)
-    return {"fulfillment": {**f, "status": "booked", "provider_order_id": provider_order_id, "share_link": share_link,
-                            "booking_uncertain": False, "events": f["events"] + [ev]}}
+    return {
+        "fulfillment": {
+            **f,
+            "status": "booked",
+            "provider_order_id": provider_order_id,
+            "share_link": share_link,
+            "booking_uncertain": False,
+            "events": f["events"] + [ev],
+        }
+    }
 
 
 def booking_failed(order: dict, problem: str) -> dict:

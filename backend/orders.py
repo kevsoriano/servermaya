@@ -83,8 +83,9 @@ def carry_over(draft: dict, previous: list[tuple[str, dict]]) -> dict:
     for order_id, o in previous:
         if any(c["version"] == o["version"] for c in o.get("confirmations", [])):
             old = o["draft"]
-            filled = {f: {"value": old[f]["value"], "sources": [], "from_order": order_id}
-                      for f in CARRIED if not draft[f]["value"] and old[f]["value"]}
+            filled = {
+                f: {"value": old[f]["value"], "sources": [], "from_order": order_id} for f in CARRIED if not draft[f]["value"] and old[f]["value"]
+            }
             # "Welcome back, Leah!" gives only the start of the name she confirmed as "Leah Cruz": keep the full one.
             new, full = draft["recipient_name"]["value"], old["recipient_name"]["value"]
             if new and full and new.lower().split() != full.lower().split() and full.lower().split()[: len(new.split())] == new.lower().split():

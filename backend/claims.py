@@ -122,17 +122,24 @@ def evidence(order: dict, messages: list[dict], c: dict) -> tuple[list[str], lis
     blocks, images = [], []
     agreed = [x for x in order.get("confirmations", []) if x["version"] == order["version"]]
     items = "; ".join(f"{i['quantity']} x {inline(i['name'])}" + (f" ({inline(i['variant'])})" if i["variant"] else "") for i in d["items"])
-    blocks.append(f"[V{order['version']}] Order version {order['version']}: {items}. Total {money(d['total'])}. Recipient {inline(d['recipient_name']['value'])}, "
-                  f"address {inline(d['address']['value'])}. " + (f"Confirmed by {agreed[-1]['kind'].replace('_', ' ')} at {agreed[-1]['at']}." if agreed else "Not confirmed."))
+    blocks.append(
+        f"[V{order['version']}] Order version {order['version']}: {items}. Total {money(d['total'])}. Recipient {inline(d['recipient_name']['value'])}, "
+        f"address {inline(d['address']['value'])}. "
+        + (f"Confirmed by {agreed[-1]['kind'].replace('_', ' ')} at {agreed[-1]['at']}." if agreed else "Not confirmed.")
+    )
     for n, m in enumerate(messages, 1):
         who = "Seller" if m["from_page"] else "Customer"
         extra = f" [{len(m.get('attachments') or [])} attachment(s)]" if m.get("attachments") else ""
         blocks.append(f"[M{n}] {who} at {m.get('created_time')}: {inline(m.get('text'))}{extra}")
     payment, manual = order.get("payment") or {}, order.get("manual_payment") or {}
     if payment.get("status") == "verified":
-        blocks.append(f"[PAY] PayMongo verified a payment of {money(payment.get('paid_amount', payment['amount']))} (payment {payment.get('payment_id')}).")
+        blocks.append(
+            f"[PAY] PayMongo verified a payment of {money(payment.get('paid_amount', payment['amount']))} (payment {payment.get('payment_id')})."
+        )
     elif manual.get("status") == "seller_confirmed":
-        blocks.append(f"[PAY] The seller confirmed a direct GCash payment of {money(manual['amount'])}, reference {inline(manual['confirmed'].get('reference'))}. Not verified by PayMongo.")
+        blocks.append(
+            f"[PAY] The seller confirmed a direct GCash payment of {money(manual['amount'])}, reference {inline(manual['confirmed'].get('reference'))}. Not verified by PayMongo."
+        )
     else:
         blocks.append("[PAY] No verified or seller-confirmed payment.")
     packed = [p for p in [order.get("packing")] + order.get("packing_history", [])[::-1] if p and p.get("completed")]
@@ -142,9 +149,11 @@ def evidence(order: dict, messages: list[dict], c: dict) -> tuple[list[str], lis
             seen = r["observed"] or {}
             counts = ", ".join(f"{x['quantity']} {inline(x['variant'])}".strip() for x in seen.get("counts", [])) or "not counted"
             manual_check = f" Seller inspected: {inline(r['manual']['reason'])}." if r["manual"] else ""
-            blocks.append(f"[K{r['line']}] Packing line {r['line']}: expected {r['expected']['quantity']} x {inline(r['expected']['name'])}"
-                          f"{' (' + inline(r['expected']['variant']) + ')' if r['expected']['variant'] else ''}. Photo check: {r['auto_result']}; seen {counts}"
-                          f"{'; damage: ' + inline(seen['damage']) if seen.get('damage') else ''}.{manual_check}")
+            blocks.append(
+                f"[K{r['line']}] Packing line {r['line']}: expected {r['expected']['quantity']} x {inline(r['expected']['name'])}"
+                f"{' (' + inline(r['expected']['variant']) + ')' if r['expected']['variant'] else ''}. Photo check: {r['auto_result']}; seen {counts}"
+                f"{'; damage: ' + inline(seen['damage']) if seen.get('damage') else ''}.{manual_check}"
+            )
         for n, photo in enumerate(p["photos"][:4], 1):
             images.append((f"KP{n}", photo))
         blocks.append(f"[KP] Packing photos KP1 to KP{min(len(p['photos']), 4)}, packed at {p['completed']['at']}.")
@@ -155,12 +164,17 @@ def evidence(order: dict, messages: list[dict], c: dict) -> tuple[list[str], lis
         for n, e in enumerate(f["events"], 1):
             blocks.append(f"[D{n}] Delivery status {e['status']} (raw {inline(e['raw_status'])}), source {e['source']}, at {e['at']}.")
         if f.get("pod"):
-            blocks.append(f"[POD] Proof of delivery from {f['courier']}: {inline(f['pod'].get('status'))}, delivered at {f['pod'].get('delivered_at')}.")
+            blocks.append(
+                f"[POD] Proof of delivery from {f['courier']}: {inline(f['pod'].get('status'))}, delivered at {f['pod'].get('delivered_at')}."
+            )
     else:
         blocks.append("[D] No shipment on record.")
     receipt = order.get("receipt") or {}
-    blocks.append(f"[R] Customer confirmed receipt at {receipt['at']}." if receipt.get("fulfillment_id") == c["fulfillment_id"] and c["fulfillment_id"]
-                  else "[R] The customer has not confirmed receipt.")
+    blocks.append(
+        f"[R] Customer confirmed receipt at {receipt['at']}."
+        if receipt.get("fulfillment_id") == c["fulfillment_id"] and c["fulfillment_id"]
+        else "[R] The customer has not confirmed receipt."
+    )
     blocks.append(f"[C] Claim ({TYPES[c['type']]}), from {c['source'].replace('_', ' ')} at {c['created_at']}: {inline(c['narrative'])}")
     for n, photo in enumerate(c["photos"], 1):
         images.append((f"CP{n}", photo))
@@ -204,12 +218,26 @@ def checked(review: Review, ids: set[str], model: str, now: datetime) -> dict:
         if cited:
             findings.append({**f.model_dump(), "evidence": cited})
         else:
-            findings.append({"statement": "A finding was withheld because it cited no valid record.", "status": "insufficient_data",
-                             "evidence": [], "uncertainty": "", "withheld": True})
+            findings.append(
+                {
+                    "statement": "A finding was withheld because it cited no valid record.",
+                    "status": "insufficient_data",
+                    "evidence": [],
+                    "uncertainty": "",
+                    "withheld": True,
+                }
+            )
     rec = review.recommendation.model_dump()
     rec["evidence"] = [e for e in dict.fromkeys(rec["evidence"]) if e in ids]
-    return {"findings": findings, "recommendation": rec, "draft_reply": review.draft_reply, "questions": review.questions,
-            "evidence_ids": sorted(ids), "model": model, "at": now}
+    return {
+        "findings": findings,
+        "recommendation": rec,
+        "draft_reply": review.draft_reply,
+        "questions": review.questions,
+        "evidence_ids": sorted(ids),
+        "model": model,
+        "at": now,
+    }
 
 
 def record_review(order: dict, cid: str, review: dict, by: str, now: datetime) -> dict:
@@ -251,8 +279,16 @@ def decide(order: dict, cid: str, body: DecisionIn, by: str, now: datetime) -> d
             raise Refused(f"Enter an amount up to ₱{paid / 100:,.2f}")
     else:
         amount = None
-    decision = {"action": body.action, "amount": amount, "reason": body.reason.strip(), "reply": body.reply.strip() or None,
-                "by": by, "at": now, "order_version": order["version"], "followed_ai": (c["review"] or {}).get("recommendation", {}).get("action") == body.action}
+    decision = {
+        "action": body.action,
+        "amount": amount,
+        "reason": body.reason.strip(),
+        "reply": body.reply.strip() or None,
+        "by": by,
+        "at": now,
+        "order_version": order["version"],
+        "followed_ai": (c["review"] or {}).get("recommendation", {}).get("action") == body.action,
+    }
     return put(order, {**c, "decision": decision, "status": "resolution_approved"}, by, now)
 
 
@@ -262,7 +298,9 @@ def escalate(order: dict, cid: str, owner: str, next_action: str, by: str, now: 
         raise Refused("This report is closed")
     if not owner.strip() or not next_action.strip():
         raise Refused("Say who owns it and what happens next")
-    return put(order, {**c, "status": "escalated", "escalation": {"owner": owner.strip(), "next_action": next_action.strip(), "by": by, "at": now}}, by, now)
+    return put(
+        order, {**c, "status": "escalated", "escalation": {"owner": owner.strip(), "next_action": next_action.strip(), "by": by, "at": now}}, by, now
+    )
 
 
 def start_replacement(order: dict, cid: str, by: str, now: datetime) -> dict:

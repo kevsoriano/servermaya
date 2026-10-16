@@ -19,4 +19,21 @@ dependencies = [
 dev = [
     "httpx>=0.28.1",
     "pytest>=9.1.1",
+    "ruff>=0.15",
+]
+
+[tool.ruff]
+line-length = 150
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "C4"]
+ignore = [
+    "B008",    # FastAPI declares dependencies as Depends(...) defaults
+    "B904",    # an HTTPException is the response; the original error is not for the client
+    "B905",    # zip() lengths match by construction; strict=True would turn a data surprise into a crash
+    "C408",    # dict(...) reads better for the eval's case tables
+    "E501",    # the formatter wraps code; long strings and comments stay readable
+    "E731",    # small named lambdas are the house style
+    "SIM105",  # try/except/pass is clearer than contextlib.suppress here
 ]

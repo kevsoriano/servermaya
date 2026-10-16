@@ -15,7 +15,7 @@ space := $(empty) $(empty)
 help:
 	@echo "make setup            install dependencies, create backend/.env"
 	@echo "make dev              run backend (:8000) and frontend (:5173)"
-	@echo "make test             backend tests, frontend lint and build"
+	@echo "make test             backend lint, format check and tests; frontend lint and build"
 	@echo "make eval             live Gemini evaluation; writes docs/eval-results.md"
 	@echo "make deploy           deploy backend to Cloud Run, then frontend to Firebase Hosting"
 	@echo "make deploy-backend   backend only"
@@ -40,7 +40,7 @@ dev-frontend:
 	cd frontend && npm run dev
 
 test:
-	cd backend && uv run pytest -q
+	cd backend && uv run ruff check . && uv run ruff format --check . && uv run pytest -q
 	cd frontend && npm run lint && npm run build
 
 eval:

@@ -219,7 +219,13 @@ def check_receipt(
     if not shown.startswith("639") or len(re.sub(r"\D", "", shown[3:])) < 4:
         if len(tail) >= 3 and seller.get("user_id"):
             fits = seller["user_id"].upper().endswith(tail.upper())
-            out.append(check("recipient_mobile", "pass" if fits else "fail", f"Recipient account ending {tail} {'fits' if fits else 'is not'} the seller's GCash account from their QR"))
+            out.append(
+                check(
+                    "recipient_mobile",
+                    "pass" if fits else "fail",
+                    f"Recipient account ending {tail} {'fits' if fits else 'is not'} the seller's GCash account from their QR",
+                )
+            )
         else:
             out.append(check("recipient_mobile", "unreadable", "Too few digits of the recipient's number or account could be read"))
     elif not mobile_fits(shown, mobile(seller["mobile"])):
@@ -452,7 +458,15 @@ def confirm(order: dict, ref: str, by: str, reason: str, now: datetime, confirme
     if (not claim or doubts) and not reason.strip():
         why = "no screenshot shows this reference" if not claim else "these checks did not pass: " + ", ".join(doubts)
         raise Refused(f"Say why you are confirming: {why}")
-    confirmed = {"reference": ref, "invno": invno or None, "claim_id": claim and claim["id"], "history_image": history and history["image"], "by": by, "at": now, "reason": reason.strip() or None}
+    confirmed = {
+        "reference": ref,
+        "invno": invno or None,
+        "claim_id": claim and claim["id"],
+        "history_image": history and history["image"],
+        "by": by,
+        "at": now,
+        "reason": reason.strip() or None,
+    }
     return {"manual_payment": {**m, "status": "seller_confirmed", "confirmed": confirmed}}
 
 
@@ -523,7 +537,15 @@ def reconcile(order: dict, statement: dict, statement_id: str, taken: set[str], 
             continue
         claim = next((c for c in reversed(m["claims"]) if shows(c, row["reference"], row["invno"])), None)
         if claim or history.get("reference") == row["reference"]:
-            confirmed = {"reference": row["reference"], "invno": row["invno"], "claim_id": claim and claim["id"], "history_image": history.get("image") if history.get("reference") == row["reference"] else None,
-                         "by": by, "at": now, "reason": "Found in an uploaded GCash history export", "statement": statement_id}
+            confirmed = {
+                "reference": row["reference"],
+                "invno": row["invno"],
+                "claim_id": claim and claim["id"],
+                "history_image": history.get("image") if history.get("reference") == row["reference"] else None,
+                "by": by,
+                "at": now,
+                "reason": "Found in an uploaded GCash history export",
+                "statement": statement_id,
+            }
             return {"manual_payment": {**m, "status": "seller_confirmed", "confirmed": confirmed, "history_check": check("found", row)}}
     return {}

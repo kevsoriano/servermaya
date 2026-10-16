@@ -110,8 +110,10 @@ def resolve(signals: list[dict], orders: list[dict], reviews: dict | None = None
         if payment.get("status") == "verified" and kind in ("pressure", "payment_claim", "receipt_image"):
             return f"PayMongo verified a payment of ₱{payment.get('paid_amount', payment['amount']) / 100:,.2f} for this order"
         if manual.get("status") == "seller_confirmed" and kind == "payment_claim":
-            return (f"You found GCash reference {manual['confirmed']['reference']} for ₱{manual['amount'] / 100:,.2f} in your own "
-                    "GCash history (not verified by PayMongo)")
+            return (
+                f"You found GCash reference {manual['confirmed']['reference']} for ₱{manual['amount'] / 100:,.2f} in your own "
+                "GCash history (not verified by PayMongo)"
+            )
         return None
 
     out = []
@@ -123,7 +125,15 @@ def resolve(signals: list[dict], orders: list[dict], reviews: dict | None = None
             parts.setdefault(id(o), (o, []))[1].append(source)
         for o, sources in parts.values():
             part = {**s, "sources": sources}
-            out.append({**part, "key": key(part), "resolved": settled(s["kind"], o), "reviewed": reviews.get(key(part)), "earlier": bool(o) and rules.done(o)})
+            out.append(
+                {
+                    **part,
+                    "key": key(part),
+                    "resolved": settled(s["kind"], o),
+                    "reviewed": reviews.get(key(part)),
+                    "earlier": bool(o) and rules.done(o),
+                }
+            )
     return out
 
 
@@ -146,9 +156,17 @@ def payment_context(signal: dict, messages: list[dict], orders: list[dict]) -> l
     day = lambda t: f"{t.astimezone(PHT):%b %-d}"
     shared, said = [], []  # from the records, and from the seller's own messages
     for o in orders:
-        shared += [(c["at"], "they confirmed an order through its link, which offers payment") for c in o.get("confirmations", []) if c.get("kind") == "customer"]
+        shared += [
+            (c["at"], "they confirmed an order through its link, which offers payment")
+            for c in o.get("confirmations", [])
+            if c.get("kind") == "customer"
+        ]
         shared += [(p["requested_at"], "a PayMongo payment link") for p in [o.get("payment")] if p and p.get("requested_at")]
-        shared += [(m["requested_at"], "a GCash request with your number") for m in [o.get("manual_payment"), *o.get("manual_payment_history", [])] if m and m.get("requested_at")]
+        shared += [
+            (m["requested_at"], "a GCash request with your number")
+            for m in [o.get("manual_payment"), *o.get("manual_payment_history", [])]
+            if m and m.get("requested_at")
+        ]
     for m in messages:
         if m["from_page"] and DETAILS.search(m.get("text") or ""):
             text = extraction.inline(m["text"])
@@ -159,20 +177,26 @@ def payment_context(signal: dict, messages: list[dict], orders: list[dict]) -> l
         t, what = before[-1]
         lines = [f"Payment details were shared before this message: {what}, on {day(t)}."]
     else:
-        lines = ["No payment link, GCash request or payment details from you appear in this chat before this message. "
-                 "They may have your details from your page or elsewhere."]
+        lines = [
+            "No payment link, GCash request or payment details from you appear in this chat before this message. "
+            "They may have your details from your page or elsewhere."
+        ]
     mine = next((o for o in [owner(signal["sources"][0], first["created_time"], orders)] if o), None)
     for o in orders:
         if o is mine or not o.get("messages") or datetime.fromisoformat(o["messages"][-1]["created_time"]) >= at:
             continue
         payment, manual = o.get("payment") or {}, o.get("manual_payment") or {}
         if payment.get("status") == "verified":
-            lines.append(f"Paid you before: PayMongo verified ₱{payment.get('paid_amount', payment['amount']) / 100:,.2f} on an earlier order. "
-                         "That does not show this payment.")
+            lines.append(
+                f"Paid you before: PayMongo verified ₱{payment.get('paid_amount', payment['amount']) / 100:,.2f} on an earlier order. "
+                "That does not show this payment."
+            )
             break
         if manual.get("status") == "seller_confirmed":
-            lines.append(f"Paid you before: you found GCash reference {manual['confirmed']['reference']} for ₱{manual['amount'] / 100:,.2f} "
-                         f"in your history on {day(manual['confirmed']['at'])}, for an earlier order. That does not show this payment.")
+            lines.append(
+                f"Paid you before: you found GCash reference {manual['confirmed']['reference']} for ₱{manual['amount'] / 100:,.2f} "
+                f"in your history on {day(manual['confirmed']['at'])}, for an earlier order. That does not show this payment."
+            )
             break
     return lines
 

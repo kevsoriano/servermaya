@@ -87,8 +87,11 @@ def history_png(amount: int, reference: str, at: datetime, sender: str) -> bytes
     d.text((w / 2, 300), sender, font=font(40), fill="#111", anchor="mm")
     d.text((w / 2, 400), f"+ PHP {money(amount)}", font=font(56), fill="#1b873f", anchor="mm")
     y = 520
-    for label, value in [("Reference Number", f"{reference[:4]} {reference[4:7]} {reference[7:]}"),
-                         ("Date and Time", f"{at:%b %d, %Y} {at:%I:%M %p}".replace(" 0", " ")), ("Status", "Received")]:
+    for label, value in [
+        ("Reference Number", f"{reference[:4]} {reference[4:7]} {reference[7:]}"),
+        ("Date and Time", f"{at:%b %d, %Y} {at:%I:%M %p}".replace(" 0", " ")),
+        ("Status", "Received"),
+    ]:
         d.text((80, y), label, font=font(28), fill="#555", anchor="lm")
         d.text((w - 80, y), value, font=font(28), fill="#111", anchor="rm")
         y += 80
@@ -124,8 +127,12 @@ def statement_lines(credits: list[dict], start: datetime, end: datetime, opening
     rows += [(c["at"], f"Received GCash from {c['sender']}", c["reference"], c["amount"]) for c in credits]
     rows.append((start.replace(hour=13, minute=0), "Received GCash from RO** M.", new_reference(), 25000))  # an unrelated payment
     rows.sort(key=lambda r: r[0])
-    lines = ["GCash Transaction History", f"{start:%Y-%m-%d} to {end:%Y-%m-%d}", "Date and Time Description Reference No. Debit Credit Balance",
-             f"STARTING BALANCE {money(opening)}"]
+    lines = [
+        "GCash Transaction History",
+        f"{start:%Y-%m-%d} to {end:%Y-%m-%d}",
+        "Date and Time Description Reference No. Debit Credit Balance",
+        f"STARTING BALANCE {money(opening)}",
+    ]
     balance, debit, credit = opening, 0, 0
     for at, text, ref, moved in rows:
         balance += moved

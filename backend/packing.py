@@ -6,7 +6,6 @@ until the seller inspects it. Nothing here can mark an order packed on its own.
 
 import io
 from datetime import datetime
-from typing import Literal
 
 from PIL import Image, ImageFilter, ImageStat
 from pydantic import BaseModel, Field
