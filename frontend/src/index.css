@@ -847,6 +847,9 @@ mark.source.provider {
   max-height: calc(100dvh - 5rem);
   padding-right: 2rem; /* room for the close button */
 }
+.viewer figcaption a {
+  color: var(--accent-text);
+}
 .viewer h2 {
   font-size: 1.1rem;
 }

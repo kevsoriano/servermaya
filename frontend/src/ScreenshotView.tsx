@@ -76,6 +76,14 @@ export default function ScreenshotView({ url, alt, messageId, fromCustomer, orde
               <p className={status.ok ? 'viewer-status ok' : 'viewer-status open'} role="status">
                 {status.text}
               </p>
+              {!status.ok && order.source?.type === 'demo' && (
+                <p className="demo-note">
+                  <small>
+                    Demo: you have no GCash app for the demo shop. Use <strong>Sample history screenshot</strong> in the order, or the sample history PDF in
+                    Settings.
+                  </small>
+                </p>
+              )}
               <ul className="viewer-checks">
                 {claim.checks.map((k) => (
                   <li key={k.check}>
@@ -84,7 +92,8 @@ export default function ScreenshotView({ url, alt, messageId, fromCustomer, orde
                     </span>
                     <div>
                       <strong>{LABEL[k.check] ?? k.check}</strong>
-                      {shown(claim.receipt, k.check) && <small> · screenshot shows {shown(claim.receipt, k.check)}</small>}
+                      {/* The value explains a cross or a question mark; on a pass the reason already says it. */}
+                      {k.result !== 'pass' && shown(claim.receipt, k.check) && <small> · screenshot shows {shown(claim.receipt, k.check)}</small>}
                       <p>{k.detail}</p>
                     </div>
                   </li>
