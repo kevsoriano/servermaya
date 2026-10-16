@@ -1191,9 +1191,10 @@ def check_packing(order_id: str, user: dict = Depends(current_user)):
         for r in packing["rows"]
     )
     ai_budget(user)
+    photos = [bucket().blob(p["path"]).download_as_bytes() for p in packing["photos"]]
     contents = [f"<order>\n{checklist}\n</order>"]
-    for n, p in enumerate(packing["photos"], 1):
-        contents += [f"Photo {n}:", types.Part.from_bytes(data=bucket().blob(p["path"]).download_as_bytes(), mime_type=p["content_type"])]
+    for n, (p, data) in enumerate(zip(packing["photos"], photos), 1):
+        contents += [f"Photo {n}:", types.Part.from_bytes(data=data, mime_type=p["content_type"])]
     try:
         response = clients()[0].models.generate_content(
             model=GEMINI_MODEL,
@@ -1204,7 +1205,8 @@ def check_packing(order_id: str, user: dict = Depends(current_user)):
     except Exception:
         raise HTTPException(502, "Could not check the photos. Try again.")
     now = datetime.now(timezone.utc)
-    return change(ref, lambda o: pack.apply_check(o, report, GEMINI_MODEL, now))
+    too_unclear = pack.unclear(photos)
+    return change(ref, lambda o: pack.apply_check(o, report, GEMINI_MODEL, now, too_unclear))
 
 
 class Inspection(BaseModel):

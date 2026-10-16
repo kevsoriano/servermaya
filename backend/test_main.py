@@ -1,3 +1,5 @@
+import io
+
 from fastapi.testclient import TestClient
 from google.oauth2 import id_token
 
@@ -440,6 +442,25 @@ def test_packing_rules():
     order |= pack.apply_check(order, report, "m", now)
     assert [r["auto_result"] for r in order["packing"]["rows"]] == ["conflict", "insufficient_visibility"]
     assert order["packing"]["rows"][1]["photos"] == []  # citation of a photo that does not exist is dropped
+
+    # A photo code finds too blurred to count in cannot back a match, whatever Gemini read in it.
+    two_blue = pack.Report(lines=[seen(1, counts=c(("blue", 2))), seen(2, counts=c((None, 1)))], suggestions=[])
+    blurred = pack.apply_check(order, two_blue, "m", now, too_unclear={1})["packing"]
+    assert [r["auto_result"] for r in blurred["rows"]] == ["insufficient_visibility", "insufficient_visibility"]
+    assert blurred["suggestions"][0].startswith("Photo 1 is too blurry")
+    assert pack.apply_check(order, two_blue, "m", now)["packing"]["rows"][0]["auto_result"] == "matched"
+
+    from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
+
+    def png(im):
+        out = io.BytesIO()
+        im.save(out, "PNG")
+        return out.getvalue()
+
+    im = Image.new("RGB", (1024, 768), (233, 220, 201))
+    ImageDraw.Draw(im).rounded_rectangle((300, 250, 420, 420), 18, fill=(40, 90, 200), outline=(0, 30, 120), width=3)
+    sharp, blurry, dark = png(im), png(im.filter(ImageFilter.GaussianBlur(10))), png(ImageEnhance.Brightness(im).enhance(0.06))
+    assert pack.unclear([sharp, blurry, dark, b"not an image"]) == {2, 3}  # an unreadable format is not judged
 
     blue2 = {"variant": "blue", "quantity": 2}
     assert pack.result(blue2, seen(1, counts=c(("Blue", 2)))) == "matched"

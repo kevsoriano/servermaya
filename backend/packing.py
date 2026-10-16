@@ -4,9 +4,11 @@ Gemini only reports what it can see. Code decides the result, and anything uncer
 until the seller inspects it. Nothing here can mark an order packed on its own.
 """
 
+import io
 from datetime import datetime
 from typing import Literal
 
+from PIL import Image, ImageFilter, ImageStat
 from pydantic import BaseModel, Field
 
 from orders import Refused
@@ -15,6 +17,9 @@ IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/hei
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
 MAX_PHOTOS = 12
 OK = ("matched", "seller_confirmed")
+# ponytail: calibrated on generated drawings (sharp 53-252, 4 px blur or near-black under 4); recalibrate on real packing photos.
+MIN_SHARPNESS = 5.0
+LAPLACIAN = ImageFilter.Kernel((3, 3), [0, 1, 0, 1, -4, 1, 0, 1, 0], 1, 128)
 
 SYSTEM = """You check packing photos for a small online shop against the list of items the customer ordered.
 
@@ -120,7 +125,24 @@ def result(expected: dict, seen: Seen | None) -> str:
     return "matched"
 
 
-def apply_check(order: dict, report: Report, model: str, now: datetime) -> dict:
+def sharpness(data: bytes) -> float | None:
+    """How much fine detail a photo has: variance of the Laplacian on a 512 px greyscale copy. Near 0 when it is too blurred or
+    too dark to show anything. None when Pillow cannot read the format (HEIC), so the photo is not judged."""
+    try:
+        im = Image.open(io.BytesIO(data)).convert("L")
+    except Exception:
+        return None
+    im.thumbnail((512, 512))
+    edges = im.filter(LAPLACIAN)
+    return ImageStat.Stat(edges.crop((1, 1, edges.width - 1, edges.height - 1))).var[0]  # the filter leaves the border pixels as they were
+
+
+def unclear(photos: list[bytes]) -> set[int]:
+    """Numbers (from 1) of the photos too blurred or too dark to count anything in."""
+    return {n for n, data in enumerate(photos, 1) if (s := sharpness(data)) is not None and s < MIN_SHARPNESS}
+
+
+def apply_check(order: dict, report: Report, model: str, now: datetime, too_unclear: set[int] = frozenset()) -> dict:
     packing = require_ready(order)
     if packing["completed"]:
         raise Refused("Packing is already marked complete")
@@ -130,8 +152,8 @@ def apply_check(order: dict, report: Report, model: str, now: datetime) -> dict:
     for row in packing["rows"]:
         seen = by_line.get(row["line"])
         if seen:
-            # Drop citations of photos that do not exist.
-            seen = seen.model_copy(update={"photos": [n for n in dict.fromkeys(seen.photos) if 1 <= n <= len(photo_ids)]})
+            # Drop citations of photos that do not exist, or that code found too blurred or dark: Gemini still reads shapes in those.
+            seen = seen.model_copy(update={"photos": [n for n in dict.fromkeys(seen.photos) if 1 <= n <= len(photo_ids) and n not in too_unclear]})
         rows.append(
             {
                 **row,
@@ -140,7 +162,8 @@ def apply_check(order: dict, report: Report, model: str, now: datetime) -> dict:
                 "photos": [photo_ids[n - 1] for n in seen.photos] if seen else [],
             }
         )
-    return {"packing": {**packing, "rows": rows, "suggestions": report.suggestions, "checked_at": now, "model": model}}
+    retake = [f"Photo {n} is too blurry or too dark to check. Retake it in good light, holding the phone still." for n in sorted(too_unclear)]
+    return {"packing": {**packing, "rows": rows, "suggestions": retake + report.suggestions, "checked_at": now, "model": model}}
 
 
 def confirm_row(order: dict, line: int, by: str, reason: str, now: datetime) -> dict:
