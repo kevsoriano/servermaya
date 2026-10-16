@@ -3,11 +3,13 @@
 Deliberately not a score or a verdict on the customer. Each signal says what was said, where, and what to check.
 """
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 import extraction
+import orders as rules
 
 Kind = Literal["pressure", "payment_claim", "changed_payment_details", "inconsistent_details", "receipt_image"]
 
@@ -58,7 +60,9 @@ def finalize(found: Found, messages: list[dict]) -> list[dict]:
     for s in found.signals:
         ids = [messages[n - 1]["id"] for n in dict.fromkeys(s.sources) if 1 <= n <= len(messages) and not messages[n - 1]["from_page"]]
         if ids:
-            out.append({"kind": s.kind, "summary": s.summary, "sources": ids, "check": SUGGESTED[s.kind]})
+            # When each cited message was sent, so the check can be placed with the order it is about.
+            times = [next(m.get("created_time") for m in messages if m["id"] == i) for i in ids]
+            out.append({"kind": s.kind, "summary": s.summary, "sources": ids, "check": SUGGESTED[s.kind], "times": times})
     return out
 
 
@@ -71,25 +75,56 @@ def key(signal: dict) -> str:
     return f"{signal['kind']}:{signal['sources'][0]}"
 
 
-def resolve(signals: list[dict], verified: list[dict], reviews: dict | None = None, seller_confirmed: list[dict] = ()) -> list[dict]:
-    """Deterministic status for each check: settled by a payment from this chat, reviewed by the seller, or open.
+def owner(source: str, at: str | None, orders: list[dict]) -> dict | None:
+    """The order a cited message is about. orders: this chat's orders, newest first.
+
+    A message an order was drafted from belongs to that order. A later one belongs to the latest order drafted before it,
+    unless that order was already received or cancelled when it was sent: then it leads to the next order, which no payment
+    has settled yet. When unsure the check stays open; a payment never settles a message about another order.
+    """
+    for o in orders:
+        if any(m["id"] == source for m in o.get("messages", [])):
+            return o
+    if not at:  # analysed before checks recorded their times
+        return orders[0] if orders and not rules.done(orders[0]) else None
+    when = datetime.fromisoformat(at)
+    before = [o for o in orders if o.get("messages") and datetime.fromisoformat(o["messages"][-1]["created_time"]) < when]
+    if not before:
+        return None
+    done = rules.finished_at(before[0])
+    return before[0] if not done or done >= when else None
+
+
+def resolve(signals: list[dict], orders: list[dict], reviews: dict | None = None) -> list[dict]:
+    """Deterministic status for each check: settled by its own order's payment, reviewed by the seller, or open.
+    Checks on an earlier, finished order are marked earlier: history for the seller, not something to verify now.
 
     A PayMongo-verified payment settles pressure, payment claims and receipt images. A GCash payment the seller found in
     their own history settles only the payment claim: the claim was checked at the source, but a screenshot is still a screenshot.
     """
-    paid = verified[0] if verified else None
-    gcash = seller_confirmed[0] if seller_confirmed else None
     reviews = reviews or {}
 
-    def settled(kind: str) -> str | None:
-        if paid and kind in ("pressure", "payment_claim", "receipt_image"):
-            return f"PayMongo verified a payment of ₱{paid['amount'] / 100:,.2f}"
-        if gcash and kind == "payment_claim":
-            return f"You found GCash reference {gcash['confirmed']['reference']} for ₱{gcash['amount'] / 100:,.2f} in your own GCash history (not verified by PayMongo)"
+    def settled(kind: str, o: dict | None) -> str | None:
+        payment, manual = (o or {}).get("payment") or {}, (o or {}).get("manual_payment") or {}
+        if payment.get("status") == "verified" and kind in ("pressure", "payment_claim", "receipt_image"):
+            return f"PayMongo verified a payment of ₱{payment.get('paid_amount', payment['amount']) / 100:,.2f} for this order"
+        if manual.get("status") == "seller_confirmed" and kind == "payment_claim":
+            return (f"You found GCash reference {manual['confirmed']['reference']} for ₱{manual['amount'] / 100:,.2f} in your own "
+                    "GCash history (not verified by PayMongo)")
         return None
 
-    return [{**s, "key": key(s), "resolved": settled(s["kind"]), "reviewed": reviews.get(key(s))} for s in signals]
+    out = []
+    for s in signals:
+        # One check can cite messages about two orders ("already paid" then, and again now): each order's part stands alone.
+        parts: dict[int, tuple[dict | None, list[str]]] = {}
+        for source, at in zip(s["sources"], s.get("times") or [None] * len(s["sources"])):
+            o = owner(source, at, orders)
+            parts.setdefault(id(o), (o, []))[1].append(source)
+        for o, sources in parts.values():
+            part = {**s, "sources": sources}
+            out.append({**part, "key": key(part), "resolved": settled(s["kind"], o), "reviewed": reviews.get(key(part)), "earlier": bool(o) and rules.done(o)})
+    return out
 
 
 def is_open(s: dict) -> bool:
-    return not s["resolved"] and not s["reviewed"]
+    return not s["resolved"] and not s["reviewed"] and not s["earlier"]

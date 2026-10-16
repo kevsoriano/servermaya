@@ -580,6 +580,11 @@ mark.status.confirmed {
   color: var(--muted);
 }
 
+.earlier-checks > summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
 .checks details {
   margin: 0.25rem 0;
 }

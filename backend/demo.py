@@ -7,8 +7,11 @@ import re
 import secrets
 from datetime import datetime, timedelta
 
+import delivery
 import extraction
 import orders as rules
+import packing as pack
+import receipts as gcash
 
 SHOP = "Demo shop"
 MAX_MESSAGES = 200  # keeps a thread document well under Firestore's 1 MB limit
@@ -55,6 +58,25 @@ RETURNING = ("Leah Cruz", [
     (False, "Hi again! I'm back home. Can I order 2 lavender candles this time? Same address and number as before."),
     (True, "Welcome back, Leah! Lavender is also ₱220 each."),
     (False, "Great, 2 lavender please."),
+])
+
+
+# A repeat customer whose first order looked risky (already paid, a receipt, ship today) but went through: the seller found the
+# payment in their own GCash history, packed it and it was received. Now he orders again with the same words. The old payment
+# must not settle the new claim: checks on the first order show as history, the new ones stay to verify.
+REPEAT = ("Rico Bautista", [
+    (False, "Hi! Do you still have the cream tote bag?"),
+    (True, "Yes! The cream tote is ₱250."),
+    (False, "1 please. Rico Bautista, 0917 555 0166, 23 Kalayaan Ave., Brgy. Pinyahan, Quezon City"),
+    (True, "Noted, Rico! 1 cream tote, ₱250. I'll send you the order link."),
+    (False, "Already paid via GCash ₱250, here's my receipt. Please ship today, I really need it tomorrow!"),
+    (True, "Thanks! I'll check our GCash history first, then pack it."),
+    (True, "Found your payment in our GCash. Your tote is on the way!"),
+    (False, "Received, thank you!"),
+], [
+    (False, "Hi again! Can I get 1 black tote this time? Same address and number."),
+    (True, "Welcome back, Rico! Black is also ₱250."),
+    (False, "Paid na rin po via GCash ₱250, ref 9012 345 678901. Please ship today, I need it by tomorrow din po 🙏"),
 ])
 
 
@@ -116,6 +138,39 @@ def returning(owner: str, conversation_id: str, now: datetime) -> tuple[dict, di
     order |= rules.send(order, secrets.token_urlsafe(32))
     order |= rules.confirm(order, "customer", "confirmation_link", at(3) + timedelta(seconds=30))
     order |= rules.cancel(order, SHOP, "The customer asked to cancel in chat", at(5))
+    return chat, order
+
+
+def repeat(owner: str, conversation_id: str, order_id: str, now: datetime, receipt: dict, photo: dict, pay_to: dict, reference: str) -> tuple[dict, dict]:
+    """The repeat customer's chat and his first order, ten days ago, through the same rules as a real one: confirmed by his
+    link, a GCash payment the seller found in their own history, packed with the line checked by hand, sent by a courier the
+    seller reports, and received. receipt: his screenshot as a chat attachment. photo: the stored packing photo."""
+    name, earlier, later = REPEAT
+    old = thread(name, earlier, owner, now - timedelta(days=10))
+    old["messages"][4]["attachments"] = [receipt]
+    new = thread(name, later, owner, now - timedelta(hours=2 * len(SEED) + 2))
+    chat = {**new, "messages": old["messages"] + new["messages"]}
+    messages = old["messages"][:4]  # drafted before he wrote that he had paid
+    at = lambda n: datetime.fromisoformat(old["messages"][n]["created_time"])
+    text = lambda value, *sources: extraction.Text(value=value, sources=list(sources))
+    raw = extraction.Extraction(
+        items=[extraction.Item(name="Tote bag", variant="Cream", quantity=1, unit_price_php=250, price_source=2, sources=[1, 3])],
+        recipient_name=text("Rico Bautista", 3), phone=text("0917 555 0166", 3), address=text("23 Kalayaan Ave., Brgy. Pinyahan, Quezon City", 3),
+        delivery_instructions=text(None), claims=[], clarification_questions=[])
+    order = {"status": "draft", "version": 1, "source": {"type": "demo", "conversation_id": conversation_id, "owner": owner},
+             "messages": messages, "draft": extraction.finalize(raw, messages), "confirmations": [], "confirm_token": None,
+             "model": "demo_seed", "created_by": SHOP, "created_at": at(3)}
+    order |= rules.send(order, secrets.token_urlsafe(32))
+    order |= rules.confirm(order, "customer", "confirmation_link", at(3) + timedelta(seconds=30))
+    order |= gcash.request(order, pay_to, SHOP, at(5), says_paid=True)
+    order |= gcash.confirm(order, reference, SHOP, "Found ₱250.00 from his name with this reference in our GCash history", at(6) - timedelta(seconds=40), False)
+    order |= pack.add_photo(order, photo)
+    order |= pack.confirm_row(order, 1, SHOP, "Checked by hand: 1 cream tote bag, no damage", at(6) - timedelta(seconds=30))
+    order |= pack.complete(order, SHOP, at(6) - timedelta(seconds=25))
+    order |= delivery.start(order, f"f_{order_id}", "other", SHOP, at(6) - timedelta(seconds=20), tracking="Shop rider")
+    order |= delivery.step(order, "picked_up", "seller_reported", SHOP, at(6))
+    order |= delivery.step(order, "delivered", "seller_reported", SHOP, at(7) - timedelta(seconds=30))
+    order |= delivery.acknowledge(order, "customer_link", at(7))
     return chat, order
 
 

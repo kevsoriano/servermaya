@@ -375,7 +375,7 @@ export default function Conversations() {
               </button>
             </div>
           )}
-          {order && <OrderView order={order} onChange={orderChanged} />}
+          {order && <OrderView order={order} onChange={orderChanged} checks={false} />}
           {messages.length > 0 && <Signals conversationId={openId} messages={messages} latest={messages.at(-1)?.id} />}
         </aside>
       )}

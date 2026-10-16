@@ -50,10 +50,25 @@ def missing(draft: dict) -> list[str]:
 CARRIED = ("recipient_name", "phone", "address")  # who and where; delivery instructions are for one delivery
 
 
+def finished_at(order: dict) -> datetime | None:
+    """When the order was cancelled or the customer said they received it; None while it is still going."""
+    if order["status"] == "cancelled":
+        return (order.get("cancelled") or {}).get("at")
+    receipt = order.get("receipt") or {}
+    return receipt.get("at") if receipt.get("status") == "customer_confirmed" else None
+
+
+def covers_until(order: dict) -> datetime | None:
+    """The end of the stretch of chat this order is about: its last drafted-from message, or later if follow-ups such as
+    "already paid" or "received, thanks" came before it was finished."""
+    ends = [datetime.fromisoformat(order["messages"][-1]["created_time"])] if order.get("messages") else []
+    return max(ends + [t for t in [finished_at(order)] if t], default=None)
+
+
 def since_last_order(messages: list[dict], previous: list[dict]) -> list[dict]:
-    """The messages a new order is drafted from: those after the last message any earlier order of this chat was drafted
-    from. A returning customer's old items and changes stay with the old order."""
-    ends = [datetime.fromisoformat(o["messages"][-1]["created_time"]) for o in previous if o.get("messages")]
+    """The messages a new order is drafted from: those after every earlier order of this chat. A returning customer's old
+    items, changes and follow-ups stay with the old order."""
+    ends = [t for t in map(covers_until, previous) if t]
     if not ends:
         return messages
     return [m for m in messages if datetime.fromisoformat(m["created_time"]) > max(ends)]

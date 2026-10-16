@@ -241,7 +241,26 @@ def seed_demo(user: dict):
     ref = orders().document()
     batch.set(ref, order)
     batch.set(ref.collection("versions").document("1"), version_doc(order["draft"], "demo_seed", demo.SHOP))
+    rid, ref = demo.new_id(), orders().document()
+    paid_at, reference = now - timedelta(days=10), samples.new_reference()
+    receipt = demo_attachment(samples.receipt_png(25000, reference, paid_at, samples.PAY_TO_NAME, samples.PAY_TO_MOBILE), "image/png")
+    chat, order = demo.repeat(user["uid"], rid, ref.id, now, receipt, packing_sample(ref.id), DEMO_GCASH, reference)
+    batch.set(demo_threads().document(rid), chat)
+    batch.set(ref, order)
+    batch.set(ref.collection("versions").document("1"), version_doc(order["draft"], "demo_seed", demo.SHOP))
+    # His payment reached the demo account, so it is in the sample GCash history like any matching sample receipt.
+    batch.set(store_doc().collection("demoUsers").document(user["uid"]),
+              {"samples": firestore.ArrayUnion([{"reference": reference, "amount": 25000, "at": paid_at, "sender": samples.sender(chat["name"])}])}, merge=True)
     batch.commit()
+
+
+def packing_sample(order_id: str) -> dict:
+    """The drawn packing photo, stored like an uploaded one."""
+    data, photo_id = samples.packing_png(), secrets.token_hex(8)
+    path = f"stores/{STORE}/orders/{order_id}/packing/{photo_id}"
+    bucket().blob(path).upload_from_string(data, content_type="image/png", if_generation_match=0)
+    return {"id": photo_id, "path": path, "sha256": hashlib.sha256(data).hexdigest(), "content_type": "image/png", "size": len(data),
+            "uploaded_at": datetime.now(timezone.utc), "uploaded_by": demo.SHOP, "claimed_captured_at": None}
 
 
 def demo_list(user: dict) -> list[dict]:
@@ -424,8 +443,7 @@ def cached_open_checks(conversation_id: str) -> int | None:
     if not doc.exists:
         return None
     d = doc.to_dict()
-    paid, confirmed = payments(conversation_id)
-    return sum(1 for s in risk.resolve(d["signals"], paid, d.get("reviews"), confirmed) if risk.is_open(s))
+    return sum(1 for s in risk.resolve(d["signals"], [o for _, o in chat_orders(conversation_id)], d.get("reviews")) if risk.is_open(s))
 
 
 @app.get("/api/conversations/{conversation_id}")
@@ -478,14 +496,6 @@ def signal_docs():
     return clients()[1].collection("stores").document(STORE).collection("signals")
 
 
-def payments(conversation_id: str) -> tuple[list[dict], list[dict]]:
-    """PayMongo-verified payments and seller-confirmed direct GCash payments on orders from this chat."""
-    found = [d.to_dict() for d in orders().where(filter=firestore.FieldFilter("source.conversation_id", "==", conversation_id)).stream()]
-    paid = [p for p in (o.get("payment") or {} for o in found) if p.get("status") == "verified"]
-    confirmed = [m for m in (o.get("manual_payment") or {} for o in found) if m.get("status") == "seller_confirmed"]
-    return paid, confirmed
-
-
 @app.get("/api/conversations/{conversation_id}/signals")
 def conversation_signals(conversation_id: str, user: dict = Depends(current_user)):
     """Checks before shipping for one thread. Gemini only reruns when a new message has arrived since the last analysis."""
@@ -504,8 +514,7 @@ def conversation_signals(conversation_id: str, user: dict = Depends(current_user
             raise HTTPException(502, "Could not analyse this conversation")
         # merge keeps the seller's reviews across re-analysis
         ref.set({"signals": found, "latest_message_id": latest, "model": GEMINI_MODEL, "analysed_at": firestore.SERVER_TIMESTAMP}, merge=True)
-    paid, confirmed = payments(conversation_id)
-    return risk.resolve(found, paid, cached.get("reviews"), confirmed)
+    return risk.resolve(found, [o for _, o in chat_orders(conversation_id)], cached.get("reviews"))
 
 
 class Review(BaseModel):

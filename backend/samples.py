@@ -101,6 +101,23 @@ def history_png(amount: int, reference: str, at: datetime, sender: str) -> bytes
     return out.getvalue()
 
 
+def packing_png() -> bytes:
+    """A drawn packing photo of one cream tote bag on a table, stamped SAMPLE: the demo has no product photos."""
+    w, h = 1024, 768
+    img = Image.new("RGB", (w, h), "#e9dcc9")
+    d = ImageDraw.Draw(img)
+    for y in range(40, h, 90):
+        d.line([(0, y), (w, y + 12)], fill="#decebb", width=3)
+    x, y, bag, edge = 400, 220, "#eee2c4", "#b9a57c"
+    d.arc((x + 40, y - 20, x + 110, y + 110), 180, 360, fill=edge, width=12)
+    d.arc((x + 130, y - 20, x + 200, y + 110), 180, 360, fill=edge, width=12)
+    d.polygon([(x, y + 50), (x + 240, y + 50), (x + 220, y + 330), (x + 20, y + 330)], fill=bag, outline=edge)
+    d.text((w / 2, h - 60), "SAMPLE PACKING PHOTO - DEMO ONLY", font=ImageFont.load_default(size=26), fill="#c62828", anchor="mm")
+    out = io.BytesIO()
+    img.save(out, "PNG")
+    return out.getvalue()
+
+
 def statement_lines(credits: list[dict], start: datetime, end: datetime, opening: int = 200000) -> list[str]:
     """Rows in the layout of GCash's history export, with a running balance. credits: [{at, reference, amount, sender}]."""
     rows = [(start.replace(hour=9, minute=0), "Payment to MERALCO, Merchant Transaction Number: DEMO1", new_reference(), -150000)]

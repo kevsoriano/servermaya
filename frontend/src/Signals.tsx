@@ -9,6 +9,8 @@ type Signal = {
   check: string
   resolved: string | null
   reviewed: { by: string; at: string; note: string } | null
+  /** On an earlier order that is received or cancelled: history, not something to verify now. */
+  earlier: boolean
 }
 
 const LABEL: Record<string, string> = {
@@ -46,12 +48,14 @@ export default function Signals({ conversationId, messages, latest }: Props) {
     }
   }, [conversationId, latest])
 
-  const isOpen = (s: Signal) => !s.resolved && !s.reviewed
+  const isOpen = (s: Signal) => !s.resolved && !s.reviewed && !s.earlier
+  const current = signals?.filter((s) => !s.earlier)
+  const earlier = signals?.filter((s) => s.earlier) ?? []
   const open = signals?.filter(isOpen) ?? []
   // Every kind is listed, so the seller sees what was looked for. A kind with nothing found is "not seen", never a pass:
   // the AI missing something is not the same as code checking it.
-  const found = signals && [...open, ...signals.filter((s) => !isOpen(s))]
-  const unseen = Object.keys(LABEL).filter((kind) => !signals?.some((s) => s.kind === kind))
+  const found = current && [...open, ...current.filter((s) => !isOpen(s))]
+  const unseen = Object.keys(LABEL).filter((kind) => !current?.some((s) => s.kind === kind))
 
   const review = (body: { key: string; note?: string; reopen?: boolean }) => {
     setBusy(true)
@@ -142,6 +146,31 @@ export default function Signals({ conversationId, messages, latest }: Props) {
             </li>
           ))}
         </ul>
+      )}
+      {earlier.length > 0 && (
+        <details className="earlier-checks">
+          <summary>From earlier orders ({earlier.length})</summary>
+          <ul className="checks">
+            {earlier.map((s) => (
+              <li key={s.key}>
+                <span className={`result ${s.resolved || s.reviewed ? 'pass' : 'none'}`} aria-hidden="true">
+                  {s.resolved || s.reviewed ? '✓' : '–'}
+                </span>
+                <div>
+                  <strong>{LABEL[s.kind] ?? s.kind}</strong>
+                  {s.sources.slice(0, 1).map((id) => quote(id) && <blockquote key={id}>{quote(id)}</blockquote>)}
+                  <p>
+                    {s.resolved
+                      ? `Settled then: ${s.resolved}.`
+                      : s.reviewed
+                        ? `Reviewed by ${s.reviewed.by}: ${s.reviewed.note}`
+                        : 'Not settled on that order.'}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
       <p>
         <small>

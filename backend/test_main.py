@@ -401,18 +401,62 @@ def test_signals_keep_only_cited_customer_messages_and_resolve_on_payment():
     assert [(s["kind"], s["sources"]) for s in got] == [("payment_claim", ["c2"]), ("pressure", ["c2"])]
     assert all(s["check"] for s in got)
 
+    order = lambda ids, **k: {"status": "confirmed", "messages": [{"id": i} for i in ids], **k}
     assert all(s["resolved"] is None for s in risk.resolve(got, []))
-    done = risk.resolve(got + [{"kind": "changed_payment_details", "summary": "", "sources": ["c1"], "check": ""}], [{"amount": 89000}])
+    paid = order(["c1", "s1", "c2"], payment={"status": "verified", "amount": 89000})
+    done = risk.resolve(got + [{"kind": "changed_payment_details", "summary": "", "sources": ["c1"], "check": ""}], [paid])
     assert [bool(s["resolved"]) for s in done] == [True, True, False]  # a verified payment does not settle changed refund details
     # A GCash payment the seller found in their own history settles the payment claim only.
-    gcash = [{"amount": 89000, "confirmed": {"reference": "1234567890123"}}]
-    assert [bool(s["resolved"]) for s in risk.resolve(got, [], None, gcash)] == [True, False]
+    gcash = order(["c1", "s1", "c2"], manual_payment={"status": "seller_confirmed", "amount": 89000, "confirmed": {"reference": "1234567890123"}})
+    assert [bool(s["resolved"]) for s in risk.resolve(got, [gcash])] == [True, False]
 
     # A seller review closes a check without claiming it was settled; it survives re-analysis while the evidence is the same.
     reviewed = risk.resolve(got, [], {"pressure:c2": {"by": "s", "note": "Regular customer, paid via link before"}})
     assert [(risk.is_open(s), bool(s["reviewed"]), s["resolved"]) for s in reviewed] == [(True, False, None), (False, True, None)]
     moved = [{**got[1], "sources": ["c1"]}]  # re-analysis now rests on a different message
     assert risk.is_open(risk.resolve(moved, [], {"pressure:c2": {"by": "s", "note": "x"}})[0])
+
+
+def test_an_earlier_orders_payment_does_not_settle_a_new_claim():
+    import signals as risk
+
+    order = lambda ids, **k: {"status": "confirmed", "messages": [{"id": i} for i in ids], **k}
+    claim = lambda source: {"kind": "payment_claim", "summary": "", "sources": [source], "check": ""}
+    checks = [claim("c1"), claim("c9")]  # "already paid" on the first order, then "paid na ulit" in the new messages
+    first = order(["c1", "s1"], payment={"status": "verified", "amount": 50000}, receipt={"status": "customer_confirmed"})
+
+    old, new = risk.resolve(checks, [first])
+    assert old["resolved"] and old["earlier"] and not risk.is_open(old)  # history, settled on its own order
+    assert not new["resolved"] and not new["earlier"] and risk.is_open(new)  # the old payment says nothing about the new claim
+    # Drafted into a new order, the claim waits for that order's own payment.
+    assert risk.is_open(risk.resolve(checks, [order(["c9"]), first])[1])
+    assert risk.resolve(checks, [order(["c9"], payment={"status": "verified", "amount": 50000}), first])[1]["resolved"]
+    # A follow-up while the first order is still open is about that order.
+    assert risk.resolve(checks, [{**first, "receipt": None}])[1]["resolved"]
+    # A cancelled first order is finished too.
+    assert risk.is_open(risk.resolve(checks, [{**first, "receipt": None, "status": "cancelled"}])[1])
+
+    # By time: "already paid" sent after the first order was drafted but before it was received is about the first order;
+    # the same words after it was received are about the next one.
+    from datetime import datetime, timedelta, timezone
+
+    import orders as rules
+
+    t0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    iso = lambda minutes: (t0 + timedelta(minutes=minutes)).isoformat()
+    drafted = {"status": "confirmed", "messages": [{"id": "c1", "created_time": iso(0)}], "payment": {"status": "verified", "amount": 25000},
+               "receipt": {"status": "customer_confirmed", "at": t0 + timedelta(minutes=30)}}
+    follow_up, next_order = [{**claim(c), "times": [iso(m)]} for c, m in (("c5", 10), ("c9", 60))]
+    settled, waiting = risk.resolve([follow_up, next_order], [drafted])
+    assert settled["resolved"] and settled["earlier"] and risk.is_open(waiting) and not waiting["resolved"]
+    # One check citing both: split, so the new claim is not hidden in the first order's history.
+    both = {**claim("c5"), "sources": ["c5", "c9"], "times": [iso(10), iso(60)]}
+    assert [(c["sources"], c["earlier"], risk.is_open(c)) for c in risk.resolve([both], [drafted])] == [(["c5"], True, False), (["c9"], False, True)]
+
+    # The next draft leaves out the first order's follow-ups ("already paid", "received, thanks") too.
+    chat = [{"id": c, "created_time": iso(m)} for c, m in (("c1", 0), ("c5", 10), ("c8", 30), ("c9", 60))]
+    assert [m["id"] for m in rules.since_last_order(chat, [drafted])] == ["c9"]
+    assert [m["id"] for m in rules.since_last_order(chat, [{**drafted, "receipt": None}])] == ["c5", "c8", "c9"]  # still going
 
 
 def test_packing_rules():
@@ -1290,3 +1334,30 @@ def test_demo_ai_budget_limits_visitors_and_the_whole_demo_but_never_sellers(mon
     # A seller is never counted: no Firestore read or write at all.
     monkeypatch.setattr(main, "store_doc", lambda: (_ for _ in ()).throw(AssertionError("sellers are not counted")))
     main.ai_budget({"uid": "s", "email": "s@example.com"}, 5)
+
+
+def test_repeat_customer_seed_and_its_checks():
+    from datetime import datetime, timezone
+
+    import demo
+    import orders as rules
+    import signals as risk
+
+    now = datetime.now(timezone.utc)
+    receipt, photo = {"kind": "image", "url": "/r"}, {"id": "p1"}
+    pay_to = {"name": "Juan Dela Cruz", "mobile": "639171234567", "qr": None, "demo": True}
+    chat, old = demo.repeat("u1", "demo_bbbbbbbbbbbb", "o1", now, receipt, photo, pay_to, "1012345678901")
+    # The first order went through the real rules: GCash found by the seller, packed by hand, sent, received.
+    assert old["manual_payment"]["status"] == "seller_confirmed" and old["packing"]["completed"] and old["fulfillment"]["status"] == "delivered"
+    assert old["receipt"]["status"] == "customer_confirmed" and rules.done(old)
+    assert [e["source"] for e in old["fulfillment"]["events"]] == ["seller_reported"] * 3
+    assert chat["messages"][4]["attachments"] == [receipt]
+
+    # The new draft reads only today's messages: not his first order's "already paid" or "received".
+    new = rules.since_last_order(chat["messages"], [old])
+    assert [m["text"] for m in new] == [t for _, t in demo.REPEAT[2]]
+
+    # The same claim on both orders: the old one is history settled by its own payment, the new one waits.
+    claim = lambda m: {"kind": "payment_claim", "summary": "", "sources": [m["id"]], "check": "", "times": [m["created_time"]]}
+    first, again = risk.resolve([claim(chat["messages"][4]), claim(chat["messages"][-1])], [old])
+    assert first["earlier"] and first["resolved"] and not again["earlier"] and risk.is_open(again)

@@ -86,7 +86,8 @@ const toForm = (d: Order['draft']): Form => ({
   delivery_instructions: d.delivery_instructions.value ?? '',
 })
 
-export default function OrderView({ order, onChange }: { order: Order; onChange: (o: Order) => void }) {
+/** checks: false inside a chat, which shows the chat's checks itself with every message, not just this order's snapshot. */
+export default function OrderView({ order, onChange, checks = true }: { order: Order; onChange: (o: Order) => void; checks?: boolean }) {
   const [form, setForm] = useState<Form>()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -320,7 +321,7 @@ export default function OrderView({ order, onChange }: { order: Order; onChange:
         </>
       )}
 
-      {fromChat(order) && <Signals conversationId={order.source.conversation_id} messages={messages} />}
+      {checks && fromChat(order) && <Signals conversationId={order.source.conversation_id} messages={messages} />}
       {!fromChat(order) && draft.claims.map((c, n) => (
         <p key={n} className="claim">
           <strong>Unverified {c.kind} claim.</strong> {c.text}
