@@ -21,6 +21,9 @@ export type ManualPayment = {
   amount: number
   pay_to: { name: string; mobile: string; masked_name?: string | null; user_id?: string | null }
   requested_at: string
+  /** says_paid: the customer said they already paid, so receipts count from counts_from, when the conversation began. */
+  kind?: 'ask' | 'says_paid'
+  counts_from?: string
   claims: Claim[]
   history_check?: { status: 'found' | 'amount_differs' | 'not_found'; checked_at: string } | null
   history_read?: { reference: string | null; entry: { invno: string | null }; checks: Check[] } | null
@@ -140,6 +143,12 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
       if (p) write(`You can also pay ${peso(p.amount)} by GCash to ${p.pay_to.name}, ${localMobile(p.pay_to.mobile)}. Please send a screenshot of the receipt here after paying.`)
     })
 
+  // The customer says they already paid: nothing to ask for, only proof to match against the seller's own GCash history.
+  const saysPaid = () =>
+    run('Saving…', '/request', { says_paid: true }).then((o) => {
+      if (o?.manual_payment) write('Thank you! Please send a screenshot of your GCash receipt here so we can match it with our GCash history.')
+    })
+
   // The seller's screenshot of the payment in their own GCash history fills in the form; the seller still confirms.
   const readHistory = (file?: File) =>
     file &&
@@ -174,15 +183,36 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
           For customers who will not use the payment link.{' '}
           <button disabled={!!busy} onClick={ask}>
             Ask for GCash payment
+          </button>{' '}
+          <button disabled={!!busy} onClick={saysPaid}>
+            They say they already paid
           </button>
+        </p>
+      )}
+      {current && current.kind !== 'says_paid' && current.status !== 'seller_confirmed' && (
+        <p>
+          <small>
+            Customer says they paid before you asked?{' '}
+            <button disabled={!!busy} onClick={saysPaid}>
+              Count receipts from the start of the conversation
+            </button>
+          </small>
         </p>
       )}
       {current && (
         <>
-          <p>
-            Asked for {peso(current.amount)} to {current.pay_to.name} ({localMobile(current.pay_to.mobile)}) on {new Date(current.requested_at).toLocaleString()}. Receipts dated
-            before then do not count.
-          </p>
+          {current.kind === 'says_paid' && current.counts_from ? (
+            <p>
+              The customer says they already paid {peso(current.amount)} to {current.pay_to.name} ({localMobile(current.pay_to.mobile)}). What they say is not proof: only a
+              payment you find in your own GCash history confirms it. Receipts dated before {new Date(current.counts_from).toLocaleString()}, when the conversation about this
+              order began, do not count.
+            </p>
+          ) : (
+            <p>
+              Asked for {peso(current.amount)} to {current.pay_to.name} ({localMobile(current.pay_to.mobile)}) on {new Date(current.requested_at).toLocaleString()}. Receipts dated
+              before then do not count.
+            </p>
+          )}
           <Guardrails m={current} />
           {current.claims.map((c) => (
             <div key={c.id} className="receipt">

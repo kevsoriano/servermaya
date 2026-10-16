@@ -16,6 +16,9 @@ from orders import Refused
 
 PHT = timezone(timedelta(hours=8), "PHT")  # GCash receipts show Philippine time; the Philippines has no DST
 SLACK = timedelta(minutes=2)  # receipts show minutes only, and the request time is to the second
+# what opened the window a receipt must fall in, see window()
+ASKED = "payment details were sent for this order"
+BEGAN = "the conversation about this order began"
 
 SYSTEM = """You transcribe a screenshot that a customer sent as proof of a GCash payment.
 
@@ -141,16 +144,18 @@ def details_key(receipt: Receipt) -> str | None:
 def check_receipt(
     receipt: Receipt,
     amount: int,
-    requested_at: datetime,
+    start: datetime,
     received_at: datetime,
     seller: dict,
     used_elsewhere: set[str],
     image_reused: bool = False,
     twin_reference: str | None = None,
+    since: str = ASKED,
 ) -> list[dict]:
     """Compare a transcribed receipt with what we asked for.
 
-    amount: centavos asked for on this version of the order. requested_at: when payment details were sent for it.
+    amount: centavos asked for on this version of the order. start, since: when a receipt starts to count and what that
+    moment was, from window().
     received_at: when the screenshot arrived in chat. seller: {"name", "mobile", "masked_name"} the customer was told to pay;
     masked_name is how GCash itself shows the name, and user_id the GCash account ID, both from the seller's QR, or None.
     used_elsewhere: reference numbers already recorded on other orders. image_reused: the same file was sent on another order.
@@ -178,12 +183,12 @@ def check_receipt(
     at = paid_at(receipt.paid_at)
     if at is None:
         out.append(check("time", "unreadable", "No date and time could be read"))
-    elif at < requested_at - SLACK:
-        out.append(check("time", "fail", "Receipt is dated before payment details were sent for this order"))
+    elif at < start - SLACK:
+        out.append(check("time", "fail", f"Receipt is dated before {since}"))
     elif at > received_at + SLACK:
         out.append(check("time", "fail", "Receipt is dated after the screenshot arrived in chat"))
     else:
-        out.append(check("time", "pass", "Dated between the payment request and the screenshot"))
+        out.append(check("time", "pass", f"Dated after {since}, and before the screenshot arrived"))
 
     ref = reference(receipt.reference)
     if not ref:
@@ -290,8 +295,41 @@ def settings(body: Settings) -> dict:
     return {"name": name, "mobile": number, "qr": qr}
 
 
-def request(order: dict, pay_to: dict, by: str, now: datetime) -> dict:
-    """The seller asks for direct GCash payment. requested_at starts the window a receipt must fall in."""
+def window(m: dict) -> tuple[datetime, str]:
+    """When a receipt for this GCash request starts to count, and what happened then."""
+    return (m["counts_from"], BEGAN) if m.get("kind") == "says_paid" else (m["requested_at"], ASKED)
+
+
+def conversation_start(order: dict) -> datetime:
+    """The earliest chat message the draft cites, else the first message it was drafted from.
+
+    A customer who paid before being asked still paid after this, so it opens the window for says_paid; an older
+    receipt, from another purchase, stays outside it.
+    """
+    times = {m["id"]: datetime.fromisoformat(m["created_time"]) for m in order.get("messages", [])}
+    cited: set[str] = set()
+
+    def walk(x):
+        if isinstance(x, dict):
+            cited.update(x.get("sources") or [])
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    walk(order.get("draft"))
+    found = [times[i] for i in cited if i in times] or list(times.values())
+    if not found:
+        raise Refused("This order has no chat messages to date a payment from. Ask for GCash payment instead.")
+    return min(found)
+
+
+def request(order: dict, pay_to: dict, by: str, now: datetime, says_paid: bool = False) -> dict:
+    """The seller asks for direct GCash payment, or checks one the customer says they already made.
+
+    window() gives when a receipt starts to count: the request time, or for says_paid the start of the conversation.
+    """
     if order["status"] != "confirmed":
         raise Refused("The order must be confirmed before payment")
     payment = order.get("payment") or {}
@@ -301,6 +339,8 @@ def request(order: dict, pay_to: dict, by: str, now: datetime) -> dict:
     if current and current["version"] == order["version"]:
         if current["status"] == "seller_confirmed":
             raise Refused("You already confirmed a GCash payment for this order")
+        if says_paid and current.get("kind") != "says_paid":  # asked first, then heard they had already paid
+            return {"manual_payment": {**current, "kind": "says_paid", "counts_from": conversation_start(order)}}
         return {}  # already asked; the first request time stands
     updates = {
         "manual_payment": {
@@ -311,6 +351,7 @@ def request(order: dict, pay_to: dict, by: str, now: datetime) -> dict:
             "pay_to": pay_to,  # the account the customer was told to pay, even if the settings change later
             "requested_at": now,
             "requested_by": by,
+            **({"kind": "says_paid", "counts_from": conversation_start(order)} if says_paid else {"kind": "ask"}),
             "claims": [],
             "confirmed": None,
         }
@@ -337,7 +378,7 @@ def add_claims(order: dict, claims: list[dict]) -> dict:
     return {"manual_payment": {**m, "claims": m["claims"] + new, "status": "claimed"}}
 
 
-def check_history(entry: HistoryEntry, amount: int, requested_at: datetime) -> list[dict]:
+def check_history(entry: HistoryEntry, amount: int, start: datetime, since: str = ASKED) -> list[dict]:
     """Checks on the seller's own GCash history screenshot. It only fills in the confirm form; the seller still confirms."""
     if not entry.readable:
         return [check("history", "unreadable", "This does not look like one transaction from GCash history")]
@@ -353,10 +394,10 @@ def check_history(entry: HistoryEntry, amount: int, requested_at: datetime) -> l
     at = paid_at(entry.paid_at)
     if at is None:
         out.append(check("time", "unreadable", "No date and time could be read"))
-    elif at < requested_at - SLACK:
-        out.append(check("time", "fail", "This payment came in before GCash payment was asked for on this order"))
+    elif at < start - SLACK:
+        out.append(check("time", "fail", f"This payment came in before {since}"))
     else:
-        out.append(check("time", "pass", "Received after GCash payment was asked for"))
+        out.append(check("time", "pass", f"Received after {since}"))
     ref = reference(entry.reference)
     if not ref:
         out.append(check("reference", "unreadable", "No reference number could be read"))
@@ -471,14 +512,14 @@ def reconcile(order: dict, statement: dict, statement_id: str, taken: set[str], 
         row = next((r for r in credits if r["reference"] == c["reference"]), None)
         if row:
             status = "found" if row["amount"] == m["amount"] else "amount_differs"
-        elif statement["start"] <= m["requested_at"] and statement["last_at"] and c["at"] <= statement["last_at"]:
+        elif statement["start"] <= window(m)[0] and statement["last_at"] and c["at"] <= statement["last_at"]:
             status = "not_found"  # it must have arrived between the request and the confirmation, and the export covers both
         else:
             return {}  # outside this export
         return {"manual_payment": {**m, "history_check": check(status, row)}}
     history = m.get("history_read") or {}
     for row in credits:
-        if row["amount"] != m["amount"] or row["at"] < m["requested_at"] - SLACK or row["reference"] in taken:
+        if row["amount"] != m["amount"] or row["at"] < window(m)[0] - SLACK or row["reference"] in taken:
             continue
         claim = next((c for c in reversed(m["claims"]) if shows(c, row["reference"], row["invno"])), None)
         if claim or history.get("reference") == row["reference"]:

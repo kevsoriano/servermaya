@@ -1189,15 +1189,20 @@ def put_gcash(body: gcash.Settings, user: dict = Depends(current_user)):
     return saved
 
 
+class GcashRequest(BaseModel):
+    says_paid: bool = False  # the customer says they already paid: check that payment instead of asking for one
+
+
 @app.post("/api/orders/{order_id}/gcash/request")
-def request_gcash(order_id: str, user: dict = Depends(current_user)):
+def request_gcash(order_id: str, body: GcashRequest | None = None, user: dict = Depends(current_user)):
     pay_to = DEMO_GCASH if demo_order(order_id) else get_gcash(user)
     if not pay_to:
         raise HTTPException(409, "Add your GCash name and number in Settings first")
     now = datetime.now(timezone.utc)
     qr = pay_to.get("qr") or {}
     snapshot = {"name": pay_to["name"], "mobile": pay_to["mobile"], "masked_name": qr.get("masked_name"), "user_id": qr.get("user_id")}
-    return change(orders().document(order_id), lambda o: gcash.request(o, snapshot, user["email"], now))
+    says_paid = bool(body and body.says_paid)
+    return change(orders().document(order_id), lambda o: gcash.request(o, snapshot, user["email"], now, says_paid))
 
 
 # ponytail: written before the claim is saved, so a failed read leaves an entry pointing at an order with no claim, and a
@@ -1265,7 +1270,8 @@ def read_receipt(order_id: str, manual: dict, message: dict, attachment: dict, n
     twin = first_seen("gcashReceiptDetails", scope + key, order_id, reference=ref, message_id=message["id"]) if key else None
     twin_reference = (twin["reference"] or "unreadable") if twin and twin["message_id"] != message["id"] and twin["reference"] != ref else None
     received_at = datetime.fromisoformat(message["created_time"])
-    checks = gcash.check_receipt(receipt, manual["amount"], manual["requested_at"], received_at, manual["pay_to"], used_elsewhere, reused, twin_reference)
+    start, since = gcash.window(manual)
+    checks = gcash.check_receipt(receipt, manual["amount"], start, received_at, manual["pay_to"], used_elsewhere, reused, twin_reference, since)
     return {
         "id": sha[:16],
         "message_id": message["id"],
@@ -1281,7 +1287,7 @@ def read_receipt(order_id: str, manual: dict, message: dict, attachment: dict, n
 
 @app.post("/api/orders/{order_id}/gcash/read")
 def read_gcash_receipts(order_id: str, user: dict = Depends(current_user)):
-    """Check every customer image sent since GCash payment was requested that has not been checked yet."""
+    """Check every customer image sent inside the GCash request's window that has not been checked yet."""
     ref, order = loaded(order_id)
     try:
         manual = gcash.current(order)
@@ -1293,7 +1299,7 @@ def read_gcash_receipts(order_id: str, user: dict = Depends(current_user)):
     images = [
         (m, a)
         for m in thread_messages(order["source"]["conversation_id"])
-        if not m["from_page"] and m["id"] not in known and datetime.fromisoformat(m["created_time"]) >= manual["requested_at"] - gcash.SLACK
+        if not m["from_page"] and m["id"] not in known and datetime.fromisoformat(m["created_time"]) >= gcash.window(manual)[0] - gcash.SLACK
         for a in m["attachments"][:1]
         if a["kind"] == "image" and a["name"] != "sticker"
     ][-MAX_RECEIPTS_PER_READ:]
@@ -1341,7 +1347,7 @@ async def read_gcash_history(order_id: str, request: Request, user: dict = Depen
         "image": {"path": path, "sha256": sha, "content_type": content_type, "size": len(data)},
         "entry": entry.model_dump(),
         "reference": gcash.reference(entry.reference) or None,
-        "checks": gcash.check_history(entry, manual["amount"], manual["requested_at"]),
+        "checks": gcash.check_history(entry, manual["amount"], *gcash.window(manual)),
         "read_at": datetime.now(timezone.utc),
         "read_by": user["email"],
         "model": GEMINI_MODEL,

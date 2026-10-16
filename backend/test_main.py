@@ -646,6 +646,46 @@ def test_gcash_manual_payment_rules():
     assert main.order_action(paid) is None
 
 
+def test_gcash_payment_the_customer_says_they_made():
+    from datetime import datetime, timedelta
+
+    import pytest
+
+    import orders as rules
+    import receipts as gc
+
+    talk = datetime(2026, 10, 16, 16, 7, tzinfo=gc.PHT)  # the customer asks about the product
+    msg = lambda id, minutes: {"id": id, "created_time": (talk + timedelta(minutes=minutes)).isoformat()}
+    order = {"status": "confirmed", "version": 1, "draft": {"total": 50000, "items": [{"sources": ["m2", "m4"]}], "customer_name": {"value": "Mark", "sources": ["m3"]}},
+             "messages": [msg("m0", -60), msg("m1", 0), msg("m2", 1), msg("m3", 2), msg("m4", 3), msg("m5", 4)]}
+    assert gc.conversation_start(order) == talk + timedelta(minutes=1)  # earliest cited message; the uncited "hi" an hour earlier does not open it
+    assert gc.conversation_start({**order, "draft": {"total": 50000}}) == talk - timedelta(minutes=60)  # nothing cited: the first message
+    with pytest.raises(rules.Refused):
+        gc.conversation_start({**order, "messages": []})
+
+    pay_to = {"name": "Juan Dela Cruz", "mobile": "639171234567"}
+    later = talk + timedelta(hours=1)
+    m = gc.request(order, pay_to, "me", later, says_paid=True)["manual_payment"]
+    assert (m["kind"], m["counts_from"], m["requested_at"]) == ("says_paid", talk + timedelta(minutes=1), later)
+    assert gc.window(m) == (talk + timedelta(minutes=1), gc.BEGAN)
+
+    # Asked first, then heard they had already paid: the window widens, the request time stays.
+    asked = {**order, **gc.request(order, pay_to, "me", later)}
+    assert gc.window(asked["manual_payment"]) == (later, gc.ASKED)
+    widened = gc.request(asked, pay_to, "me", later + timedelta(minutes=5), says_paid=True)["manual_payment"]
+    assert (widened["requested_at"], gc.window(widened)[0]) == (later, talk + timedelta(minutes=1))
+    assert gc.request({**asked, "manual_payment": widened}, pay_to, "me", later, says_paid=True) == {}
+
+    # A receipt paid before the seller pressed anything passes for says_paid, and fails for a plain request.
+    receipt = gc.Receipt(readable=True, outcome="successful", amount_php=500.0, reference="1012345678901", paid_at="2026-10-16T16:10",
+                         recipient_name="JU** DE** C.", recipient_mobile="0917 *** 4567")
+    time = lambda m: next(c for c in gc.check_receipt(receipt, 50000, gc.window(m)[0], later + timedelta(minutes=10), pay_to, set(), since=gc.window(m)[1]) if c["check"] == "time")
+    assert time(m)["result"] == "pass" and gc.BEGAN in time(m)["detail"]
+    assert time(asked["manual_payment"])["result"] == "fail"
+    older = receipt.model_copy(update={"paid_at": "2026-10-16T15:00"})  # an hour before the conversation: another purchase
+    assert {c["check"]: c["result"] for c in gc.check_receipt(older, 50000, gc.window(m)[0], later, pay_to, set(), since=gc.BEGAN)}["time"] == "fail"
+
+
 def test_gcash_qr_and_settings():
     import pytest
 
