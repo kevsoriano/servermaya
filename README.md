@@ -79,7 +79,7 @@ backend/    FastAPI on Cloud Run
   test_main.py    tests
   eval.py         live evaluation: conversations, injection, returning customers, claim reviews, packing
 frontend/   React + Vite on Firebase Hosting
-docs/       product requirements and implementation plan
+docs/       product requirements, implementation plan, test scenarios and eval results
 ```
 
 ## Running locally
@@ -92,6 +92,8 @@ make dev     # backend on :8000, frontend on :5173
 make test    # backend tests, frontend lint and build
 make eval    # live Gemini evaluation, writes docs/eval-results.md
 ```
+
+The demo chats and evaluation cases are described in [docs/test-scenarios.md](docs/test-scenarios.md), with the latest results in [docs/eval-results.md](docs/eval-results.md).
 
 Fill in `backend/.env` with your own keys. It is ignored by git.
 
