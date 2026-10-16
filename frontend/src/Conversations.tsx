@@ -95,7 +95,7 @@ function DemoTools({ onDone }: { onDone: (id?: string) => void }) {
               value={chat}
               onChange={(e) => setChat(e.target.value)}
               maxLength={50000}
-              placeholder={'Customer: Hi, magkano po yung mug?\nSeller: ₱180 each po.'}
+              placeholder={'Customer: Hi, how much is the mug?\nSeller: ₱180 each.'}
             />
           </label>
           <p className="actions">
