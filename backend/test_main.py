@@ -1109,3 +1109,33 @@ def test_demo_visitors_only_reach_their_own_demo_chats_and_orders(monkeypatch):
     me, seller = {"uid": "u1", "demo": True}, {"uid": "s1", "demo": False}
     assert [main.visible(o, me) for o in found.values()] == [True, False, False]
     assert [main.visible(o, seller) for o in found.values()] == [False, False, True]
+
+
+def test_sample_gcash_files_go_through_the_real_checks():
+    from datetime import datetime, timedelta
+
+    import receipts as gc
+    import samples
+
+    # The sample receipt pays the demo account; the wrong-recipient one does not.
+    assert gc.name_fits(samples.PAY_TO_NAME, main.DEMO_GCASH["name"]) and not gc.name_fits(samples.OTHER_NAME, main.DEMO_GCASH["name"])
+    assert gc.mobile_fits(gc.mobile(samples.PAY_TO_MOBILE), main.DEMO_GCASH["mobile"])
+    assert not gc.mobile_fits(gc.mobile(samples.OTHER_MOBILE), main.DEMO_GCASH["mobile"])
+    assert samples.sender("Ana Reyes") == "AN* R." and len(samples.new_reference()) == 13
+    assert samples.receipt_png(36000, "1012345678901", datetime.now(gc.PHT), samples.PAY_TO_NAME, samples.PAY_TO_MOBILE)[:4] == b"\x89PNG"
+
+    # The history PDF opens with the demo password and parses exactly, running balance and all.
+    now = datetime.now(gc.PHT)
+    sent = [{"at": now, "reference": "1012345678901", "amount": 36000, "sender": "AN* R."}]
+    pdf = samples.statement_pdf(samples.statement_lines(sent, (now - timedelta(days=1)).replace(hour=0, minute=0), now))
+    st = gc.parse_statement(main.statement_text(pdf, samples.PASSWORD))
+    assert ("1012345678901", 36000) in [(c["reference"], c["amount"]) for c in st["credits"]]
+    try:
+        main.statement_text(pdf, "wrong")
+        assert False
+    except main.HTTPException as e:
+        assert e.status_code == 422
+
+    # Each demo visitor's receipts are indexed apart from the store's and from each other's.
+    assert main.index_scope({"source": {"type": "messenger"}}) == ""
+    assert main.index_scope({"source": {"type": "demo", "owner": "u1"}}) != main.index_scope({"source": {"type": "demo", "owner": "u2"}})

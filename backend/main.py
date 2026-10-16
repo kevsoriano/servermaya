@@ -30,6 +30,7 @@ import receipts as gcash
 import claims as cases
 import delivery
 import demo
+import samples
 import patterns
 import refunds
 
@@ -83,7 +84,7 @@ def current_user(request: Request, authorization: str = Header(default="")) -> d
 DEMO_ROUTES = {
     ("GET", "/api/me"), ("GET", "/api/conversations"), ("POST", "/api/demo/threads"), ("POST", "/api/demo/reset"),
     ("GET", "/api/orders"), ("GET", "/api/settings/gcash"), ("GET", "/api/settings/dispatch"), ("GET", "/api/patterns"),
-    ("POST", "/api/gcash/statements"),
+    ("POST", "/api/gcash/statements"), ("GET", "/api/demo/sample-statement"),
 }
 
 
@@ -107,9 +108,13 @@ def visible(order: dict, user: dict) -> bool:
     return source.get("owner") == user["uid"] if source.get("type") == "demo" else not user.get("demo")
 
 
-# Fictional, so a demo visitor never sees the seller's real GCash account or pickup address.
+# Fictional, so a demo visitor never sees the seller's real GCash account or pickup address. Demo orders always use these.
 DEMO_GCASH = {"name": "Juan Dela Cruz", "mobile": "639171234567", "qr": None, "demo": True}
 DEMO_PICKUP = {"address": "6750 Ayala Ave., Makati City", "lat": 14.5547, "lng": 121.0244, "name": "Demo shop", "phone": "+639171234567", "demo": True}
+
+
+def demo_order(order_id: str) -> bool:
+    return ((orders().document(order_id).get().to_dict() or {}).get("source") or {}).get("type") == "demo"
 
 
 @app.get("/api/healthz")
@@ -250,14 +255,19 @@ async def demo_image(conversation_id: str, request: Request, from_page: bool) ->
     data = await request.body()
     if not data or len(data) > pack.MAX_PHOTO_BYTES:
         raise HTTPException(413, "Images must be under 10 MB")
+    attachment = await run_in_threadpool(demo_attachment, data, content_type)
+    return await run_in_threadpool(demo_post, conversation_id, from_page, "", attachment)
+
+
+def demo_attachment(data: bytes, content_type: str) -> dict:
+    """Store an image for a demo chat and describe it like a Messenger attachment."""
     sha = hashlib.sha256(data).hexdigest()
     path = f"stores/{STORE}/demo/{sha}"
     try:
-        await run_in_threadpool(lambda: bucket().blob(path).upload_from_string(data, content_type=content_type, if_generation_match=0))
+        bucket().blob(path).upload_from_string(data, content_type=content_type, if_generation_match=0)
     except PreconditionFailed:
         pass  # the same image was sent before
-    attachment = {"kind": "image", "mime_type": content_type, "name": None, "url": f"/api/public/demo/images/{sha}", "preview_url": None, "path": path}
-    return await run_in_threadpool(demo_post, conversation_id, from_page, "", attachment)
+    return {"kind": "image", "mime_type": content_type, "name": None, "url": f"/api/public/demo/images/{sha}", "preview_url": None, "path": path}
 
 
 # ponytail: public by hash so a plain <img> can show it; demo images only. Fetch with the seller's token if real photos ever land here.
@@ -307,6 +317,7 @@ def reset_demo(user: dict = Depends(current_user)):
     for cid in ids:
         signal_docs().document(cid).delete()
         demo_threads().document(cid).delete()
+    store_doc().collection("demoUsers").document(user["uid"]).set({"samples": []}, merge=True)
     seed_demo(user)
     return {"deleted_chats": len(ids), "deleted_orders": len(order_ids)}
 
@@ -578,6 +589,46 @@ def demo_customer(conversation_id: str, body: Reply, user: dict = Depends(curren
 async def demo_customer_image(conversation_id: str, request: Request, user: dict = Depends(current_user)):
     demo_only(conversation_id)
     return await demo_image(conversation_id, request, False)
+
+
+class SampleReceipt(BaseModel):
+    kind: Literal[samples.KINDS]
+
+
+@app.post("/api/conversations/{conversation_id}/customer/sample-receipt")
+def demo_sample_receipt(conversation_id: str, body: SampleReceipt, user: dict = Depends(current_user)):
+    """A made-up GCash receipt for this chat's waiting GCash request, sent as the customer and dated now."""
+    demo_only(conversation_id)
+    waiting = []
+    for d in orders().where(filter=firestore.FieldFilter("source.conversation_id", "==", conversation_id)).stream():
+        try:
+            m = gcash.current(d.to_dict())
+        except rules.Refused:
+            continue
+        if m["status"] in ("requested", "claimed"):
+            waiting.append(m)
+    if not waiting:
+        raise HTTPException(409, "Ask for GCash payment on this chat's order first.")
+    m = max(waiting, key=lambda m: m["requested_at"])
+    now, ref = datetime.now(timezone.utc), samples.new_reference()
+    amount = m["amount"] - min(10000, m["amount"] // 2) if body.kind == "wrong_amount" else m["amount"]
+    name, mobile = (samples.OTHER_NAME, samples.OTHER_MOBILE) if body.kind == "wrong_recipient" else (samples.PAY_TO_NAME, samples.PAY_TO_MOBILE)
+    attachment = demo_attachment(samples.receipt_png(amount, ref, now, name, mobile), "image/png")
+    if body.kind == "matching":  # only money that reached the demo account appears in the sample history
+        sender = samples.sender(demo_doc(conversation_id)["name"])
+        store_doc().collection("demoUsers").document(user["uid"]).set(
+            {"samples": firestore.ArrayUnion([{"reference": ref, "amount": amount, "at": now, "sender": sender}])}, merge=True)
+    return demo_post(conversation_id, False, "", attachment)
+
+
+@app.get("/api/demo/sample-statement")
+def demo_sample_statement(user: dict = Depends(current_user)):
+    """A made-up GCash history export with every matching sample receipt this visitor sent, plus unrelated rows."""
+    got = (store_doc().collection("demoUsers").document(user["uid"]).get().to_dict() or {}).get("samples", [])
+    now = datetime.now(gcash.PHT)
+    start = (min([s["at"] for s in got], default=now).astimezone(gcash.PHT) - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    pdf = samples.statement_pdf(samples.statement_lines(got, start, now))
+    return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": 'attachment; filename="sample-gcash-history.pdf"'})
 
 
 @lru_cache
@@ -1140,7 +1191,7 @@ def put_gcash(body: gcash.Settings, user: dict = Depends(current_user)):
 
 @app.post("/api/orders/{order_id}/gcash/request")
 def request_gcash(order_id: str, user: dict = Depends(current_user)):
-    pay_to = get_gcash(user)
+    pay_to = DEMO_GCASH if demo_order(order_id) else get_gcash(user)
     if not pay_to:
         raise HTTPException(409, "Add your GCash name and number in Settings first")
     now = datetime.now(timezone.utc)
@@ -1178,7 +1229,14 @@ def transcribe(data: bytes, content_type: str, system: str, schema: type[BaseMod
         raise HTTPException(502, "Could not read a screenshot. Try again.")
 
 
-def read_receipt(order_id: str, manual: dict, message: dict, attachment: dict, now: datetime) -> dict:
+def index_scope(order: dict) -> str:
+    """Prefix for the cross-order receipt indexes. Each demo visitor is a store of their own, so their sample receipts are
+    compared only with their own orders, never with the real store's or another visitor's."""
+    source = order.get("source") or {}
+    return f"demo_{source.get('owner')}_" if source.get("type") == "demo" else ""
+
+
+def read_receipt(order_id: str, manual: dict, message: dict, attachment: dict, now: datetime, scope: str = "") -> dict:
     """Copy one screenshot into our storage as evidence, have Gemini transcribe it, and run the checks."""
     if attachment.get("path"):  # a demo chat's image, already in our storage
         data, content_type = bucket().blob(attachment["path"]).download_as_bytes(), attachment["mime_type"]
@@ -1200,11 +1258,11 @@ def read_receipt(order_id: str, manual: dict, message: dict, attachment: dict, n
     receipt = transcribe(data, content_type, gcash.SYSTEM, gcash.Receipt)
     ref = gcash.reference(receipt.reference)
     # Copies are caught three ways: the same file, the same reference, or the same amount and minute under another reference (an edited copy).
-    reused = first_seen("gcashImages", sha, order_id)["order_id"] != order_id
+    reused = first_seen("gcashImages", scope + sha, order_id)["order_id"] != order_id
     ref_key = gcash.reference_key(ref, receipt)
-    used_elsewhere = {ref} if ref_key and first_seen("gcashReferences", ref_key, order_id)["order_id"] != order_id else set()
+    used_elsewhere = {ref} if ref_key and first_seen("gcashReferences", scope + ref_key, order_id)["order_id"] != order_id else set()
     key = gcash.details_key(receipt)
-    twin = first_seen("gcashReceiptDetails", key, order_id, reference=ref, message_id=message["id"]) if key else None
+    twin = first_seen("gcashReceiptDetails", scope + key, order_id, reference=ref, message_id=message["id"]) if key else None
     twin_reference = (twin["reference"] or "unreadable") if twin and twin["message_id"] != message["id"] and twin["reference"] != ref else None
     received_at = datetime.fromisoformat(message["created_time"])
     checks = gcash.check_receipt(receipt, manual["amount"], manual["requested_at"], received_at, manual["pay_to"], used_elsewhere, reused, twin_reference)
@@ -1242,7 +1300,7 @@ def read_gcash_receipts(order_id: str, user: dict = Depends(current_user)):
     if not images:
         raise HTTPException(409, "No new images from the customer since you asked for GCash payment")
     now = datetime.now(timezone.utc)
-    claims = [read_receipt(order_id, manual, m, a, now) for m, a in images]
+    claims = [read_receipt(order_id, manual, m, a, now, index_scope(order)) for m, a in images]
     return change(ref, lambda o: gcash.add_claims(o, claims))
 
 
@@ -1355,8 +1413,9 @@ def confirm_gcash(order_id: str, body: GcashConfirm, user: dict = Depends(curren
     if not body.found_in_history:
         raise HTTPException(422, "Only confirm a reference you found in your own GCash transaction history")
     ref = gcash.reference(body.reference)
-    others = orders().where(filter=firestore.FieldFilter("manual_payment.confirmed.reference", "==", ref)).limit(2).stream()
-    elsewhere = any(d.id != order_id for d in others)
+    _, order = loaded(order_id)
+    others = orders().where(filter=firestore.FieldFilter("manual_payment.confirmed.reference", "==", ref)).stream()
+    elsewhere = any(d.id != order_id and index_scope(d.to_dict()) == index_scope(order) for d in others)
     now = datetime.now(timezone.utc)
     return change(orders().document(order_id), lambda o: gcash.confirm(o, ref, user["email"], body.reason, now, elsewhere, body.invno))
 
@@ -1402,7 +1461,7 @@ def centavos_of(text: str) -> int:
 @app.post("/api/orders/{order_id}/dispatch/quote")
 def quote_delivery(order_id: str, body: QuoteIn, user: dict = Depends(current_user)):
     """A Lalamove quotation for the seller to approve. Nothing is booked yet."""
-    pickup = get_dispatch_settings(user)
+    pickup = DEMO_PICKUP if demo_order(order_id) else get_dispatch_settings(user)
     if not pickup:
         raise HTTPException(409, "Add your pickup address and pin in Settings first")
     ref, order = loaded(order_id)
@@ -1429,7 +1488,7 @@ def quote_delivery(order_id: str, body: QuoteIn, user: dict = Depends(current_us
 @app.post("/api/orders/{order_id}/dispatch/book")
 def book_delivery(order_id: str, user: dict = Depends(current_user)):
     """Book the approved quote. The quote is locked first, so a retry cannot book twice."""
-    pickup = get_dispatch_settings(user)
+    pickup = DEMO_PICKUP if demo_order(order_id) else get_dispatch_settings(user)
     ref, order = loaded(order_id)
     f, d = order.get("fulfillment") or {}, order["draft"]
     try:

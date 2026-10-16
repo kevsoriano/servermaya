@@ -22,6 +22,19 @@ export default function Reply({ conversationId, text, setText, orderId, until, o
   const [status, setStatus] = useState('')
   const [image, setImage] = useState<File>()
   const [picker, setPicker] = useState(0) // remounts the file input so the same file can be picked again
+
+  // Demo only: the customer sends a made-up GCash receipt for this chat's waiting GCash request, dated now.
+  const sample = (kind: string) => {
+    setBusy(true)
+    setStatus('')
+    load(`/conversations/${conversationId}/customer/sample-receipt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind }),
+    })
+      .then(() => (setStatus('Sent.'), onSent?.()), (e) => setStatus(e.message))
+      .finally(() => setBusy(false))
+  }
   const [openedAt] = useState(() => Date.now())
   const demo = conversationId.startsWith('demo_')
   const closed = !demo && until !== undefined && (!until || until.getTime() < openedAt)
@@ -72,6 +85,14 @@ export default function Reply({ conversationId, text, setText, orderId, until, o
         rows={2}
         disabled={closed}
       />
+      {asCustomer && (
+        <p className="samples">
+          <small>Sample GCash receipt:</small>
+          <button type="button" disabled={busy} onClick={() => sample('matching')}>Matching</button>
+          <button type="button" disabled={busy} onClick={() => sample('wrong_amount')}>Wrong amount</button>
+          <button type="button" disabled={busy} onClick={() => sample('wrong_recipient')}>Wrong recipient</button>
+        </p>
+      )}
       <div className="reply-foot">
         <small>
           {demo ? (asCustomer ? 'You play the customer.' : 'Not sent to Messenger.') : closed

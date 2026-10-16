@@ -1,11 +1,12 @@
 import jsQR from 'jsqr'
 import { useEffect, useState } from 'react'
-import { load, localMobile } from './firebase'
+import { api, load, localMobile } from './firebase'
 
 type Saved = {
   name: string
   mobile: string
   qr: { masked_name: string; user_id: string | null; payload: string } | null
+  demo?: boolean
   updated_by: string
   updated_at: string
 } | null
@@ -31,8 +32,30 @@ type Applied = {
   not_found?: string[]
 }
 
+/** Demo visitors get a made-up export listing the matching sample receipts they sent, to try the upload with. */
+function SampleHistory() {
+  const [error, setError] = useState('')
+  const download = () =>
+    api('/demo/sample-statement')
+      .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(`Backend returned ${r.status}`))))
+      .then((blob) => {
+        const a = document.createElement('a')
+        a.href = URL.createObjectURL(blob)
+        a.download = 'sample-gcash-history.pdf'
+        a.click()
+        URL.revokeObjectURL(a.href)
+      }, (e) => setError(e.message))
+  return (
+    <p className="demo-banner" role="note">
+      Demo: <button type="button" onClick={download}>Download a sample history PDF</button> (password <code>delacruz4567</code>). It lists every
+      matching sample receipt you sent, so their GCash payments get confirmed when you upload it.
+      {error && <span role="alert"> {error}</span>}
+    </p>
+  )
+}
+
 /** The seller's GCash transaction history export. The password is used once and not stored. */
-function HistoryUpload() {
+function HistoryUpload({ demo }: { demo?: boolean }) {
   const [file, setFile] = useState<File>()
   const [password, setPassword] = useState('')
   const [result, setResult] = useState<Applied>()
@@ -58,6 +81,7 @@ function HistoryUpload() {
         In GCash, open Transactions → Request transaction history, and upload the PDF that GCash emails you. Waiting GCash payments that a checked screenshot points
         to are confirmed, and payments you already confirmed are checked. Only money received is kept; the PDF and its password are not.
       </p>
+      {demo && <SampleHistory />}
       <form onSubmit={upload}>
         <label>
           GCash history PDF
@@ -179,7 +203,7 @@ export default function GcashSettings() {
         )}
         {error && <p role="alert">{error}</p>}
       </section>
-      <HistoryUpload />
+      <HistoryUpload demo={saved?.demo} />
     </>
   )
 }
