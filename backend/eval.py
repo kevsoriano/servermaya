@@ -98,7 +98,7 @@ CONVERSATIONS = [
         ("c", "Mark Dizon, 0918 555 0199, 45 Rizal Ave, Pasig"),
         ("c", "Already paid via GCash ₱360, ref 1234 5678 901. Please ship today, I need it tomorrow")],
      items=[("mug", "blue", 2, 18000)], who="Mark Dizon", phone="9185550199", address=["rizal", "pasig"],
-     signals={"payment_claim", "pressure"}, maybe={"receipt_image"}),
+     signals={"payment_claim", "pressure"}, maybe={"receipt_image"}, context="No payment link, GCash request or payment details from you"),
     dict(name="receipt screenshot", kind="discrepancy", chat=[
         ("c", "1 lavender candle po"), ("s", "₱220 po."), ("c", "Nina Cruz, 0917 202 3030, 8 Ilang-Ilang St, Taguig"),
         ("c+img", "Sent na po, here's the screenshot")],
@@ -205,7 +205,7 @@ CONVERSATIONS += [dict(c, hard=True) for c in [
      earlier=4, received=8,
      previous=dict(items=[("tote bag", "cream", 1, 25000)], name="Rico Bautista", phone="0917 555 0166", address="23 Kalayaan Ave., Brgy. Pinyahan, Quezon City"),
      items=[("tote", "black", 1, 25000)], who="Rico Bautista", phone="9175550166", address=["kalayaan", "quezon"],
-     carried={"phone", "address"}, signals={"payment_claim", "pressure"}, maybe={"receipt_image"}),
+     carried={"phone", "address"}, signals={"payment_claim", "pressure"}, maybe={"receipt_image"}, context="Paid you before"),
     dict(name="returning: new number, same address", kind="returning", chat=[
         ("c", "1 cream tote po"), ("s", "₱250 po."), ("c", "Grace Tan, 0917 101 0101, 77 Molave St, Pasig"), ("s", "Cancelled po as requested."),
         ("c", "Hi po, 1 black tote naman. Bago na number ko: 0918 202 0202, same address pa rin"), ("s", "Noted Grace! ₱250 po.")],
@@ -232,8 +232,10 @@ def previous_order(case: dict, msgs: list[dict]) -> dict:
                        "address": field(p["address"]), "delivery_instructions": field(None)}}
     if "received" in case:
         at = datetime.fromisoformat(msgs[case["received"] - 1]["created_time"])
+        asked = datetime.fromisoformat(msgs[case["earlier"]]["created_time"])
         order |= {"status": "confirmed", "receipt": {"status": "customer_confirmed", "at": at},
-                  "manual_payment": {"status": "seller_confirmed", "amount": rules.total(items), "confirmed": {"reference": "1012345678901"}}}
+                  "manual_payment": {"status": "seller_confirmed", "amount": rules.total(items), "requested_at": asked,
+                                     "confirmed": {"reference": "1012345678901", "at": asked}}}
     return order
 
 
@@ -324,7 +326,8 @@ def run_conversation(client, case: dict) -> dict:
     seconds = time.monotonic() - start
     if "received" not in case:
         found = signals.detect(client, MODEL, new)
-        return {"case": case, "seconds": seconds, **score_conversation(case, draft, found, msgs)}
+        score = score_conversation(case, draft, found, msgs)
+        return {"case": case, "seconds": seconds, **context_score(case, score, signals.resolve(found, []), msgs, [])}
     # As the app does: checks read the whole chat, and each is settled only by the order it is about.
     checks = signals.resolve(signals.detect(client, MODEL, msgs), [earlier])
     score = score_conversation(case, draft, [c for c in checks if not c["earlier"]], msgs)
@@ -334,7 +337,17 @@ def run_conversation(client, case: dict) -> dict:
     score["fields"] += [not wrong]
     score["notes"] += wrong
     score["ok"] = score["ok"] and not wrong
-    return {"case": case, "seconds": seconds, **score}
+    return {"case": case, "seconds": seconds, **context_score(case, score, checks, msgs, [earlier])}
+
+
+def context_score(case: dict, score: dict, checks: list[dict], msgs: list[dict], orders: list[dict]) -> dict:
+    """With `context`: the current "says they already paid" check must carry this line from the records."""
+    if "context" not in case:
+        return score
+    lines = [line for c in checks if c["kind"] == "payment_claim" and not c["earlier"] for line in signals.payment_context(c, msgs, orders)]
+    ok = any(case["context"] in line for line in lines)
+    return {**score, "fields": score["fields"] + [ok], "notes": score["notes"] + ([] if ok else [f"no '{case['context']}' line"]),
+            "ok": score["ok"] and ok}
 
 
 # ---------------------------------------------------------------- packing images
@@ -516,13 +529,13 @@ def pct(a: int, b: int) -> str:
 
 
 def safely(fn, *args) -> dict:
-    """One failed call fails its case, not the run. Vertex rate limits (429) and server errors (a 504 deadline) are retried
+    """One failed call fails its case, not the run. Vertex rate limits (429), cancellations (499) and server errors are retried
     with backoff; they say nothing about the model's answer."""
     for attempt in range(5):
         try:
             return fn(*args)
         except Exception as e:
-            transient = isinstance(e, genai.errors.ServerError) or "RESOURCE_EXHAUSTED" in str(e) or "429" in str(e)
+            transient = isinstance(e, genai.errors.ServerError) or any(t in str(e) for t in ("RESOURCE_EXHAUSTED", "429", "499 CANCELLED"))
             if not transient or attempt == 4:
                 return {"case": args[-1], "error": f"{type(e).__name__}: {e}"[:200]}
             time.sleep(5 * 2**attempt)

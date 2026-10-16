@@ -3,7 +3,8 @@
 Deliberately not a score or a verdict on the customer. Each signal says what was said, where, and what to check.
 """
 
-from datetime import datetime
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -124,6 +125,56 @@ def resolve(signals: list[dict], orders: list[dict], reviews: dict | None = None
             part = {**s, "sources": sources}
             out.append({**part, "key": key(part), "resolved": settled(s["kind"], o), "reviewed": reviews.get(key(part)), "earlier": bool(o) and rules.done(o)})
     return out
+
+
+# ponytail: a pattern match on seller messages (a mobile number, a QR, a link, a long account number); details written another
+# way are missed, so the "nothing shared" line also says the customer may have them from elsewhere.
+DETAILS = re.compile(r"(?:\+?63|\b0)9\d{2}[\s-]?\d{3}[\s-]?\d{4}|\bqr\b|https?://|\b\d{10,}\b", re.IGNORECASE)
+PHT = timezone(timedelta(hours=8))
+
+
+def payment_context(signal: dict, messages: list[dict], orders: list[dict]) -> list[str]:
+    """Facts from the records beside a "says they already paid" check: whether this chat had given payment details before
+    the claim, and whether the customer paid this shop on an earlier order. Never a judgement: a customer can have the
+    number from the page or a friend, and an earlier payment does not prove this one."""
+    if signal["kind"] != "payment_claim" or signal.get("earlier"):
+        return []
+    first = next((m for m in messages if m["id"] == signal["sources"][0]), None)
+    if not first or not first.get("created_time"):
+        return []
+    at = datetime.fromisoformat(first["created_time"])
+    day = lambda t: f"{t.astimezone(PHT):%b %-d}"
+    shared, said = [], []  # from the records, and from the seller's own messages
+    for o in orders:
+        shared += [(c["at"], "they confirmed an order through its link, which offers payment") for c in o.get("confirmations", []) if c.get("kind") == "customer"]
+        shared += [(p["requested_at"], "a PayMongo payment link") for p in [o.get("payment")] if p and p.get("requested_at")]
+        shared += [(m["requested_at"], "a GCash request with your number") for m in [o.get("manual_payment"), *o.get("manual_payment_history", [])] if m and m.get("requested_at")]
+    for m in messages:
+        if m["from_page"] and DETAILS.search(m.get("text") or ""):
+            text = extraction.inline(m["text"])
+            said.append((datetime.fromisoformat(m["created_time"]), f"your message \u201c{text[:80]}{'…' if len(text) > 80 else ''}\u201d"))
+    # A record is exact; a message only matched a pattern, so it is named only when no record came first.
+    before = sorted((t, what) for t, what in shared if t < at) or sorted((t, what) for t, what in said if t < at)
+    if before:
+        t, what = before[-1]
+        lines = [f"Payment details were shared before this message: {what}, on {day(t)}."]
+    else:
+        lines = ["No payment link, GCash request or payment details from you appear in this chat before this message. "
+                 "They may have your details from your page or elsewhere."]
+    mine = next((o for o in [owner(signal["sources"][0], first["created_time"], orders)] if o), None)
+    for o in orders:
+        if o is mine or not o.get("messages") or datetime.fromisoformat(o["messages"][-1]["created_time"]) >= at:
+            continue
+        payment, manual = o.get("payment") or {}, o.get("manual_payment") or {}
+        if payment.get("status") == "verified":
+            lines.append(f"Paid you before: PayMongo verified ₱{payment.get('paid_amount', payment['amount']) / 100:,.2f} on an earlier order. "
+                         "That does not show this payment.")
+            break
+        if manual.get("status") == "seller_confirmed":
+            lines.append(f"Paid you before: you found GCash reference {manual['confirmed']['reference']} for ₱{manual['amount'] / 100:,.2f} "
+                         f"in your history on {day(manual['confirmed']['at'])}, for an earlier order. That does not show this payment.")
+            break
+    return lines
 
 
 def is_open(s: dict) -> bool:

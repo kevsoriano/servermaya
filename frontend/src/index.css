@@ -585,6 +585,10 @@ mark.status.confirmed {
   color: var(--muted);
 }
 
+.checks p.context {
+  color: inherit;
+}
+
 .checks details {
   margin: 0.25rem 0;
 }

@@ -11,6 +11,8 @@ type Signal = {
   reviewed: { by: string; at: string; note: string } | null
   /** On an earlier order that is received or cancelled: history, not something to verify now. */
   earlier: boolean
+  /** Facts from the records beside a payment claim: payment details shared first or not, an earlier payment. */
+  context?: string[]
 }
 
 const LABEL: Record<string, string> = {
@@ -105,6 +107,11 @@ export default function Signals({ conversationId, messages, latest }: Props) {
                 ) : (
                   s.sources.slice(0, 1).map((id) => quote(id) && <blockquote key={id}>{quote(id)}</blockquote>)
                 )}
+                {s.context?.map((c) => (
+                  <p key={c} className="context">
+                    {c}
+                  </p>
+                ))}
                 <details>
                   <summary>{isOpen(s) ? 'What to check' : 'Details'}</summary>
                   <p>{s.summary}</p>

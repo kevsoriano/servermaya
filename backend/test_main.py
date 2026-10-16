@@ -1361,3 +1361,34 @@ def test_repeat_customer_seed_and_its_checks():
     claim = lambda m: {"kind": "payment_claim", "summary": "", "sources": [m["id"]], "check": "", "times": [m["created_time"]]}
     first, again = risk.resolve([claim(chat["messages"][4]), claim(chat["messages"][-1])], [old])
     assert first["earlier"] and first["resolved"] and not again["earlier"] and risk.is_open(again)
+
+
+def test_payment_claim_says_whether_payment_details_were_shared_first():
+    from datetime import datetime, timezone
+
+    import demo
+    import signals as risk
+
+    now = datetime.now(timezone.utc)
+    claim = lambda m: {"kind": "payment_claim", "summary": "", "sources": [m["id"]], "check": "", "times": [m["created_time"]]}
+
+    # Mark: asks the price, orders, and says he already paid. The seller never gave a number, link or request.
+    mark = demo.thread("Mark Dizon", demo.SEED[1][1], "u1", now)["messages"]
+    [check] = risk.resolve([claim(mark[-1])], [])
+    assert risk.payment_context(check, mark, [])[0].startswith("No payment link, GCash request or payment details from you")
+
+    # The seller typed their GCash number first: that message is named.
+    told = demo.thread("Mark Dizon", [(True, "Send to GCash 0917 123 4567 po"), (False, "Already paid, ref 1234567890123")], "u1", now)["messages"]
+    [check] = risk.resolve([claim(told[-1])], [])
+    assert "your message “Send to GCash 0917 123 4567 po”" in risk.payment_context(check, told, [])[0]
+
+    # Rico: his first order had a GCash request and a payment the seller found. Both facts show; the new claim stays open.
+    chat, old = demo.repeat("u1", "demo_bbbbbbbbbbbb", "o1", now, {"kind": "image"}, {"id": "p1"},
+                            {"name": "Juan Dela Cruz", "mobile": "639171234567", "qr": None, "demo": True}, "1012345678901")
+    [check] = risk.resolve([claim(chat["messages"][-1])], [old])
+    lines = risk.payment_context(check, chat["messages"], [old])
+    assert lines[0].startswith("Payment details were shared before this message: a GCash request with your number")
+    assert "GCash reference 1012345678901" in lines[1] and "does not show this payment" in lines[1] and risk.is_open(check)
+    # A check on the first order is history and gets no line.
+    [first] = risk.resolve([claim(chat["messages"][4])], [old])
+    assert risk.payment_context(first, chat["messages"], [old]) == []

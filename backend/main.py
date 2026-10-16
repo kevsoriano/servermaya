@@ -514,7 +514,8 @@ def conversation_signals(conversation_id: str, user: dict = Depends(current_user
             raise HTTPException(502, "Could not analyse this conversation")
         # merge keeps the seller's reviews across re-analysis
         ref.set({"signals": found, "latest_message_id": latest, "model": GEMINI_MODEL, "analysed_at": firestore.SERVER_TIMESTAMP}, merge=True)
-    return risk.resolve(found, [o for _, o in chat_orders(conversation_id)], cached.get("reviews"))
+    chat = [o for _, o in chat_orders(conversation_id)]
+    return [{**s, "context": risk.payment_context(s, messages, chat)} for s in risk.resolve(found, chat, cached.get("reviews"))]
 
 
 class Review(BaseModel):
