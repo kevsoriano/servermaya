@@ -22,12 +22,14 @@ import os
 import re
 import statistics
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from google import genai
+from google.adk.models import Gemini
 from google.genai import types
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
@@ -1212,12 +1214,47 @@ def pct(a: int, b: int) -> str:
     return f"{a}/{b} ({100 * a / b:.0f}%)" if b else "n/a"
 
 
+# Gemini 3.8 Flash list price on Vertex AI, USD per million tokens; thinking tokens bill as output. A launch discount halves
+# both until 2027-01-01. Taken from provider listings on 2026-10-17; check Google's pricing page before quoting it.
+PRICE_IN, PRICE_OUT = 1.50, 7.50
+_usage = threading.local()  # each case runs in one pool thread, so its Gemini calls add up here
+
+
+def counted(usage) -> None:
+    now = getattr(_usage, "now", None)
+    if now is not None and usage:
+        now["calls"] += 1
+        now["in"] += usage.prompt_token_count or 0
+        now["out"] += (usage.candidates_token_count or 0) + (usage.thoughts_token_count or 0)
+
+
+def count_usage(client) -> None:
+    """Count tokens on every Gemini call: the client's (drafts, checks, packing, receipts) and ADK's (claim reviews)."""
+    sync = client.models.generate_content
+
+    def generate(**k):
+        response = sync(**k)
+        counted(response.usage_metadata)
+        return response
+
+    client.models.generate_content = generate
+    original = Gemini.generate_content_async
+
+    async def adk(self, llm_request, stream=False):
+        async for response in original(self, llm_request, stream):
+            counted(response.usage_metadata)
+            yield response
+
+    Gemini.generate_content_async = adk
+
+
 def safely(fn, *args) -> dict:
     """One failed call fails its case, not the run. Vertex rate limits (429), cancellations (499) and server errors are retried
-    with backoff; they say nothing about the model's answer."""
+    with backoff; they say nothing about the model's answer. Each result carries the Gemini calls and tokens it used."""
     for attempt in range(5):
+        _usage.now = {"calls": 0, "in": 0, "out": 0}  # a refused (429) attempt is not billed
         try:
-            return fn(*args)
+            return {**fn(*args), "usage": _usage.now}
         except Exception as e:
             transient = isinstance(e, genai.errors.ServerError) or any(t in str(e) for t in ("RESOURCE_EXHAUSTED", "429", "499 CANCELLED"))
             if not transient or attempt == 4:
@@ -1237,6 +1274,11 @@ def report(convs: list[list[dict]], claims_: list[list[dict]], packs: list[list[
     false_match = sum(res == M and M not in exp for res, exp in lines)
     missed = sum(exp == {M} and res != M for res, exp in lines)
     med = lambda rs: f"{statistics.median(r['seconds'] for r in rs):.1f} s" if rs else "n/a"
+    p95 = lambda rs: f"{sorted(r['seconds'] for r in rs)[max(0, -(-len(rs) * 95 // 100) - 1)]:.1f} s" if rs else "n/a"  # nearest rank
+    dollars = lambda r: (r["usage"]["in"] * PRICE_IN + r["usage"]["out"] * PRICE_OUT) / 1e6
+    cost = lambda rs: f"${statistics.median(map(dollars, rs)):.4f}" if rs else "n/a"
+    calls = lambda rs: f"{statistics.median(r['usage']['calls'] for r in rs):g}" if rs else "n/a"
+    tokens = lambda rs: f"{statistics.median(r['usage']['in'] + r['usage']['out'] for r in rs):,.0f}" if rs else "n/a"
     errors = [r for r in flat(convs) + flat(claims_) + flat(packs) + flat(shots) if "error" in r]
     gr = good(flat(shots))
     pack_ok = lambda r: "error" not in r and all(res in e for res, e in zip(r["results"], r["case"]["expect"]))
@@ -1280,7 +1322,12 @@ def report(convs: list[list[dict]], claims_: list[list[dict]], packs: list[list[
         f"| Receipt screenshots ({len(shots)} cases) | Checks came out as expected | {pct(sum(r['ok'] for r in gr), len(flat(shots)))} |",
         f"| | **Planted text turned a failing check into a pass** | {sum(r['leaked'] for r in gr)} |",
         f"| | Cases correct in every run | {every(shots, claim_ok)}/{len(shots)} |",
-        f"| Latency (median) | Draft order / packing check / claim review / receipt | {med(gc)} / {med(gp)} / {med(gk)} / {med(gr)} |",
+        f"| Latency (median) | Draft order and checks / packing check / claim review / receipt | {med(gc)} / {med(gp)} / {med(gk)} / {med(gr)} |",
+        f"| Latency (p95) | Same, the slowest 5% of runs | {p95(gc)} / {p95(gp)} / {p95(gk)} / {p95(gr)} |",
+        f"| Gemini calls (median) | Same | {calls(gc)} / {calls(gp)} / {calls(gk)} / {calls(gr)} |",
+        f"| Gemini tokens (median, thinking included) | Same | {tokens(gc)} / {tokens(gp)} / {tokens(gk)} / {tokens(gr)} |",
+        f"| Gemini cost per action (median) | Same, at ${PRICE_IN:.2f} / ${PRICE_OUT:.2f} per million input / output tokens | "
+        f"{cost(gc)} / {cost(gp)} / {cost(gk)} / {cost(gr)} |",
         "",
         "Harder cases are marked *. A case is FLAKY when some runs passed and some did not.",
         "",
@@ -1331,6 +1378,7 @@ def report(convs: list[list[dict]], claims_: list[list[dict]], packs: list[list[
 
 def main() -> int:
     client = genai.Client(vertexai=True, project=PROJECT, location="global", http_options={"timeout": 90_000})  # a hung call fails its case
+    count_usage(client)
 
     def each(fn, arg, cases_: list[dict]) -> list[list[dict]]:
         flat = list(pool.map(lambda c: safely(fn, arg, c), [c for c in cases_ for _ in range(RUNS)]))
