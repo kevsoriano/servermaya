@@ -1255,3 +1255,17 @@ def test_claim_review_runs_as_an_adk_agent_with_the_citation_guard():
     assert review["findings"][0]["evidence"] == ["D1"]
     assert review["findings"][1]["withheld"] and review["recommendation"]["evidence"] == ["C"]
     assert (review["engine"], review["model"], review["at"], review["evidence_ids"]) == ("adk", "canned", now, ["C", "D1"])
+
+
+def test_demo_ai_budget_limits_visitors_and_the_whole_demo_but_never_sellers(monkeypatch):
+    import demo
+
+    assert demo.over_budget(0, 0, 1) is None
+    assert demo.over_budget(demo.AI_PER_VISITOR - 3, 0, 3) is None  # a receipt read of 3 images that just fits
+    assert "limit of AI reads" in demo.over_budget(demo.AI_PER_VISITOR - 2, 0, 3)
+    assert "all visitors" in demo.over_budget(0, demo.AI_PER_DAY, 1)
+    assert "all visitors" in demo.over_budget(demo.AI_PER_VISITOR, demo.AI_PER_DAY, 1)  # the shared limit is the one to report
+
+    # A seller is never counted: no Firestore read or write at all.
+    monkeypatch.setattr(main, "store_doc", lambda: (_ for _ in ()).throw(AssertionError("sellers are not counted")))
+    main.ai_budget({"uid": "s", "email": "s@example.com"}, 5)

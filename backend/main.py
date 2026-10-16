@@ -114,6 +114,30 @@ DEMO_GCASH = {"name": "Juan Dela Cruz", "mobile": "639171234567", "qr": None, "d
 DEMO_PICKUP = {"address": "6750 Ayala Ave., Makati City", "lat": 14.5547, "lng": 121.0244, "name": "Demo shop", "phone": "+639171234567", "demo": True}
 
 
+def ai_budget(user: dict, n: int = 1):
+    """Count n Gemini calls for a demo visitor before making them, or refuse with 429. Sellers are never limited.
+
+    Counted when asked, not when Gemini answers, so a failed call still counts: the limit is on cost, and a failure costs too.
+    """
+    if not user.get("demo"):
+        return
+    day = datetime.now(gcash.PHT).strftime("%Y-%m-%d")
+    mine = store_doc().collection("demoAiUse").document(user["uid"])
+    total = store_doc().collection("demoAiTotals").document(day)
+
+    @firestore.transactional
+    def take(tx):
+        used = mine.get(transaction=tx).to_dict() or {}
+        mine_used = used.get("count", 0) if used.get("day") == day else 0
+        all_used = (total.get(transaction=tx).to_dict() or {}).get("count", 0)
+        if problem := demo.over_budget(mine_used, all_used, n):
+            raise HTTPException(429, problem)
+        tx.set(mine, {"day": day, "count": mine_used + n})
+        tx.set(total, {"day": day, "count": all_used + n})
+
+    take(clients()[1].transaction())
+
+
 def demo_order(order_id: str) -> bool:
     return ((orders().document(order_id).get().to_dict() or {}).get("source") or {}).get("type") == "demo"
 
@@ -472,6 +496,8 @@ def conversation_signals(conversation_id: str, user: dict = Depends(current_user
     if cached.get("latest_message_id") == latest and "signals" in cached:
         found = cached["signals"]
     else:
+        if messages:
+            ai_budget(user)
         try:
             found = risk.detect(clients()[0], GEMINI_MODEL, messages) if messages else []
         except Exception:
@@ -676,6 +702,7 @@ def draft_order(conversation_id: str, user: dict = Depends(current_user)):
     messages = rules.since_last_order(messages, [o for _, o in previous])
     if not any(not m["from_page"] for m in messages):
         raise HTTPException(409, "The customer has not written since this chat's last order. To change that order, edit it.")
+    ai_budget(user)
     try:
         draft = extraction.extract(clients()[0], GEMINI_MODEL, messages)
     except Exception:
@@ -1163,6 +1190,7 @@ def check_packing(order_id: str, user: dict = Depends(current_user)):
         + (f" ({extraction.inline(r['expected']['variant'])})" if r["expected"]["variant"] else "")
         for r in packing["rows"]
     )
+    ai_budget(user)
     contents = [f"<order>\n{checklist}\n</order>"]
     for n, p in enumerate(packing["photos"], 1):
         contents += [f"Photo {n}:", types.Part.from_bytes(data=bucket().blob(p["path"]).download_as_bytes(), mime_type=p["content_type"])]
@@ -1334,6 +1362,7 @@ def read_gcash_receipts(order_id: str, user: dict = Depends(current_user)):
     ][-MAX_RECEIPTS_PER_READ:]
     if not images:
         raise HTTPException(409, "No new images from the customer since you asked for GCash payment")
+    ai_budget(user, len(images))
     now = datetime.now(timezone.utc)
     claims = [read_receipt(order_id, manual, m, a, now, index_scope(order)) for m, a in images]
     return change(ref, lambda o: gcash.add_claims(o, claims))
@@ -1388,6 +1417,7 @@ def history_read(order_id: str, data: bytes, content_type: str, user: dict) -> d
         manual = gcash.current(order)
     except rules.Refused as e:
         raise HTTPException(409, str(e))
+    ai_budget(user)
     sha = hashlib.sha256(data).hexdigest()
     path = f"stores/{STORE}/orders/{order_id}/gcash/history/{sha}"
     try:
@@ -1740,6 +1770,7 @@ def review_claim(order_id: str, cid: str, user: dict = Depends(current_user)):
             shown.append((label, photo))
         except Exception:
             pass  # an image that cannot be loaded cannot be cited
+    ai_budget(user)
     now = datetime.now(timezone.utc)
     try:
         review = claim_agent.review(claim_agent.gemini_agent(GEMINI_MODEL, PROJECT_ID), GEMINI_MODEL, parts, cases.ids(blocks, shown), now)
