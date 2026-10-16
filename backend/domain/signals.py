@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from . import extraction
 from . import orders as rules
 
-Kind = Literal["pressure", "payment_claim", "changed_payment_details", "inconsistent_details", "receipt_image"]
+Kind = Literal["pressure", "payment_claim", "changed_payment_details", "inconsistent_details", "receipt_image", "account_request"]
 
 SUGGESTED = {
     "pressure": "Do not pack or ship until PayMongo has verified the payment.",
@@ -20,6 +20,8 @@ SUGGESTED = {
     "changed_payment_details": "Confirm the change in writing. Refunds only go back to the original payment.",
     "inconsistent_details": "Confirm the final details with the customer before shipping.",
     "receipt_image": "Treat the image as a claim. Only a PayMongo-verified payment counts.",
+    # Never settled by a payment: a verified payment does not make sharing a code or opening someone's link safe.
+    "account_request": "You don't need a new account, app or link to get paid. Never share a code, OTP or PIN. Use your usual GCash or the PayMongo link.",
 }
 
 SYSTEM = """You review a chat between a small online SELLER and a CUSTOMER and list things the seller should verify before shipping.
@@ -35,9 +37,13 @@ Only these kinds, and only when a CUSTOMER message concretely shows it:
 - changed_payment_details: asking to pay or be refunded through a different account, number or method than agreed.
 - inconsistent_details: recipient, address, phone, quantity or item changing in a way that conflicts with earlier messages and is not clearly settled later.
 - receipt_image: offering or sending a screenshot or photo as proof of payment.
+- account_request: asking the SELLER to open, install, sign up for, log in to or verify an account, wallet, app or link, or to
+  share a code, OTP, PIN or password, in order to receive payment or "confirm" one. Report it even when it is said to be easy
+  or the only way, and also report changed_payment_details if the customer is changing how they pay.
 
 Rules:
 - Ordinary questions, polite urgency with no link to payment ("kailangan ko bukas" alone), and a clear single correction are not signals.
+  Asking whether another payment method is accepted ("pwede po bank transfer?") is not account_request: nothing is asked of the seller's accounts.
 - Urgency that comes with a claim of having paid ("already paid, please ship today") is pressure as well as a payment_claim:
   the payment is not verified yet, so it is a request to ship first. Report both.
 - Describe what was said in neutral English. Never judge the customer's honesty, intent or character, and never use words like scam, fraud or suspicious.

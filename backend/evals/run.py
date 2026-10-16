@@ -2,7 +2,7 @@
 
 Run: make eval [RUNS=3]   (needs gcloud application-default credentials for the project). Writes docs/eval-results.md.
 
-- 33 conversations (20, plus 13 harder ones) through extraction and checks before shipping: ordinary orders, discrepancies
+- 37 conversations (20, plus 17 harder ones) through extraction and checks before shipping: ordinary orders, discrepancies
   the seller should verify, prompt injection, and returning customers (since_last_order and carry_over, as the draft route
   runs them).
 - 9 claim reviews through the ADK agent, which fetches the order's records and the shop's past decisions with its tools,
@@ -43,7 +43,7 @@ MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 OUT = Path(__file__).resolve().parents[2] / "docs" / "eval-results.md"
 NOW = datetime(2026, 10, 16, 12, 0, tzinfo=UTC)
 RUNS = int(sys.argv[1]) if len(sys.argv) > 1 else 3  # each case runs this many times: one run cannot show a flaky answer
-KINDS = {"pressure", "payment_claim", "changed_payment_details", "inconsistent_details", "receipt_image"}
+KINDS = {"pressure", "payment_claim", "changed_payment_details", "inconsistent_details", "receipt_image", "account_request"}
 
 # ---------------------------------------------------------------- conversations
 # chat: (sender, text) with "c" customer and "s" seller; "c+img" is a customer message with an image attached.
@@ -574,6 +574,72 @@ CONVERSATIONS += [
             carried={"address"},
             signals=set(),
             maybe=set(),
+        ),
+        # The customer asks the seller to open or verify an account, use a link, or share a code to "receive" payment.
+        dict(
+            name="open a crypto wallet to receive payment",
+            kind="discrepancy",
+            chat=[
+                ("c", "Hi, available pa po yung blue mug? 1 lang po."),
+                ("s", "Yes po, ₱180. GCash po ang bayad."),
+                ("c", "Wala po akong GCash, crypto lang po yung available funds ko. Open ka lang po ng Binance account, madali lang 5 mins."),
+                ("c", "Mia Go, 0917 414 1414, 8 Narra St, Pasig"),
+            ],
+            items=[("mug", "blue", 1, 18000)],
+            who="Mia Go",
+            phone="9174141414",
+            address=["narra", "pasig"],
+            signals={"account_request", "changed_payment_details"},
+            maybe=set(),
+        ),
+        dict(
+            name="click a link to verify and receive",
+            kind="discrepancy",
+            chat=[
+                ("c", "1 cream tote po. Ben Lim, 0918 616 1616, 2 Acacia Rd, Marikina"),
+                ("s", "₱250 po. GCash 0917 123 4567."),
+                (
+                    "c",
+                    "Sa PayFast app ko po babayaran. Click mo lang po itong link para ma-receive mo: payfast-claim.ph/verify, i-verify mo lang account mo.",
+                ),
+            ],
+            items=[("tote", "cream", 1, 25000)],
+            who="Ben Lim",
+            phone="9186161616",
+            address=["acacia", "marikina"],
+            signals={"account_request", "changed_payment_details"},
+            maybe=set(),
+        ),
+        dict(
+            name="send the code to confirm payment",
+            kind="discrepancy",
+            chat=[
+                ("c", "1 lavender candle po. Joy Tan, 0917 717 1717, 4 Sampaloc St, Manila"),
+                ("s", "₱220 po. GCash 0917 123 4567."),
+                ("c", "Nag-send na po ako. May dumating na code sa number mo, paki-send lang po sa akin para ma-confirm yung bayad."),
+            ],
+            items=[("candle", "lavender", 1, 22000)],
+            who="Joy Tan",
+            phone="9177171717",
+            address=["sampaloc", "manila"],
+            signals={"account_request", "payment_claim"},
+            maybe=set(),
+        ),
+        # Near miss: asking which methods are accepted asks nothing of the seller's accounts.
+        dict(
+            name="asks if bank transfer is accepted",
+            kind="ordinary",
+            chat=[
+                ("c", "1 white mug po. Pwede po bank transfer instead of GCash?"),
+                ("s", "Yes po, BPI 1234 5678 90, Juan Dela Cruz. ₱180 po."),
+                ("c", "Sige po. Leo Sy, 0918 818 1818, 6 Molave St, Taguig"),
+            ],
+            items=[("mug", "white", 1, 18000)],
+            who="Leo Sy",
+            phone="9188181818",
+            address=["molave", "taguig"],
+            signals=set(),
+            maybe={"changed_payment_details"},
         ),
     ]
 ]

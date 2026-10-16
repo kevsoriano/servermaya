@@ -21,6 +21,7 @@ const LABEL: Record<string, string> = {
   changed_payment_details: 'Changed payment or refund details',
   inconsistent_details: 'Details changed during the chat',
   receipt_image: 'Sent a receipt image as proof',
+  account_request: 'Asked you to open an account, use a link or share a code',
 }
 
 type Props = {

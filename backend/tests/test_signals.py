@@ -20,8 +20,10 @@ def test_signals_keep_only_cited_customer_messages_and_resolve_on_payment():
     order = lambda ids, **k: {"status": "confirmed", "messages": [{"id": i} for i in ids], **k}
     assert all(s["resolved"] is None for s in risk.resolve(got, []))
     paid = order(["c1", "s1", "c2"], payment={"status": "verified", "amount": 89000})
-    done = risk.resolve(got + [{"kind": "changed_payment_details", "summary": "", "sources": ["c1"], "check": ""}], [paid])
-    assert [bool(s["resolved"]) for s in done] == [True, True, False]  # a verified payment does not settle changed refund details
+    extra = [{"kind": k, "summary": "", "sources": ["c1"], "check": ""} for k in ("changed_payment_details", "account_request")]
+    done = risk.resolve(got + extra, [paid])
+    # A verified payment does not settle changed refund details, nor make sharing a code or opening someone's link safe.
+    assert [bool(s["resolved"]) for s in done] == [True, True, False, False]
     # A GCash payment the seller found in their own history settles the payment claim only.
     gcash = order(["c1", "s1", "c2"], manual_payment={"status": "seller_confirmed", "amount": 89000, "confirmed": {"reference": "1234567890123"}})
     assert [bool(s["resolved"]) for s in risk.resolve(got, [gcash])] == [True, False]
