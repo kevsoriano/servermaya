@@ -1,10 +1,12 @@
 """Shared by the test modules: the app client, a fake Firebase sign-in, a confirmed, paid, packed order, and in-memory Google services."""
 
 import copy
+import secrets
 from datetime import UTC
 
 from fastapi.testclient import TestClient
-from google.api_core.exceptions import Conflict, NotFound, PreconditionFailed
+from google.api_core.exceptions import AlreadyExists, NotFound, PreconditionFailed
+from google.cloud.firestore_v1.transforms import ArrayUnion
 from google.oauth2 import id_token
 
 import main
@@ -52,8 +54,9 @@ def ready_order(**extra):
 
 
 class FakeFirestore:
-    """In-memory Firestore for route tests: documents, equality queries and transactions, which is all the routes use.
-    Reads and writes copy, so a route never shares a dict with the store. Updates are top-level keys, as every rule returns."""
+    """In-memory Firestore for route tests: documents, == and "in" queries, transactions, batches and ArrayUnion, which is all
+    the routes use. Reads and writes copy, so a route never shares a dict with the store. Updates are top-level keys, as every
+    rule returns."""
 
     def __init__(self):
         self.docs = {}  # path -> dict
@@ -64,13 +67,19 @@ class FakeFirestore:
     def transaction(self):
         return FakeTransaction()
 
+    batch = transaction  # writes apply at once; commit() has nothing left to do
+
+    def recursive_delete(self, ref):
+        for path in [p for p in self.docs if p == ref.path or p.startswith(ref.path + "/")]:
+            del self.docs[path]
+
 
 class FakeCollection:
     def __init__(self, db, path, filters=()):
         self.db, self.path, self.filters = db, path, filters
 
-    def document(self, doc_id):
-        return FakeDoc(self.db, f"{self.path}/{doc_id}")
+    def document(self, doc_id=None):
+        return FakeDoc(self.db, f"{self.path}/{doc_id or secrets.token_hex(10)}")
 
     def where(self, filter):
         return FakeCollection(self.db, self.path, self.filters + (filter,))
@@ -84,10 +93,10 @@ class FakeCollection:
                 d = d.get(k) if isinstance(d, dict) else None
             return d
 
-        for path in sorted(self.db.docs):
+        matches = lambda doc, f: value(doc, f.field_path) in f.value if f.op_string == "in" else value(doc, f.field_path) == f.value
+        for path, doc in sorted(self.db.docs.items()):  # a copy, so a caller may delete while it reads
             parent, _, _ = path.rpartition("/")
-            doc = self.db.docs[path]
-            if parent == self.path and all(value(doc, f.field_path) == f.value for f in self.filters):
+            if parent == self.path and all(matches(doc, f) for f in self.filters):
                 yield FakeDoc(self.db, path).get()
 
 
@@ -102,17 +111,22 @@ class FakeDoc:
         return FakeSnap(self, copy.deepcopy(self.db.docs.get(self.path)))
 
     def set(self, data, merge=False):
-        self.db.docs[self.path] = {**(self.db.docs.get(self.path, {}) if merge else {}), **copy.deepcopy(data)}
+        old = self.db.docs.get(self.path, {}) if merge else {}
+        new = {k: old.get(k, []) + [x for x in v.values if x not in old.get(k, [])] if isinstance(v, ArrayUnion) else v for k, v in data.items()}
+        self.db.docs[self.path] = {**old, **copy.deepcopy(new)}
 
     def update(self, data):
         if self.path not in self.db.docs:
             raise NotFound(self.path)
-        self.db.docs[self.path].update(copy.deepcopy(data))
+        self.set(data, merge=True)
 
     def create(self, data):
         if self.path in self.db.docs:
-            raise Conflict(self.path)
+            raise AlreadyExists(self.path)
         self.set(data)
+
+    def delete(self):
+        self.db.docs.pop(self.path, None)
 
 
 class FakeSnap:
@@ -123,6 +137,9 @@ class FakeSnap:
     def to_dict(self):
         return copy.deepcopy(self._data)
 
+    def get(self, field):
+        return copy.deepcopy(self._data[field])
+
 
 class FakeTransaction:
     def update(self, ref, data):
@@ -130,6 +147,9 @@ class FakeTransaction:
 
     def set(self, ref, data, merge=False):
         ref.set(data, merge=merge)
+
+    def commit(self):
+        pass
 
 
 class FakeBucket:

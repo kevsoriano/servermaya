@@ -8,12 +8,14 @@ An assistant for small sellers who take orders in Messenger and get paid by GCas
 
 Open the live app and press **Try the demo**. No account is needed.
 
-- You get five demo chats, each showing something the app is built to catch. You play both sides: reply as the seller, or write as the customer in the dashed box (images too).
+- You get seven demo chats, each showing something the app is built to catch. You play both sides: reply as the seller, or write as the customer in the dashed box (images too).
   - **Ana Reyes**: a plain order, for the full flow from draft to delivery.
   - **Mark Dizon**: changes the order, then says he already paid and gives a reference number. That is a claim, not a payment.
   - **Joy Santos**: writes a fake seller line with a lower price, and an instruction to mark the order paid. The seller's price wins and the instruction is ignored.
   - **Leah Cruz**: a returning customer. She confirmed and then cancelled an order three days ago, and now orders again with "same address and number as before".
   - **Rico Bautista**: a repeat customer whose first order said "already paid, ship today" but went through: the seller found the payment in their own GCash history, packed it and he received it. Now he says the same again. The old payment does not settle the new claim; the first order's checks show as history.
+  - **Bea Villanueva**: her mug was delivered cracked, and she sent a report with a photo. The report is open, so **Review with AI** is one click away; the reviewer sees her photo and the packing photo.
+  - **Nico Ramos**: paid and waiting to be packed, with one shaky packing photo already added. **Check photos** holds it back as too blurry and asks for a retake, whatever the AI reads in it.
 - From a chat: create the draft order, create the confirmation link, confirm it as the customer, then pay with PayMongo's **Simulate payment** (test mode) or by GCash. Then check packing photos, book a Lalamove sandbox delivery, mark it received, report a problem and review the claim.
 - To try GCash, press **Ask for GCash payment** (or **They say they already paid** for Mark). The customer box then has made-up sample receipts: **Matching**, **Wrong amount** and **Wrong recipient**, each stamped SAMPLE. To confirm a payment the way a seller would, use **Sample history screenshot** in the order, or download the sample GCash history PDF in Settings (password `delacruz4567`) and upload it.
 - **New demo chat** pastes any chat in `Customer:` / `Seller:` lines. **Reset demo chats** starts over.

@@ -7,6 +7,7 @@ import re
 import secrets
 from datetime import datetime, timedelta
 
+from domain import claims as cases
 from domain import delivery, extraction
 from domain import orders as rules
 from domain import packing as pack
@@ -99,6 +100,42 @@ REPEAT = (
 )
 
 
+# A delivered order with a damage report waiting: the mug arrived cracked, and she sent a photo in the chat and through her
+# order link. The report is open and not yet reviewed, so the claim review is one click away. Her chat after delivery belongs
+# to this order: it was not yet received.
+DAMAGED = (
+    "Bea Villanueva",
+    [
+        (False, "Hi! Can I order 1 blue ceramic mug?"),
+        (True, "Sure! The blue mug is ₱180."),
+        (False, "Bea Villanueva, 0917 555 0188, 31 Molave St., Brgy. Bagong Ilog, Pasig City"),
+        (True, "Thanks, Bea! I'll send you the order link."),
+        (False, "Sent ₱180 via GCash."),
+        (True, "Found it in our GCash, thank you! Shipping today."),
+    ],
+    [
+        (False, "Hi, the mug arrived today but it's cracked 😞 Here's a photo."),
+        (True, "So sorry, Bea! Please send a report through your order link so we can sort it out."),
+        (False, "Done, I sent the report with the photo."),
+    ],
+)
+
+
+# A paid order waiting to be packed, with one packing photo already added that is too shaky to count anything in. Checking it
+# holds the photo back and asks for a retake, whatever Gemini reads in it.
+TO_PACK = (
+    "Nico Ramos",
+    [
+        (False, "Hi! I'd like 1 cream tote bag please."),
+        (True, "Sure! The cream tote is ₱250."),
+        (False, "Nico Ramos, 0918 555 0133, 9 Acacia Lane, Brgy. Kapitolyo, Pasig City"),
+        (True, "Thanks, Nico! I'll send you the order link."),
+        (False, "Paid via GCash ₱250 just now."),
+        (True, "Found it in our GCash, thank you! Packing your tote now."),
+    ],
+)
+
+
 # Gemini calls demo visitors may make in a Philippine day. A judge's full run is about 20. The total is the real ceiling:
 # anyone can make a new anonymous account, so only it bounds what the demo can cost (about $30 a day at Flash prices).
 AI_PER_VISITOR = 250
@@ -143,21 +180,16 @@ def seed(owner: str, now: datetime) -> list[dict]:
     return [thread(name, lines, owner, now - timedelta(hours=2 * n)) for n, (name, lines) in enumerate(SEED)]
 
 
-def returning(owner: str, conversation_id: str, now: datetime) -> tuple[dict, dict]:
-    """The returning customer's chat, and her earlier order, built through the same rules as a real one: drafted, confirmed
-    by her through the link, then cancelled by the seller when she asked."""
-    name, earlier, later = RETURNING
-    old = thread(name, earlier, owner, now - timedelta(days=3))
-    new = thread(name, later, owner, now - timedelta(hours=2 * len(SEED)))
-    chat = {**new, "messages": old["messages"] + new["messages"]}
-    messages = old["messages"]
-    at = lambda n: datetime.fromisoformat(messages[n]["created_time"])
+def confirmed(owner: str, conversation_id: str, messages: list[dict], item: extraction.Item, details: list[str], source: int, at: datetime) -> dict:
+    """An order drafted from these messages through the same rules as a real one, sent, and confirmed through the customer's
+    link 30 s later. details: name, phone and address, all cited to message number `source` (from 1, as the draft step cites)."""
     text = lambda value, *sources: extraction.Text(value=value, sources=list(sources))
+    name, phone, address = details
     raw = extraction.Extraction(  # what the draft step would read from these messages; finalize checks every citation and price
-        items=[extraction.Item(name="Scented soy candle", variant="Vanilla", quantity=1, unit_price_php=220, price_source=2, sources=[1, 3])],
-        recipient_name=text("Leah Cruz", 3),
-        phone=text("0919 555 0177", 3),
-        address=text("7 Sampaguita St., Brgy. Malamig, Mandaluyong City", 3),
+        items=[item],
+        recipient_name=text(name, source),
+        phone=text(phone, source),
+        address=text(address, source),
         delivery_instructions=text(None),
         claims=[],
         clarification_questions=[],
@@ -172,10 +204,25 @@ def returning(owner: str, conversation_id: str, now: datetime) -> tuple[dict, di
         "confirm_token": None,
         "model": "demo_seed",
         "created_by": SHOP,
-        "created_at": at(3),
+        "created_at": at,
     }
     order |= rules.send(order, secrets.token_urlsafe(32))
-    order |= rules.confirm(order, "customer", "confirmation_link", at(3) + timedelta(seconds=30))
+    order |= rules.confirm(order, "customer", "confirmation_link", at + timedelta(seconds=30))
+    return order
+
+
+def returning(owner: str, conversation_id: str, now: datetime) -> tuple[dict, dict]:
+    """The returning customer's chat, and her earlier order, built through the same rules as a real one: drafted, confirmed
+    by her through the link, then cancelled by the seller when she asked."""
+    name, earlier, later = RETURNING
+    old = thread(name, earlier, owner, now - timedelta(days=3))
+    new = thread(name, later, owner, now - timedelta(hours=2 * len(SEED)))
+    chat = {**new, "messages": old["messages"] + new["messages"]}
+    messages = old["messages"]
+    at = lambda n: datetime.fromisoformat(messages[n]["created_time"])
+    item = extraction.Item(name="Scented soy candle", variant="Vanilla", quantity=1, unit_price_php=220, price_source=2, sources=[1, 3])
+    details = ["Leah Cruz", "0919 555 0177", "7 Sampaguita St., Brgy. Malamig, Mandaluyong City"]
+    order = confirmed(owner, conversation_id, messages, item, details, 3, at(3))
     order |= rules.cancel(order, SHOP, "The customer asked to cancel in chat", at(5))
     return chat, order
 
@@ -193,30 +240,9 @@ def repeat(
     chat = {**new, "messages": old["messages"] + new["messages"]}
     messages = old["messages"][:4]  # drafted before he wrote that he had paid
     at = lambda n: datetime.fromisoformat(old["messages"][n]["created_time"])
-    text = lambda value, *sources: extraction.Text(value=value, sources=list(sources))
-    raw = extraction.Extraction(
-        items=[extraction.Item(name="Tote bag", variant="Cream", quantity=1, unit_price_php=250, price_source=2, sources=[1, 3])],
-        recipient_name=text("Rico Bautista", 3),
-        phone=text("0917 555 0166", 3),
-        address=text("23 Kalayaan Ave., Brgy. Pinyahan, Quezon City", 3),
-        delivery_instructions=text(None),
-        claims=[],
-        clarification_questions=[],
-    )
-    order = {
-        "status": "draft",
-        "version": 1,
-        "source": {"type": "demo", "conversation_id": conversation_id, "owner": owner},
-        "messages": messages,
-        "draft": extraction.finalize(raw, messages),
-        "confirmations": [],
-        "confirm_token": None,
-        "model": "demo_seed",
-        "created_by": SHOP,
-        "created_at": at(3),
-    }
-    order |= rules.send(order, secrets.token_urlsafe(32))
-    order |= rules.confirm(order, "customer", "confirmation_link", at(3) + timedelta(seconds=30))
+    item = extraction.Item(name="Tote bag", variant="Cream", quantity=1, unit_price_php=250, price_source=2, sources=[1, 3])
+    details = ["Rico Bautista", "0917 555 0166", "23 Kalayaan Ave., Brgy. Pinyahan, Quezon City"]
+    order = confirmed(owner, conversation_id, messages, item, details, 3, at(3))
     order |= gcash.request(order, pay_to, SHOP, at(5), says_paid=True)
     order |= gcash.confirm(
         order, reference, SHOP, "Found ₱250.00 from his name with this reference in our GCash history", at(6) - timedelta(seconds=40), False
@@ -228,6 +254,64 @@ def repeat(
     order |= delivery.step(order, "picked_up", "seller_reported", SHOP, at(6))
     order |= delivery.step(order, "delivered", "seller_reported", SHOP, at(7) - timedelta(seconds=30))
     order |= delivery.acknowledge(order, "customer_link", at(7))
+    return chat, order
+
+
+def damaged(
+    owner: str,
+    conversation_id: str,
+    order_id: str,
+    now: datetime,
+    packed: dict,
+    sent: dict,
+    claim_id: str,
+    claim_photo: dict,
+    pay_to: dict,
+    reference: str,
+) -> tuple[dict, dict]:
+    """Her chat and order, two days ago: confirmed by her link, a GCash payment the seller found in their own history, packed
+    with the mug checked by hand, sent by a courier the seller reports and delivered. Today she reports it cracked, with a
+    photo. packed: the stored packing photo. sent: her damage photo as a chat attachment. claim_photo: the same photo as
+    stored with the report."""
+    name, earlier, later = DAMAGED
+    old = thread(name, earlier, owner, now - timedelta(days=2))
+    new = thread(name, later, owner, now - timedelta(hours=2 * len(SEED) + 4))
+    new["messages"][0]["attachments"] = [sent]
+    chat = {**new, "messages": old["messages"] + new["messages"]}
+    at = lambda n: datetime.fromisoformat(chat["messages"][n]["created_time"])
+    item = extraction.Item(name="Ceramic mug", variant="Blue", quantity=1, unit_price_php=180, price_source=2, sources=[1])
+    details = ["Bea Villanueva", "0917 555 0188", "31 Molave St., Brgy. Bagong Ilog, Pasig City"]
+    order = confirmed(owner, conversation_id, old["messages"][:4], item, details, 3, at(3))
+    order |= gcash.request(order, pay_to, SHOP, at(4), says_paid=True)
+    order |= gcash.confirm(
+        order, reference, SHOP, "Found ₱180.00 from her name with this reference in our GCash history", at(5) - timedelta(seconds=40), False
+    )
+    order |= pack.add_photo(order, packed)
+    order |= pack.confirm_row(order, 1, SHOP, "Checked by hand: 1 blue mug, no cracks, wrapped in bubble wrap", at(5) - timedelta(seconds=30))
+    order |= pack.complete(order, SHOP, at(5) - timedelta(seconds=25))
+    order |= delivery.start(order, f"f_{order_id}", "other", SHOP, at(5) + timedelta(seconds=10), tracking="Shop rider")
+    order |= delivery.step(order, "picked_up", "seller_reported", SHOP, at(5) + timedelta(hours=1))
+    order |= delivery.step(order, "delivered", "seller_reported", SHOP, at(6) - timedelta(minutes=30))
+    narrative = "The mug arrived cracked: a crack down the side and a chip out of the rim."
+    order |= cases.open_claim(
+        order, claim_id, cases.ClaimIn(type="damage", narrative=narrative), "customer_link", "customer", at(8) - timedelta(seconds=60), [claim_photo]
+    )
+    return chat, order
+
+
+def to_pack(owner: str, conversation_id: str, now: datetime, photo: dict, pay_to: dict, reference: str) -> tuple[dict, dict]:
+    """His chat and order, today: confirmed by his link and paid by GCash, found by the seller, with one shaky packing photo."""
+    name, lines = TO_PACK
+    chat = thread(name, lines, owner, now - timedelta(hours=2 * len(SEED) + 6))
+    at = lambda n: datetime.fromisoformat(chat["messages"][n]["created_time"])
+    item = extraction.Item(name="Tote bag", variant="Cream", quantity=1, unit_price_php=250, price_source=2, sources=[1])
+    details = ["Nico Ramos", "0918 555 0133", "9 Acacia Lane, Brgy. Kapitolyo, Pasig City"]
+    order = confirmed(owner, conversation_id, chat["messages"][:4], item, details, 3, at(3))
+    order |= gcash.request(order, pay_to, SHOP, at(4), says_paid=True)
+    order |= gcash.confirm(
+        order, reference, SHOP, "Found ₱250.00 from his name with this reference in our GCash history", at(5) - timedelta(seconds=40), False
+    )
+    order |= pack.add_photo(order, photo)
     return chat, order
 
 

@@ -20,6 +20,7 @@ from routes import dispatch
 from seed import samples
 
 SELLER = {"Authorization": "Bearer x"}
+asked = []
 
 
 def put_order(store, **order):
@@ -84,9 +85,10 @@ def test_customer_link_confirms_pays_and_the_webhook_verifies(monkeypatch):
 
 
 class Canned(BaseLlm):
-    """Stands in for Gemini inside the ADK claim reviewer."""
+    """Stands in for Gemini inside the ADK claim reviewer. Keeps what it was asked in `asked`."""
 
     async def generate_content_async(self, llm_request, stream=False):
+        asked.append(llm_request)
         review = cases.Review(
             findings=[cases.Finding(statement="Delivered", status="supported", evidence=["C", "Z9"], uncertainty="")],
             recommendation=cases.Recommendation(action="partial_refund", amount_php=200.0, explanation="", evidence=["C"]),
@@ -248,3 +250,41 @@ def test_lalamove_quote_book_cancel_release_refresh_and_webhook(monkeypatch, sel
     event = {"apiKey": "pk", "timestamp": 1, "eventId": "E1", "eventType": "ORDER_STATUS_CHANGED", "data": data, "signature": sig}
     assert client.post("/api/webhooks/lalamove", content=json.dumps(event)).status_code == 200
     assert saved(store)["fulfillment"]["status"] == "delivered" and "webhookEvents/lalamove_E1" in store.docs
+
+
+def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypatch):
+    report = pack.Report(
+        lines=[pack.Seen(line=1, visible=True, counts=[pack.Count(variant="cream", quantity=1)], damage=None, photos=[1], note="")], suggestions=[]
+    )
+    gemini = type("G", (), {"models": type("M", (), {"generate_content": lambda self, **k: type("R", (), {"text": report.model_dump_json()})()})()})()
+    store, _ = fake_google(monkeypatch, gemini)
+    assert fake_token(monkeypatch, firebase={"sign_in_provider": "anonymous"}).json()["demo"] is True
+    monkeypatch.setattr(messenger, "graph", lambda *a, **k: (_ for _ in ()).throw(AssertionError("demo visitors never reach Messenger")))
+    monkeypatch.setattr(claim_agent, "gemini_agent", lambda model, project: claim_agent.agent(Canned(model="canned")))
+
+    chats = {c["customer"]["name"]: c for c in client.get("/api/conversations", headers=SELLER).json()}  # the first visit seeds
+    assert len(chats) == 7 and chats["Bea Villanueva"]["order_actions"] == ["Review a customer claim"]
+    orders = {o["draft"]["recipient_name"]["value"]: o for o in client.get("/api/orders", headers=SELLER).json()}
+    assert set(orders) == {"Leah Cruz", "Rico Bautista", "Bea Villanueva", "Nico Ramos"}
+
+    # Bea: one click reviews her open report, with her damage photo and the packing photo in front of the reviewer.
+    bea = orders["Bea Villanueva"]
+    assert (bea["fulfillment"]["status"], bea["claims"][0]["status"], bea.get("receipt")) == ("delivered", "open", None)
+    asked.clear()
+    claim = client.post(f"/api/orders/{bea['id']}/claims/{bea['claims'][0]['id']}/review", headers=SELLER).json()["claims"][0]
+    assert claim["status"] == "under_review" and claim["review"]["findings"][0]["evidence"] == ["C"]
+    images = [p for c in asked[0].contents for p in c.parts if p.inline_data]
+    assert len(images) == 2  # the claim photo and the packing photo, both loaded from Storage
+
+    # Nico: one click checks his packing photo, and code holds it back as too shaky, whatever Gemini read.
+    nico = orders["Nico Ramos"]
+    assert nico["packing_blocked"] is None and len(nico["packing"]["photos"]) == 1
+    packing = client.post(f"/api/orders/{nico['id']}/packing/check", headers=SELLER).json()["packing"]
+    assert packing["rows"][0]["auto_result"] == "insufficient_visibility" and packing["suggestions"][0].startswith("Photo 1 is too blurry")
+
+    # Their payments are in the sample GCash history; a reset deletes all four orders and seeds them again.
+    history = client.get("/api/demo/sample-statement", headers=SELLER)
+    assert history.status_code == 200 and history.headers["content-type"] == "application/pdf"
+    assert len(store.docs[f"stores/{config.STORE}/demoUsers/u1"]["samples"]) == 3
+    assert client.post("/api/demo/reset", headers=SELLER).json() == {"deleted_chats": 7, "deleted_orders": 4}
+    assert len(client.get("/api/orders", headers=SELLER).json()) == 4 and len(client.get("/api/conversations", headers=SELLER).json()) == 7
