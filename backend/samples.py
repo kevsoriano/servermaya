@@ -73,6 +73,34 @@ def receipt_png(amount: int, reference: str, at: datetime, name: str, mobile: st
     return out.getvalue()
 
 
+def history_png(amount: int, reference: str, at: datetime, sender: str) -> bytes:
+    """One payment as the seller's own GCash app shows it in transaction history, with a SAMPLE stamp across it."""
+    w, h = 720, 1000
+    img = Image.new("RGB", (w, h), "#f2f4f8")
+    d = ImageDraw.Draw(img)
+    font = lambda size: ImageFont.load_default(size=size)
+    d.rectangle((0, 0, w, 120), fill="#0a5fd8")
+    d.text((w / 2, 60), "Transaction Details", font=font(40), fill="white", anchor="mm")
+    d.rounded_rectangle((40, 160, w - 40, h - 80), radius=24, fill="white")
+    at = at.astimezone(PHT)
+    d.text((w / 2, 240), "Received GCash from", font=font(32), fill="#555", anchor="mm")
+    d.text((w / 2, 300), sender, font=font(40), fill="#111", anchor="mm")
+    d.text((w / 2, 400), f"+ PHP {money(amount)}", font=font(56), fill="#1b873f", anchor="mm")
+    y = 520
+    for label, value in [("Reference Number", f"{reference[:4]} {reference[4:7]} {reference[7:]}"),
+                         ("Date and Time", f"{at:%b %d, %Y} {at:%I:%M %p}".replace(" 0", " ")), ("Status", "Received")]:
+        d.text((80, y), label, font=font(28), fill="#555", anchor="lm")
+        d.text((w - 80, y), value, font=font(28), fill="#111", anchor="rm")
+        y += 80
+    d.text((w / 2, h - 130), "SAMPLE HISTORY ENTRY - DEMO ONLY", font=font(22), fill="#c62828", anchor="mm")
+    stamp = Image.new("RGBA", (w, 160), (0, 0, 0, 0))
+    ImageDraw.Draw(stamp).text((w / 2, 80), "SAMPLE", font=font(130), fill=(198, 40, 40, 70), anchor="mm")
+    img.paste(stamp.rotate(30, expand=True), (0, 280), stamp.rotate(30, expand=True))
+    out = io.BytesIO()
+    img.save(out, "PNG")
+    return out.getvalue()
+
+
 def statement_lines(credits: list[dict], start: datetime, end: datetime, opening: int = 200000) -> list[str]:
     """Rows in the layout of GCash's history export, with a running balance. credits: [{at, reference, amount, sender}]."""
     rows = [(start.replace(hour=9, minute=0), "Payment to MERALCO, Merchant Transaction Number: DEMO1", new_reference(), -150000)]

@@ -207,8 +207,15 @@ def demo_threads():
 
 def seed_demo(user: dict):
     batch = clients()[1].batch()
-    for t in demo.seed(user["uid"], datetime.now(timezone.utc)):
+    now = datetime.now(timezone.utc)
+    for t in demo.seed(user["uid"], now):
         batch.set(demo_threads().document(demo.new_id()), t)
+    cid = demo.new_id()
+    chat, order = demo.returning(user["uid"], cid, now)
+    batch.set(demo_threads().document(cid), chat)
+    ref = orders().document()
+    batch.set(ref, order)
+    batch.set(ref.collection("versions").document("1"), version_doc(order["draft"], "demo_seed", demo.SHOP))
     batch.commit()
 
 
@@ -643,15 +650,36 @@ def orders():
     return clients()[1].collection("stores").document(STORE).collection("orders")
 
 
+EPOCH = datetime.min.replace(tzinfo=timezone.utc)  # sorts orders saved without created_at last
+
+
+def chat_orders(conversation_id: str) -> list[tuple[str, dict]]:
+    """This chat's orders, newest first."""
+    found = [(d.id, d.to_dict()) for d in orders().where(filter=firestore.FieldFilter("source.conversation_id", "==", conversation_id)).stream()]
+    return sorted(found, key=lambda x: x[1].get("created_at") or EPOCH, reverse=True)
+
+
+@app.get("/api/conversations/{conversation_id}/orders")
+def list_chat_orders(conversation_id: str, user: dict = Depends(current_user)):
+    """Every order made from this chat, newest first, so a returning customer's earlier orders stay in view."""
+    snaps = [d for d in orders().where(filter=firestore.FieldFilter("source.conversation_id", "==", conversation_id)).stream() if visible(d.to_dict(), user)]
+    return [present(d) for d in sorted(snaps, key=lambda d: d.to_dict().get("created_at") or EPOCH, reverse=True)]
+
+
 @app.post("/api/conversations/{conversation_id}/draft-order")
 def draft_order(conversation_id: str, user: dict = Depends(current_user)):
     messages = conversation(conversation_id, user)
     if not messages:
         raise HTTPException(400, "Conversation has no messages")
+    previous = chat_orders(conversation_id)
+    messages = rules.since_last_order(messages, [o for _, o in previous])
+    if not any(not m["from_page"] for m in messages):
+        raise HTTPException(409, "The customer has not written since this chat's last order. To change that order, edit it.")
     try:
         draft = extraction.extract(clients()[0], GEMINI_MODEL, messages)
     except Exception:
         raise HTTPException(502, "Could not extract an order from this conversation")
+    draft = rules.carry_over(draft, previous)
     source = {"type": "messenger", "conversation_id": conversation_id}
     if demo.is_demo(conversation_id):
         source = {"type": "demo", "conversation_id": conversation_id, "owner": demo_doc(conversation_id)["owner"]}
@@ -1331,7 +1359,30 @@ async def read_gcash_history(order_id: str, request: Request, user: dict = Depen
     data = await request.body()
     if not data or len(data) > pack.MAX_PHOTO_BYTES:
         raise HTTPException(413, "Screenshots must be under 10 MB")
-    ref, order = await run_in_threadpool(loaded, order_id)
+    return await run_in_threadpool(history_read, order_id, data, content_type, user)
+
+
+@app.post("/api/orders/{order_id}/gcash/sample-history")
+def demo_sample_history(order_id: str, user: dict = Depends(current_user)):
+    """Demo only: the seller's GCash history entry for the newest matching sample receipt that fits this request, read like an upload."""
+    ref, order = loaded(order_id)
+    if (order.get("source") or {}).get("type") != "demo":
+        raise HTTPException(404, "Sample history screenshots are for demo orders only")
+    try:
+        manual = gcash.current(order)
+    except rules.Refused as e:
+        raise HTTPException(409, str(e))
+    start = gcash.window(manual)[0] - gcash.SLACK
+    got = (store_doc().collection("demoUsers").document(user["uid"]).get().to_dict() or {}).get("samples", [])
+    fits = [s for s in got if s["amount"] == manual["amount"] and s["at"] >= start]
+    if not fits:
+        raise HTTPException(409, "Send a Matching sample receipt as the customer first. Only money that reached the demo account is in its history.")
+    s = max(fits, key=lambda s: s["at"])
+    return history_read(order_id, samples.history_png(s["amount"], s["reference"], s["at"], s["sender"]), "image/png", user)
+
+
+def history_read(order_id: str, data: bytes, content_type: str, user: dict) -> dict:
+    ref, order = loaded(order_id)
     try:
         manual = gcash.current(order)
     except rules.Refused as e:
@@ -1339,10 +1390,10 @@ async def read_gcash_history(order_id: str, request: Request, user: dict = Depen
     sha = hashlib.sha256(data).hexdigest()
     path = f"stores/{STORE}/orders/{order_id}/gcash/history/{sha}"
     try:
-        await run_in_threadpool(lambda: bucket().blob(path).upload_from_string(data, content_type=content_type, if_generation_match=0))
+        bucket().blob(path).upload_from_string(data, content_type=content_type, if_generation_match=0)
     except PreconditionFailed:
         pass  # the same file is already stored
-    entry = await run_in_threadpool(transcribe, data, content_type, gcash.HISTORY_SYSTEM, gcash.HistoryEntry)
+    entry = transcribe(data, content_type, gcash.HISTORY_SYSTEM, gcash.HistoryEntry)
     read = {
         "image": {"path": path, "sha256": sha, "content_type": content_type, "size": len(data)},
         "entry": entry.model_dump(),
@@ -1352,7 +1403,7 @@ async def read_gcash_history(order_id: str, request: Request, user: dict = Depen
         "read_by": user["email"],
         "model": GEMINI_MODEL,
     }
-    return await run_in_threadpool(change, ref, lambda o: gcash.add_history(o, read))
+    return change(ref, lambda o: gcash.add_history(o, read))
 
 
 MAX_STATEMENT_BYTES = 5 * 1024 * 1024

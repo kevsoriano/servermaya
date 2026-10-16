@@ -7,6 +7,9 @@ import re
 import secrets
 from datetime import datetime, timedelta
 
+import extraction
+import orders as rules
+
 SHOP = "Demo shop"
 MAX_MESSAGES = 200  # keeps a thread document well under Firestore's 1 MB limit
 PREFIX = re.compile(r"^\s*(customer|seller)\s*:\s?(.*)$", re.IGNORECASE)
@@ -39,6 +42,22 @@ SEED = [
 ]
 
 
+# A returning customer: an order three days ago that she confirmed and then cancelled, and a new order today that only says
+# "same address and number as before". The new draft must leave the old candle out and carry her details over from the old order.
+RETURNING = ("Leah Cruz", [
+    (False, "Hi! Do you have the scented soy candle in vanilla?"),
+    (True, "Yes! The vanilla soy candle is ₱220."),
+    (False, "I'll get 1. Leah Cruz, 0919 555 0177, 7 Sampaguita St., Brgy. Malamig, Mandaluyong City"),
+    (True, "Thanks, Leah! I'll send you the order link."),
+    (False, "Sorry, something came up and I'll be out of town this week. Can I cancel?"),
+    (True, "No problem, I've cancelled it. Message us anytime!"),
+], [
+    (False, "Hi again! I'm back home. Can I order 2 lavender candles this time? Same address and number as before."),
+    (True, "Welcome back, Leah! Lavender is also ₱220 each."),
+    (False, "Great, 2 lavender please."),
+])
+
+
 def is_demo(conversation_id: str) -> bool:
     return bool(re.fullmatch(r"demo_[0-9a-f]{12}", conversation_id))
 
@@ -60,6 +79,29 @@ def thread(name: str, lines: list[tuple[bool, str]], owner: str, end: datetime) 
 
 def seed(owner: str, now: datetime) -> list[dict]:
     return [thread(name, lines, owner, now - timedelta(hours=2 * n)) for n, (name, lines) in enumerate(SEED)]
+
+
+def returning(owner: str, conversation_id: str, now: datetime) -> tuple[dict, dict]:
+    """The returning customer's chat, and her earlier order, built through the same rules as a real one: drafted, confirmed
+    by her through the link, then cancelled by the seller when she asked."""
+    name, earlier, later = RETURNING
+    old = thread(name, earlier, owner, now - timedelta(days=3))
+    new = thread(name, later, owner, now - timedelta(hours=2 * len(SEED)))
+    chat = {**new, "messages": old["messages"] + new["messages"]}
+    messages = old["messages"]
+    at = lambda n: datetime.fromisoformat(messages[n]["created_time"])
+    text = lambda value, *sources: extraction.Text(value=value, sources=list(sources))
+    raw = extraction.Extraction(  # what the draft step would read from these messages; finalize checks every citation and price
+        items=[extraction.Item(name="Scented soy candle", variant="Vanilla", quantity=1, unit_price_php=220, price_source=2, sources=[1, 3])],
+        recipient_name=text("Leah Cruz", 3), phone=text("0919 555 0177", 3), address=text("7 Sampaguita St., Brgy. Malamig, Mandaluyong City", 3),
+        delivery_instructions=text(None), claims=[], clarification_questions=[])
+    order = {"status": "draft", "version": 1, "source": {"type": "demo", "conversation_id": conversation_id, "owner": owner},
+             "messages": messages, "draft": extraction.finalize(raw, messages), "confirmations": [], "confirm_token": None,
+             "model": "demo_seed", "created_by": SHOP, "created_at": at(3)}
+    order |= rules.send(order, secrets.token_urlsafe(32))
+    order |= rules.confirm(order, "customer", "confirmation_link", at(3) + timedelta(seconds=30))
+    order |= rules.cancel(order, SHOP, "The customer asked to cancel in chat", at(5))
+    return chat, order
 
 
 def parse(chat: str) -> list[tuple[bool, str]]:

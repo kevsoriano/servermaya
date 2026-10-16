@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { load } from './firebase'
+import { load, peso, STATUS } from './firebase'
 import OrderView, { type Order } from './OrderView'
 import Reply from './Reply'
 import Signals from './Signals'
@@ -137,12 +137,15 @@ function pending(c: Conversation) {
   return [...out, ...c.order_actions]
 }
 
+const done = (o: Order) => o.status === 'cancelled' || o.receipt?.status === 'customer_confirmed'
+
 export default function Conversations() {
   const [list, setList] = useState<Conversation[]>()
   const [openId, setOpenId] = useState<string>()
   const [messages, setMessages] = useState<Message[]>()
   const [error, setError] = useState('')
   const [order, setOrder] = useState<Order>()
+  const [orders, setOrders] = useState<Order[]>() // this chat's orders, newest first
   const [drafting, setDrafting] = useState(false)
   const [reply, setReply] = useState('')
   const [asCustomer, setAsCustomer] = useState('')
@@ -189,10 +192,13 @@ export default function Conversations() {
     setOpenId(id)
     setMessages(undefined)
     setOrder(undefined)
+    setOrders(undefined)
     setReply('')
     setAsCustomer('')
     setError('')
     load<Message[]>(`/conversations/${id}`).then(setMessages, (e) => setError(e.message))
+    // Open the order still in progress; otherwise the newest, so a returning customer's history is one click away.
+    load<Order[]>(`/conversations/${id}/orders`).then((l) => (setOrders(l), setOrder(l.find((o) => !done(o)) ?? l[0])), (e) => setError(e.message))
   }
 
   // Demo chats are not polled, so refresh the list after anything that changes its snippet or order badges.
@@ -213,6 +219,7 @@ export default function Conversations() {
 
   const orderChanged = (o: Order) => {
     setOrder(o)
+    setOrders((l) => (l?.some((x) => x.id === o.id) ? l.map((x) => (x.id === o.id ? o : x)) : [o, ...(l ?? [])]))
     refreshDemoList()
   }
 
@@ -230,6 +237,7 @@ export default function Conversations() {
   }
 
   const createDraft = () => {
+    if (openOrder && !confirm('Is this a separate order? It is drafted from the messages after the last order. If the customer is changing the open order, edit that order instead.')) return
     setDrafting(true)
     setError('')
     load<Order>(`/conversations/${openId}/draft-order`, { method: 'POST' })
@@ -238,6 +246,10 @@ export default function Conversations() {
   }
 
   const thread = list?.find((c) => c.id === openId)
+  const openOrder = orders?.find((o) => !done(o))
+  // A new order reads only the messages after the last one any order was drafted from, so offer it once the customer wrote since.
+  const lastDrafted = orders?.[0]?.messages.at(-1)?.created_time
+  const customerWroteSince = !!messages?.some((m) => !m.from_page && (!lastDrafted || Date.parse(m.created_time) > Date.parse(lastDrafted)))
   const customer = thread?.customer
   const name = customer?.name ?? 'Unknown'
 
@@ -333,11 +345,29 @@ export default function Conversations() {
             <Avatar name={name} src={customer?.picture} />
             <strong>{name}</strong>
           </div>
-          {messages.length > 0 && !order && (
+          {orders && (orders.length > 1 || orders.some(done)) && (
             <div className="block">
-              <h3>Order</h3>
-              <button className="primary" onClick={createDraft} disabled={drafting}>
-                {drafting ? 'Reading the conversation…' : '+ Create draft order'}
+              <h3>Orders in this chat</h3>
+              <ul className="chat-orders">
+                {orders.map((o) => (
+                  <li key={o.id}>
+                    <button type="button" className={o.id === order?.id ? 'selected' : undefined} onClick={() => setOrder(o)} aria-pressed={o.id === order?.id}>
+                      <span>{o.draft.items.map((i) => `${i.quantity}× ${i.name}${i.variant ? ` (${i.variant})` : ''}`).join(', ') || 'No items'}</span>
+                      <small>
+                        {new Date(o.created_at).toLocaleDateString()} · {o.draft.total === null ? 'no total' : peso(o.draft.total)} ·{' '}
+                        {o.receipt?.status === 'customer_confirmed' ? 'Received' : STATUS[o.status]}
+                      </small>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {messages.length > 0 && orders && (!orders.length || customerWroteSince || drafting) && (
+            <div className="block">
+              {!orders.length && <h3>Order</h3>}
+              <button className={openOrder ? undefined : 'primary'} onClick={createDraft} disabled={drafting}>
+                {drafting ? 'Reading the conversation…' : orders.length ? '+ New order from the newer messages' : '+ Create draft order'}
               </button>
             </div>
           )}

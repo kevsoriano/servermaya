@@ -773,3 +773,29 @@ mark.source.provider {
   padding: 0.125rem 0.5rem;
   font-size: 0.8rem;
 }
+
+/* Demo hints inside the order panel use the banner's colour. */
+.demo-note {
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  background: color-mix(in srgb, #f5d76e 35%, transparent);
+}
+
+/* A chat's orders, newest first: the open one and a returning customer's earlier ones. */
+.chat-orders {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+.chat-orders button {
+  width: 100%;
+  display: grid;
+  gap: 0.1rem;
+  text-align: left;
+}
+.chat-orders button.selected {
+  border-color: #0a5fd8;
+  background: color-mix(in srgb, #0a5fd8 8%, transparent);
+}

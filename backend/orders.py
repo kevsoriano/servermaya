@@ -47,6 +47,42 @@ def missing(draft: dict) -> list[str]:
     return out + [label for key, label in REQUIRED.items() if not draft[key]["value"]]
 
 
+CARRIED = ("recipient_name", "phone", "address")  # who and where; delivery instructions are for one delivery
+
+
+def since_last_order(messages: list[dict], previous: list[dict]) -> list[dict]:
+    """The messages a new order is drafted from: those after the last message any earlier order of this chat was drafted
+    from. A returning customer's old items and changes stay with the old order."""
+    ends = [datetime.fromisoformat(o["messages"][-1]["created_time"]) for o in previous if o.get("messages")]
+    if not ends:
+        return messages
+    return [m for m in messages if datetime.fromisoformat(m["created_time"]) > max(ends)]
+
+
+def carry_over(draft: dict, previous: list[tuple[str, dict]]) -> dict:
+    """Contact details this part of the chat does not give, from the newest earlier order the customer confirmed as it stands.
+
+    previous: (order id, order), newest first. A carried value cites no message, only the order it came from, so it shows as
+    copied and the seller checks it is still right.
+    """
+    for order_id, o in previous:
+        if any(c["version"] == o["version"] for c in o.get("confirmations", [])):
+            old = o["draft"]
+            filled = {f: {"value": old[f]["value"], "sources": [], "from_order": order_id}
+                      for f in CARRIED if not draft[f]["value"] and old[f]["value"]}
+            # "Welcome back, Leah!" gives only the start of the name she confirmed as "Leah Cruz": keep the full one.
+            new, full = draft["recipient_name"]["value"], old["recipient_name"]["value"]
+            if new and full and new.lower().split() != full.lower().split() and full.lower().split()[: len(new.split())] == new.lower().split():
+                filled["recipient_name"] = {**draft["recipient_name"], "value": full, "from_order": order_id}
+            return {**draft, **filled}
+    return draft
+
+
+def done(order: dict) -> bool:
+    """Cancelled, or the customer said they received it. A new order from the same chat is then the expected next step."""
+    return order["status"] == "cancelled" or (order.get("receipt") or {}).get("status") == "customer_confirmed"
+
+
 def edit(order: dict, body: Edit) -> dict:
     """A seller edit always makes a new version and voids the confirmation link for the old one."""
     if order["status"] == "cancelled":

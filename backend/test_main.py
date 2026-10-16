@@ -1163,6 +1163,7 @@ def test_sample_gcash_files_go_through_the_real_checks():
     assert not gc.mobile_fits(gc.mobile(samples.OTHER_MOBILE), main.DEMO_GCASH["mobile"])
     assert samples.sender("Ana Reyes") == "AN* R." and len(samples.new_reference()) == 13
     assert samples.receipt_png(36000, "1012345678901", datetime.now(gc.PHT), samples.PAY_TO_NAME, samples.PAY_TO_MOBILE)[:4] == b"\x89PNG"
+    assert samples.history_png(36000, "1012345678901", datetime.now(gc.PHT), "AN* R.")[:4] == b"\x89PNG"
 
     # The history PDF opens with the demo password and parses exactly, running balance and all.
     now = datetime.now(gc.PHT)
@@ -1179,3 +1180,40 @@ def test_sample_gcash_files_go_through_the_real_checks():
     # Each demo visitor's receipts are indexed apart from the store's and from each other's.
     assert main.index_scope({"source": {"type": "messenger"}}) == ""
     assert main.index_scope({"source": {"type": "demo", "owner": "u1"}}) != main.index_scope({"source": {"type": "demo", "owner": "u2"}})
+
+
+def test_returning_customer_gets_a_new_order_from_new_messages_only():
+    from datetime import datetime, timedelta, timezone
+
+    import demo
+    import orders as rules
+
+    now = datetime.now(timezone.utc)
+    chat, old = demo.returning("u1", "demo_aaaaaaaaaaaa", now)
+    # The seeded earlier order went through the real rules: price cited to the seller, confirmed by her link, then cancelled.
+    assert (old["status"], old["draft"]["total"], old["confirmations"][-1]["kind"], old["confirm_token"]) == ("cancelled", 22000, "customer", None)
+    assert old["draft"]["items"][0]["price_source"] == old["messages"][1]["id"] and rules.done(old)
+    assert chat["messages"][: len(old["messages"])] == old["messages"] and chat["owner"] == "u1"
+
+    # The new draft reads only what came after the old order's messages.
+    new = rules.since_last_order(chat["messages"], [old])
+    assert [m["text"] for m in new] == [t for _, t in demo.RETURNING[2]]
+    assert rules.since_last_order(chat["messages"], []) == chat["messages"]
+    assert rules.since_last_order(old["messages"], [old]) == []  # nothing new: no second order from the same messages
+
+    # "Same address and number as before": the details come from the order she confirmed, marked as copied, never as cited.
+    blank = lambda: {"value": None, "sources": []}
+    draft = {"items": [{"name": "Candle", "variant": "Lavender", "quantity": 2, "unit_price": 22000, "sources": ["x"]}], "total": 44000,
+             "recipient_name": {"value": "Leah", "sources": [new[0]["id"]]}, "phone": blank(), "address": blank(), "delivery_instructions": blank()}
+    filled = rules.carry_over(draft, [("o1", old)])
+    assert filled["recipient_name"] == {"value": "Leah Cruz", "sources": [new[0]["id"]], "from_order": "o1"}  # only her first name this time
+    other = {**draft, "recipient_name": {"value": "Leah Santos", "sources": ["x"]}}
+    assert rules.carry_over(other, [("o1", old)])["recipient_name"] == other["recipient_name"]  # a different name in this chat wins
+    assert filled["phone"] == {"value": "0919 555 0177", "sources": [], "from_order": "o1"}
+    assert filled["address"]["value"].startswith("7 Sampaguita") and filled["delivery_instructions"] == blank()
+    assert rules.missing(filled) == []
+    unconfirmed = {**old, "confirmations": []}
+    assert rules.carry_over(draft, [("o2", unconfirmed)]) == draft  # only details a customer confirmed are carried
+    edited = {**old, "version": 2}
+    assert rules.carry_over(draft, [("o2", edited), ("o1", old)])["phone"]["from_order"] == "o1"  # o2 was edited after she confirmed it
+    assert not rules.done({"status": "confirmed"}) and rules.done({"status": "confirmed", "receipt": {"status": "customer_confirmed"}})

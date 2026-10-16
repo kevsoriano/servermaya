@@ -7,7 +7,8 @@ import GcashPayment, { type ManualPayment } from './GcashPayment'
 import Dispatch, { type Fulfillment } from './Dispatch'
 import Claims, { type Claim, type Refund } from './Claims'
 
-type Sourced = { value: string | null; sources: string[] }
+/** from_order: not in this chat, copied from the customer's earlier confirmed order with that id. */
+type Sourced = { value: string | null; sources: string[]; from_order?: string }
 type Item = {
   name: string
   variant: string | null
@@ -49,7 +50,7 @@ export type Order = {
   claims?: Claim[]
   refunds?: Refund[]
   refundable: number
-  messages: { id: string; text: string; from_page: boolean }[]
+  messages: { id: string; text: string; from_page: boolean; created_time: string }[]
   draft: {
     items: Item[]
     total: number | null
@@ -279,7 +280,23 @@ export default function OrderView({ order, onChange }: { order: Order; onChange:
             {FIELDS.map(([key, label]) => (
               <div key={key}>
                 <dt>{label}</dt>
-                <dd>{draft[key].value ? <>{draft[key].value}{src(draft[key].sources)}</> : <em>Missing</em>}</dd>
+                <dd>
+                  {draft[key].value ? (
+                    <>
+                      {draft[key].value}
+                      {draft[key].from_order ? (
+                        <sup title="Not said in this part of the chat: copied from this customer's earlier order, which they confirmed. Check it is still right.">
+                          {' '}
+                          [earlier order]
+                        </sup>
+                      ) : (
+                        src(draft[key].sources)
+                      )}
+                    </>
+                  ) : (
+                    <em>Missing</em>
+                  )}
+                </dd>
               </div>
             ))}
           </dl>

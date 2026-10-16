@@ -150,15 +150,17 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
     })
 
   // The seller's screenshot of the payment in their own GCash history fills in the form; the seller still confirms.
-  const readHistory = (file?: File) =>
-    file &&
-    run('Reading your screenshot…', '/history', file).then((o) => {
-      const h = o?.manual_payment?.history_read
-      if (h) {
-        setReference(h.reference ?? '')
-        setInvno(h.entry.invno ?? '')
-      }
-    })
+  const fill = (o?: Order) => {
+    const h = o?.manual_payment?.history_read
+    if (h) {
+      setReference(h.reference ?? '')
+      setInvno(h.entry.invno ?? '')
+    }
+  }
+  const readHistory = (file?: File) => file && run('Reading your screenshot…', '/history', file).then(fill)
+  // Demo only: the demo seller's GCash history entry for the newest matching sample receipt, read like an upload.
+  const demo = order.source?.type === 'demo'
+  const sampleHistory = () => run('Reading the sample screenshot…', '/sample-history', {}).then(fill)
 
   const tail = invno.replace(/\W/g, '').toUpperCase()
   // Mirrors receipts.confirm: the invno starts with the transfer date (or the next day) and ends in the bank's 6 digits.
@@ -277,6 +279,18 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
                   Faster: upload a screenshot of this payment in your GCash history
                   <input type="file" accept="image/*" disabled={!!busy} onChange={(e) => (readHistory(e.target.files?.[0]), (e.target.value = ''))} />
                 </label>
+                {demo && (
+                  <p className="demo-note">
+                    <small>
+                      Demo: you have no GCash app for the demo shop. Use{' '}
+                      <button type="button" disabled={!!busy} onClick={sampleHistory}>
+                        Sample history screenshot
+                      </button>{' '}
+                      for its entry of a Matching sample receipt, or the sample history PDF in Settings. A customer's receipt uploaded here
+                      fails on purpose: it shows money sent, not money received.
+                    </small>
+                  </p>
+                )}
                 {history && (
                   <ul>
                     {history.checks.map((k) => (
