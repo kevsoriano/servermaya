@@ -1,6 +1,8 @@
 PROJECT := servermaya-ai-builder-cup
 REGION  := asia-southeast1
 RUN_SA  := 628763008062-compute@developer.gserviceaccount.com
+# 1 keeps one instance warm through judging; deploy with MIN_INSTANCES=0 afterwards to scale to zero again
+MIN_INSTANCES ?= 1
 # read from backend/.env, but sent to Cloud Run through Secret Manager instead of as plain env vars
 SECRETS := MESSENGER_PAGE_TOKEN PAYMONGO_SECRET_KEY PAYMONGO_WEBHOOK_SECRET LALAMOVE_API_KEY LALAMOVE_API_SECRET
 
@@ -49,7 +51,7 @@ deploy: deploy-backend deploy-frontend
 # ^;^ switches gcloud's list delimiter to ';' so the comma-separated allowlist survives
 deploy-backend: secrets
 	gcloud run deploy api --source backend --project $(PROJECT) --region $(REGION) \
-		--allow-unauthenticated \
+		--allow-unauthenticated --min-instances $(MIN_INSTANCES) \
 		--set-env-vars "^;^$$(grep -v '^#' backend/.env | grep . | grep -v $(patsubst %,-e ^%=,$(SECRETS)) | paste -sd';' -)" \
 		--set-secrets "$(subst $(space),$(comma),$(foreach k,$(SECRETS),$(k)=$(k):latest))"
 

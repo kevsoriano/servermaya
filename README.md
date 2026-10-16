@@ -88,3 +88,8 @@ Fill in `backend/.env` with your own keys. It is ignored by git.
 ## Roadmap
 
 Extraction works on a normalized message list; Messenger is the first adapter. Next: Instagram DMs (same Meta app and Graph API), then Facebook and Instagram comments (moving "mine" and price questions into DMs), then WhatsApp.
+
+## Team
+
+- **Kevin Gil Soriano**, Lead Full Stack Engineer
+- **Jan Beatrix Escarda**, Full Stack Engineer
