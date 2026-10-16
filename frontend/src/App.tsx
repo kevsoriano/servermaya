@@ -24,7 +24,7 @@ export default function App() {
         setError('')
         if (!u) return
         try {
-          const r = await api('/me')
+          const r = await api('/me', { signal: AbortSignal.timeout(20_000) })
           if (r.ok) setMe(await r.json())
           else setError(r.status === 403 ? `${u.email} is not on the allowlist.` : `Backend returned ${r.status}.`)
         } catch {
