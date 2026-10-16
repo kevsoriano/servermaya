@@ -796,6 +796,114 @@ mark.source.provider {
   text-align: left;
 }
 .chat-orders button.selected {
-  border-color: #0a5fd8;
-  background: color-mix(in srgb, #0a5fd8 8%, transparent);
+  border-color: var(--accent);
+  background: var(--selected);
+}
+
+/* Chat images open in the viewer instead of a new tab. */
+.media-open {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+}
+
+/* The viewer: the image, and for a GCash screenshot its checks beside it. */
+.viewer {
+  width: min(1100px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+}
+.viewer::backdrop {
+  background: rgb(0 0 0 / 0.6);
+}
+.viewer-body {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+}
+.viewer-body.with-checks {
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 26rem);
+}
+.viewer figure {
+  margin: 0;
+  display: grid;
+  gap: 0.4rem;
+  justify-items: center;
+}
+.viewer figure img {
+  max-width: 100%;
+  max-height: calc(100dvh - 7rem);
+  object-fit: contain;
+  border-radius: 8px;
+}
+.viewer section {
+  overflow-y: auto;
+  max-height: calc(100dvh - 5rem);
+  padding-right: 2rem; /* room for the close button */
+}
+.viewer h2 {
+  font-size: 1.1rem;
+}
+.viewer-status {
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  font-weight: 600;
+}
+.viewer-status.open {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+.viewer-status.ok {
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  color: var(--ok);
+}
+.viewer-checks {
+  list-style: none;
+  margin: 0.75rem 0;
+  padding: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+.viewer-checks li {
+  display: grid;
+  grid-template-columns: 1.5rem 1fr;
+  gap: 0.4rem;
+}
+.viewer-checks .result {
+  font-size: 1.2rem;
+  line-height: 1.2;
+  text-align: center;
+}
+.viewer-checks p {
+  margin: 0.15rem 0 0;
+  color: var(--muted);
+}
+.viewer-close {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  width: 2.2rem;
+  height: 2.2rem;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1.3rem;
+  line-height: 1;
+}
+@media (max-width: 900px) {
+  .viewer-body.with-checks {
+    grid-template-columns: 1fr;
+  }
+  .viewer figure img {
+    max-height: 60dvh;
+  }
+  .viewer section {
+    max-height: none;
+    padding-right: 0;
+  }
 }

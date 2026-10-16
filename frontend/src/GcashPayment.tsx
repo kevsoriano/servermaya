@@ -2,19 +2,8 @@ import { useState } from 'react'
 import { fromChat, load, localMobile, peso } from './firebase'
 import type { Order } from './OrderView'
 import { Photo } from './Packing'
+import { LABEL, RESULT, shown, type Check, type Claim } from './receiptChecks'
 
-type Check = { check: string; result: 'pass' | 'fail' | 'unreadable'; detail: string }
-type Receipt = {
-  readable: boolean
-  outcome: 'successful' | 'failed' | 'pending' | 'not_shown'
-  amount_php: number | null
-  reference: string | null
-  paid_at: string | null
-  recipient_name: string | null
-  recipient_mobile: string | null
-  recipient_account?: string | null
-}
-type Claim = { id: string; message_id: string; received_at: string; reference: string | null; receipt: Receipt; checks: Check[] }
 export type ManualPayment = {
   status: 'requested' | 'claimed' | 'seller_confirmed'
   version: number
@@ -30,23 +19,10 @@ export type ManualPayment = {
   confirmed: { reference: string; invno?: string | null; claim_id: string | null; history_image?: object | null; by: string; at: string; reason: string | null } | null
 }
 
-const RESULT = { pass: 'Pass', fail: 'Does not fit', unreadable: 'Could not read' }
-
 const HISTORY = {
   found: 'Found in your GCash history',
   amount_differs: 'In your GCash history with a different amount',
   not_found: 'Not in your GCash history, although the export covers it',
-}
-
-const LABEL: Record<string, string> = {
-  receipt: 'Receipt',
-  outcome: 'Payment went through',
-  amount: 'Amount',
-  time: 'Date and time',
-  reference: 'Reference number',
-  recipient_name: 'Recipient name',
-  recipient_mobile: 'Recipient number or account',
-  duplicate: 'Not a copy',
 }
 
 /** The guardrails, with the values this request expects, so the seller can check any screenshot by eye, including bank-app receipts. */
@@ -94,19 +70,6 @@ function Guardrails({ m }: { m: ManualPayment }) {
       </p>
     </details>
   )
-}
-
-/** What the screenshot shows for each check, as Gemini copied it down. */
-function shown(r: Receipt, check: string) {
-  const value = {
-    outcome: r.outcome === 'not_shown' ? null : r.outcome,
-    amount: r.amount_php === null ? null : peso(Math.round(r.amount_php * 100)),
-    time: r.paid_at?.replace('T', ' '),
-    reference: r.reference,
-    recipient_name: r.recipient_name,
-    recipient_mobile: r.recipient_mobile ?? r.recipient_account,
-  }[check]
-  return value === undefined ? '' : (value ?? 'nothing readable')
 }
 
 /** Direct GCash, for customers who will not use the PayMongo link. Screenshots are claims; only the seller's own GCash history confirms. */

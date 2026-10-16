@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { load, peso, STATUS } from './firebase'
 import OrderView, { type Order } from './OrderView'
 import Reply from './Reply'
+import ScreenshotView from './ScreenshotView'
 import Signals from './Signals'
 
 type Conversation = {
@@ -20,12 +21,13 @@ type Message = { id: string; text: string; from_page: boolean; from_name: string
 type Attachment = { kind: 'image' | 'video' | 'audio' | 'file'; name: string | null; url: string; preview_url: string | null }
 
 // Links come from Meta and expire, so an old thread may show broken media until it is reloaded.
-function Media({ a }: { a: Attachment }) {
+// Images open in the viewer, which shows a GCash screenshot's checks next to it.
+function Media({ a, onOpen }: { a: Attachment; onOpen: () => void }) {
   if (a.kind === 'image')
     return (
-      <a href={a.url} target="_blank" rel="noreferrer">
+      <button type="button" className="media-open" onClick={onOpen} aria-label={`Enlarge ${a.name ?? 'image'}`}>
         <img src={a.preview_url ?? a.url} alt={a.name ?? 'Image from the conversation'} loading="lazy" />
-      </a>
+      </button>
     )
   if (a.kind === 'video') return <video src={a.url} poster={a.preview_url ?? undefined} controls preload="metadata" />
   if (a.kind === 'audio') return <audio src={a.url} controls preload="metadata" />
@@ -146,6 +148,7 @@ export default function Conversations() {
   const [error, setError] = useState('')
   const [order, setOrder] = useState<Order>()
   const [orders, setOrders] = useState<Order[]>() // this chat's orders, newest first
+  const [viewing, setViewing] = useState<{ a: Attachment; m: Message }>()
   const [drafting, setDrafting] = useState(false)
   const [reply, setReply] = useState('')
   const [asCustomer, setAsCustomer] = useState('')
@@ -193,6 +196,7 @@ export default function Conversations() {
     setMessages(undefined)
     setOrder(undefined)
     setOrders(undefined)
+    setViewing(undefined)
     setReply('')
     setAsCustomer('')
     setError('')
@@ -309,7 +313,7 @@ export default function Conversations() {
                 </small>
                 {m.text && <p>{m.text}</p>}
                 {m.attachments.map((a, n) => (
-                  <Media key={n} a={a} />
+                  <Media key={n} a={a} onOpen={() => setViewing({ a, m })} />
                 ))}
               </li>
             ))}
@@ -374,6 +378,17 @@ export default function Conversations() {
           {order && <OrderView order={order} onChange={orderChanged} />}
           {messages.length > 0 && <Signals conversationId={openId} messages={messages} latest={messages.at(-1)?.id} />}
         </aside>
+      )}
+      {viewing && (
+        <ScreenshotView
+          url={viewing.a.url}
+          alt={viewing.a.name ?? 'Image from the conversation'}
+          messageId={viewing.m.id}
+          fromCustomer={!viewing.m.from_page}
+          orders={orders ?? []}
+          onOrderChanged={orderChanged}
+          onClose={() => setViewing(undefined)}
+        />
       )}
     </div>
   )

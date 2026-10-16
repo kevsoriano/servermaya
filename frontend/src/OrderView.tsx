@@ -40,6 +40,7 @@ export type Order = {
   } | null
   payment_review?: { payment_id: string; paid_amount: number; reason: string }[]
   manual_payment?: ManualPayment | null
+  manual_payment_history?: ManualPayment[]
   packing: PackingState | null
   packing_blocked: string | null
   dispatch_blocked: string | null
