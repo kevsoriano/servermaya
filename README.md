@@ -40,7 +40,7 @@ A small Philippine online seller keeps the order in a Messenger thread, the paym
 
 - **Gemini transcribes and cites; code decides.** Every pass/fail result, gate and money decision is made in Python. Nothing runs because the AI recommended it.
 - **Only the seller sets a price.** An extracted price is kept only if a seller message actually states that number. Otherwise it is left blank for the seller to type.
-- **Chat text is data, not instructions.** Customer, courier and model-written text is flattened to one line before it goes into a prompt, so it can't pose as a seller message or a payment record. Prompt injection has a unit test and a live Gemini eval (fake seller lines, a `</chat>` breakout, "ignore instructions", a fake payment record, a Tagalog instruction).
+- **Chat text is data, not instructions.** Customer, courier and model-written text is flattened to one line before it goes into a prompt, so it can't pose as a seller message or a payment record. Prompt injection has a unit test and live Gemini eval cases (fake seller lines, a `</chat>` breakout, "ignore instructions", a fake payment record, a Tagalog instruction, and a fake record in a claim).
 - **Records are appended.** Replaced shipments, re-packing and refunds keep their history.
 
 ## How it uses Google Cloud
@@ -76,7 +76,7 @@ backend/    FastAPI on Cloud Run
   demo.py         demo chats, including the returning customer's earlier order
   samples.py      sample GCash receipts, history screenshot and history PDF for demo chats
   test_main.py    tests
-  eval_injection.py  live prompt-injection eval
+  eval.py         live evaluation: conversations, injection, returning customers, claim reviews, packing
 frontend/   React + Vite on Firebase Hosting
 docs/       product requirements and implementation plan
 ```
@@ -89,7 +89,7 @@ Needs Python 3.13 with [uv](https://docs.astral.sh/uv/), Node, and Google applic
 make setup   # install dependencies, create backend/.env from .env.example
 make dev     # backend on :8000, frontend on :5173
 make test    # backend tests, frontend lint and build
-make eval-injection   # live Gemini prompt-injection cases
+make eval    # live Gemini evaluation, writes docs/eval-results.md
 ```
 
 Fill in `backend/.env` with your own keys. It is ignored by git.

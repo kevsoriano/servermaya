@@ -10,13 +10,13 @@ comma := ,
 empty :=
 space := $(empty) $(empty)
 
-.PHONY: help setup dev dev-backend dev-frontend test eval-injection deploy deploy-backend deploy-frontend secrets
+.PHONY: help setup dev dev-backend dev-frontend test eval deploy deploy-backend deploy-frontend secrets
 
 help:
 	@echo "make setup            install dependencies, create backend/.env"
 	@echo "make dev              run backend (:8000) and frontend (:5173)"
 	@echo "make test             backend tests, frontend lint and build"
-	@echo "make eval-injection   live Gemini check that chat text cannot change the extracted order"
+	@echo "make eval             live Gemini evaluation; writes docs/eval-results.md"
 	@echo "make deploy           deploy backend to Cloud Run, then frontend to Firebase Hosting"
 	@echo "make deploy-backend   backend only"
 	@echo "make deploy-frontend  frontend only"
@@ -43,8 +43,8 @@ test:
 	cd backend && uv run pytest -q
 	cd frontend && npm run lint && npm run build
 
-eval-injection:
-	cd backend && uv run python eval_injection.py
+eval:
+	cd backend && uv run python eval.py
 
 deploy: deploy-backend deploy-frontend
 
