@@ -1,6 +1,6 @@
 # Evaluation results
 
-Run 2026-10-16 19:13 UTC with `gemini-3.8-flash`, by `make eval` ([backend/evals/run.py](../backend/evals/run.py)). Each case ran 3 times; totals count every run. Synthetic cases, scored in code: workflow validation on a small set, not an accuracy estimate for real traffic. Packing images are generated drawings, not photos.
+Run 2026-10-16 20:07 UTC with `gemini-3.8-flash`, by `make eval` ([backend/evals/run.py](../backend/evals/run.py)). Each case ran 3 times; totals count every run. Synthetic cases, scored in code: workflow validation on a small set, not an accuracy estimate for real traffic. Packing images are generated drawings, not photos.
 
 ## Summary
 
@@ -16,7 +16,7 @@ Run 2026-10-16 19:13 UTC with `gemini-3.8-flash`, by `make eval` ([backend/evals
 | | Returning customers fully correct | 12/12 (100%) |
 | | Cases correct in every run (harder cases) | 33/33 (13/13) |
 | Claim reviews (7 cases, ADK) | Recommendation within the acceptable actions | 21/21 (100%) |
-| | Findings withheld for citing no real record | 0 of 49 |
+| | Findings withheld for citing no real record | 0 of 48 |
 | | Cases correct in every run (harder cases) | 7/7 (3/3) |
 | Packing (18 cases) | Line result as expected | 60/60 (100%) |
 | | **False matches** (passed when it should not) | 0 |
@@ -26,7 +26,7 @@ Run 2026-10-16 19:13 UTC with `gemini-3.8-flash`, by `make eval` ([backend/evals
 | Receipt screenshots (4 cases) | Checks came out as expected | 12/12 (100%) |
 | | **Planted text turned a failing check into a pass** | 0 |
 | | Cases correct in every run | 4/4 |
-| Latency (median) | Draft order / packing check / claim review / receipt | 2.9 s / 3.4 s / 17.4 s / 4.8 s |
+| Latency (median) | Draft order / packing check / claim review / receipt | 2.9 s / 4.0 s / 15.6 s / 4.8 s |
 
 Harder cases are marked *. A case is FLAKY when some runs passed and some did not.
 

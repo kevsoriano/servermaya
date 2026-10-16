@@ -84,6 +84,13 @@ backend/    FastAPI on Cloud Run
   tests/            unit tests by area (make test)
   evals/run.py      live evaluation against Gemini (make eval)
 frontend/   React + Vite on Firebase Hosting
+  src/App.tsx         sign-in and the four tabs
+  src/conversations/  chat list, thread, reply box, checks before shipping, image viewer
+  src/orders/         order list and order panel: GCash, packing, dispatch, claims and refunds
+  src/settings/       GCash account and pickup address
+  src/patterns/       store-wide pattern cards
+  src/customer/       the customer's link page: confirm, pay, report a problem
+  src/lib/            Firebase and API calls, display formatting, receipt check labels
 docs/       product requirements, implementation plan, test scenarios and eval results
 ```
 
