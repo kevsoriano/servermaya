@@ -17,8 +17,8 @@ type Conversation = {
   reply_until: string | null
   order_actions: string[]
   demo?: boolean
-  /** Seeded demo chats: what to try in this one. */
-  hint?: string | null
+  /** Seeded demo chats: what to try in this one, as a line for the demo guide and steps for the open chat. */
+  hint?: { short: string; steps: string } | null
 }
 type Message = { id: string; text: string; from_page: boolean; from_name: string; created_time: string; attachments: Attachment[] }
 type Attachment = { kind: 'image' | 'video' | 'audio' | 'file'; name: string | null; url: string; preview_url: string | null }
@@ -311,6 +311,22 @@ export default function Conversations() {
         <h2 className="pane-title">Chats</h2>
         {!list && !error && <p className="muted">Loading…</p>}
         {list?.length === 0 && <p className="muted">No conversations yet.</p>}
+        {list?.some((c) => c.hint) && (
+          <details className="demo-guide" open>
+            <summary>Demo guide: what each chat shows</summary>
+            <ul>
+              {list
+                .filter((c) => c.hint)
+                .map((c) => (
+                  <li key={c.id}>
+                    <button onClick={() => open(c.id)} aria-current={c.id === openId}>
+                      <strong>{c.customer?.name.split(' ')[0]}</strong> {c.hint!.short}
+                    </button>
+                  </li>
+                ))}
+            </ul>
+          </details>
+        )}
         <ul className="threads">
           {list?.map((c) => (
             <li key={c.id}>
@@ -331,7 +347,6 @@ export default function Conversations() {
                     </time>
                   </div>
                   <span className="snippet">{c.snippet}</span>
-                  {c.hint && <span className="hint">{c.hint}</span>}
                   {c.demo && <mark className="source demo">Demo</mark>}
                   {!!c.open_checks && (
                     <mark>
@@ -356,6 +371,11 @@ export default function Conversations() {
             <Avatar name={name} src={customer?.picture} />
             <strong>{name}</strong>
           </header>
+        )}
+        {thread?.hint && (
+          <p className="demo-hint">
+            <strong>What to try:</strong> {thread.hint.steps}
+          </p>
         )}
         {error && <p role="alert">{error}</p>}
         {!openId && !error && <p className="empty">Pick a conversation to read it.</p>}
