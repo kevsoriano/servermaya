@@ -1096,6 +1096,9 @@ def test_demo_visitors_only_reach_their_own_demo_chats_and_orders(monkeypatch):
     monkeypatch.setattr(main, "loaded", lambda oid: (None, found[oid]))
     assert client.get("/api/orders/o_theirs/patterns", headers=h).status_code == 404
     assert client.get("/api/orders/o_real/patterns", headers=h).status_code == 404
+    monkeypatch.setattr(main, "present", lambda snap: snap.to_dict())
+    assert client.get("/api/orders/o_mine", headers=h).status_code == 200
+    assert client.get("/api/orders/o_real", headers=h).status_code == 404
     assert client.post("/api/orders/o_real/refunds", headers=h, json={}).status_code == 404
     assert client.put("/api/settings/gcash", headers=h, json={"name": "X", "mobile": "09171234567"}).status_code == 403
     assert client.put("/api/settings/dispatch", headers=h, json={}).status_code == 403

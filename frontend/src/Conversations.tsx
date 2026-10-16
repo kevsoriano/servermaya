@@ -151,13 +151,17 @@ export default function Conversations() {
     load<Conversation[]>('/conversations').then(setList, (e) => setError(e.message))
   }, [])
 
+  // Only Messenger changes on its own; demo chats change only when this page writes to them, and it reloads after each write.
+  const hasMessenger = !!list?.some((c) => !c.demo)
+
   // ponytail: polls Meta every few seconds while the tab is visible; switch to the Messenger webhook if it hits rate limits
   useEffect(() => {
+    if (!hasMessenger) return
     let live = true // a reply for the previous thread must not land in the next one
     const tick = () => {
       if (document.visibilityState !== 'visible') return
       load<Conversation[]>('/conversations').then((l) => live && setList((old) => (same(old, l, (c) => c.id + c.updated_time) ? old : l)), () => {})
-      if (openId)
+      if (openId && !openId.startsWith('demo_'))
         load<Message[]>(`/conversations/${openId}`).then(
           // Keep the old array when nothing new arrived, so playing audio or video is not reloaded with fresh Meta links.
           (m) => live && setMessages((old) => (old && same(old, m, (x) => x.id) ? old : m)),
@@ -169,7 +173,7 @@ export default function Conversations() {
       live = false
       clearInterval(timer)
     }
-  }, [openId])
+  }, [openId, hasMessenger])
 
   // Mark the open thread read when it loads and again whenever the customer sends something new while it is open.
   const lastFromCustomer = messages?.findLast((m) => !m.from_page)?.id
@@ -191,7 +195,26 @@ export default function Conversations() {
     load<Message[]>(`/conversations/${id}`).then(setMessages, (e) => setError(e.message))
   }
 
-  const reloadMessages = () => load<Message[]>(`/conversations/${openId}`).then(setMessages, (e) => setError(e.message))
+  // Demo chats are not polled, so refresh the list after anything that changes its snippet or order badges.
+  const refreshDemoList = () => openId?.startsWith('demo_') && load<Conversation[]>('/conversations').then(setList, () => {})
+
+  // The customer page usually runs in another tab, so coming back here is when a demo chat's badges may have changed.
+  useEffect(() => {
+    if (!openId?.startsWith('demo_')) return
+    const onFocus = () => load<Conversation[]>('/conversations').then(setList, () => {})
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [openId])
+
+  const reloadMessages = () => {
+    load<Message[]>(`/conversations/${openId}`).then(setMessages, (e) => setError(e.message))
+    refreshDemoList()
+  }
+
+  const orderChanged = (o: Order) => {
+    setOrder(o)
+    refreshDemoList()
+  }
 
   // After a new demo chat, open it; after a reset, close the open demo chat, which no longer exists.
   const demoChanged = (id?: string) => {
@@ -210,7 +233,7 @@ export default function Conversations() {
     setDrafting(true)
     setError('')
     load<Order>(`/conversations/${openId}/draft-order`, { method: 'POST' })
-      .then(setOrder, (e) => setError(e.message))
+      .then(orderChanged, (e) => setError(e.message))
       .finally(() => setDrafting(false))
   }
 
@@ -307,7 +330,7 @@ export default function Conversations() {
               </button>
             </div>
           )}
-          {order && <OrderView order={order} onChange={setOrder} />}
+          {order && <OrderView order={order} onChange={orderChanged} />}
           {messages.length > 0 && <Signals conversationId={openId} messages={messages} latest={messages.at(-1)?.id} />}
         </aside>
       )}

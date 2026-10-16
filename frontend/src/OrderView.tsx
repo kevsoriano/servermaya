@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { fromChat, load, peso, STATUS } from './firebase'
 import Reply from './Reply'
 import Signals from './Signals'
@@ -90,6 +90,14 @@ export default function OrderView({ order, onChange }: { order: Order; onChange:
   const [error, setError] = useState('')
   const [copied, setCopied] = useState<'link' | 'details'>()
   const [message, setMessage] = useState('')
+
+  // The customer confirms and pays on their own page, usually in another tab, so reload the order on coming back.
+  useEffect(() => {
+    const onFocus = () => load<Order>(`/orders/${order.id}`).then(onChange, () => {})
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [order.id, onChange])
+
   const { draft, messages } = order
   const confirmation = order.status === 'confirmed' ? order.confirmations.at(-1) : undefined
   const earlier = order.confirmations.filter((c) => c !== confirmation)

@@ -677,6 +677,14 @@ def list_orders(user: dict = Depends(current_user)):
     return [present(d) for d in mine[:25]]
 
 
+@app.get("/api/orders/{order_id}")
+def get_order(order_id: str, user: dict = Depends(current_user)):
+    snap = orders().document(order_id).get()
+    if not snap.exists:
+        raise HTTPException(404, "Order not found")
+    return present(snap)
+
+
 def retiring(ref, rule, by: str = "") -> dict:
     """Like change(), and if the rule dropped an unpaid payment request, expire it at PayMongo too."""
     before = (ref.get().to_dict() or {}).get("payment")
