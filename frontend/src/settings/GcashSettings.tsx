@@ -39,17 +39,24 @@ function SampleHistory() {
   const download = () =>
     api('/demo/sample-statement')
       .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(`Backend returned ${r.status}`))))
-      .then((blob) => {
-        const a = document.createElement('a')
-        a.href = URL.createObjectURL(blob)
-        a.download = 'sample-gcash-history.pdf'
-        a.click()
-        URL.revokeObjectURL(a.href)
-      }, (e) => setError(e.message))
+      .then(
+        (blob) => {
+          const a = document.createElement('a')
+          a.href = URL.createObjectURL(blob)
+          a.download = 'sample-gcash-history.pdf'
+          a.click()
+          URL.revokeObjectURL(a.href)
+        },
+        (e) => setError(e.message),
+      )
   return (
     <p className="demo-banner" role="note">
-      Demo: <button type="button" onClick={download}>Download a sample history PDF</button> (password <code>delacruz4567</code>). It lists every
-      matching sample receipt you sent, so their GCash payments get confirmed when you upload it.
+      Demo:{' '}
+      <button type="button" onClick={download}>
+        Download a sample history PDF
+      </button>{' '}
+      (password <code>delacruz4567</code>). It lists every matching sample receipt you sent, so their GCash payments get confirmed when you
+      upload it.
       {error && <span role="alert"> {error}</span>}
     </p>
   )
@@ -69,8 +76,15 @@ function HistoryUpload({ demo }: { demo?: boolean }) {
     setBusy(true)
     setError('')
     setResult(undefined)
-    load<Applied>('/gcash/statements', { method: 'POST', headers: { 'Content-Type': 'application/pdf', 'X-Pdf-Password': password }, body: file })
-      .then((r) => (setResult(r), setPassword('')), (e) => setError(e.message))
+    load<Applied>('/gcash/statements', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/pdf', 'X-Pdf-Password': password },
+      body: file,
+    })
+      .then(
+        (r) => (setResult(r), setPassword('')),
+        (e) => setError(e.message),
+      )
       .finally(() => setBusy(false))
   }
   const list = (ids?: string[]) => (ids?.length ? ids.join(', ') : 'none')
@@ -79,8 +93,9 @@ function HistoryUpload({ demo }: { demo?: boolean }) {
     <section className="order">
       <h2>Check payments against your GCash history</h2>
       <p>
-        In GCash, open Transactions → Request transaction history, and upload the PDF that GCash emails you. Waiting GCash payments that a checked screenshot points
-        to are confirmed, and payments you already confirmed are checked. Only money received is kept; the PDF and its password are not.
+        In GCash, open Transactions → Request transaction history, and upload the PDF that GCash emails you. Waiting GCash payments that a
+        checked screenshot points to are confirmed, and payments you already confirmed are checked. Only money received is kept; the PDF and
+        its password are not.
       </p>
       {demo && <SampleHistory />}
       <form onSubmit={upload}>
@@ -90,7 +105,13 @@ function HistoryUpload({ demo }: { demo?: boolean }) {
         </label>
         <label>
           PDF password: your last name and the last 4 digits of your mobile number
-          <input type="password" autoComplete="off" placeholder="delacruz1234" value={password} onChange={(e) => setPassword(e.target.value)} />
+          <input
+            type="password"
+            autoComplete="off"
+            placeholder="delacruz1234"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
         </label>
         <button disabled={busy || !file}>{busy ? 'Checking…' : 'Upload and check'}</button>
       </form>
@@ -98,8 +119,8 @@ function HistoryUpload({ demo }: { demo?: boolean }) {
         <dl>
           <dt>Export covers</dt>
           <dd>
-            {new Date(result.start).toLocaleDateString()} to {result.last_at ? new Date(result.last_at).toLocaleString() : 'no transactions'} ({result.received}{' '}
-            received)
+            {new Date(result.start).toLocaleDateString()} to{' '}
+            {result.last_at ? new Date(result.last_at).toLocaleString() : 'no transactions'} ({result.received} received)
           </dd>
           <dt>Confirmed now</dt>
           <dd>{list(result.confirmed)}</dd>
@@ -156,7 +177,11 @@ export default function GcashSettings() {
     e.preventDefault()
     setBusy(true)
     setError('')
-    load<Saved>('/settings/gcash', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, mobile, qr }) })
+    load<Saved>('/settings/gcash', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, mobile, qr }),
+    })
       .then(show, (e) => setError(e.message))
       .finally(() => setBusy(false))
   }
@@ -168,8 +193,8 @@ export default function GcashSettings() {
       <section className="order">
         <h2>GCash account</h2>
         <p>
-          Used when a customer pays by GCash directly. The name and number on their receipt must fit these. Enter the name exactly as registered in GCash, including any
-          middle name.
+          Used when a customer pays by GCash directly. The name and number on their receipt must fit these. Enter the name exactly as
+          registered in GCash, including any middle name.
         </p>
         <form onSubmit={save}>
           <label>
@@ -178,7 +203,14 @@ export default function GcashSettings() {
           </label>
           <label>
             GCash mobile number
-            <input required inputMode="tel" maxLength={30} placeholder="0917 123 4567" value={mobile} onChange={(e) => setMobile(e.target.value)} />
+            <input
+              required
+              inputMode="tel"
+              maxLength={30}
+              placeholder="0917 123 4567"
+              value={mobile}
+              onChange={(e) => setMobile(e.target.value)}
+            />
           </label>
           <label>
             GCash QR (optional): a screenshot from GCash → Receive → Receive via QR
@@ -198,7 +230,8 @@ export default function GcashSettings() {
         {saved?.updated_at && (
           <p>
             <small>
-              Last saved by {saved.updated_by} on {new Date(saved.updated_at).toLocaleString()}. Changing it does not affect requests already sent.
+              Last saved by {saved.updated_by} on {new Date(saved.updated_at).toLocaleString()}. Changing it does not affect requests
+              already sent.
             </small>
           </p>
         )}

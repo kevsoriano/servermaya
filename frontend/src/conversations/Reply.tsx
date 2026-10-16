@@ -34,7 +34,10 @@ export default function Reply({ conversationId, text, setText, orderId, until, o
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ kind }),
     })
-      .then(() => (setStatus('Sent.'), onSent?.()), (e) => setStatus(e.message))
+      .then(
+        () => (setStatus('Sent.'), onSent?.()),
+        (e) => setStatus(e.message),
+      )
       .finally(() => setBusy(false))
   }
   const [openedAt] = useState(() => Date.now())
@@ -77,36 +80,56 @@ export default function Reply({ conversationId, text, setText, orderId, until, o
       .finally(() => setBusy(false))
 
   return (
-    <form className={asCustomer ? "reply as-customer" : "reply"} onSubmit={submit}>
+    <form className={asCustomer ? 'reply as-customer' : 'reply'} onSubmit={submit}>
       <textarea
         aria-label={asCustomer ? 'Message from the customer' : demo ? 'Message to the customer' : 'Message to the customer on Messenger'}
-        placeholder={asCustomer ? 'Write as the customer…' : demo ? 'Reply as the seller…' : closed ? 'Reply window closed' : 'Reply in Messenger…'}
+        placeholder={
+          asCustomer ? 'Write as the customer…' : demo ? 'Reply as the seller…' : closed ? 'Reply window closed' : 'Reply in Messenger…'
+        }
         value={text}
         onChange={(e) => setText(e.target.value)}
         maxLength={2000}
         rows={2}
         disabled={closed}
       />
-      {asCustomer && (gcashWaiting ? (
-        <p className="samples">
-          <small>Sample GCash receipt:</small>
-          <button type="button" disabled={busy} onClick={() => sample('matching')}>Matching</button>
-          <button type="button" disabled={busy} onClick={() => sample('wrong_amount')}>Wrong amount</button>
-          <button type="button" disabled={busy} onClick={() => sample('wrong_recipient')}>Wrong recipient</button>
-        </p>
-      ) : (
-        <p className="samples">
-          <small>
-            Sample GCash receipts unlock once the seller asks for GCash: create the draft order, create the confirmation link, confirm it as the
-            customer, then press Ask for GCash payment or They say they already paid.
-          </small>
-        </p>
-      ))}
+      {asCustomer &&
+        (gcashWaiting ? (
+          <p className="samples">
+            <small>Sample GCash receipt:</small>
+            <button type="button" disabled={busy} onClick={() => sample('matching')}>
+              Matching
+            </button>
+            <button type="button" disabled={busy} onClick={() => sample('wrong_amount')}>
+              Wrong amount
+            </button>
+            <button type="button" disabled={busy} onClick={() => sample('wrong_recipient')}>
+              Wrong recipient
+            </button>
+          </p>
+        ) : (
+          <p className="samples">
+            <small>
+              Sample GCash receipts unlock once the seller asks for GCash: create the draft order, create the confirmation link, confirm it
+              as the customer, then press Ask for GCash payment or They say they already paid.
+            </small>
+          </p>
+        ))}
       <div className="reply-foot">
         <small>
-          {demo ? (asCustomer ? 'You play the customer.' : 'Not sent to Messenger.') : closed
-            ? <>Messenger only allows replies within 24 hours of the customer's last message{until && <> (closed {until.toLocaleString()})</>}.</>
-            : until && <>You can reply until {until.toLocaleString()}.</>}
+          {demo ? (
+            asCustomer ? (
+              'You play the customer.'
+            ) : (
+              'Not sent to Messenger.'
+            )
+          ) : closed ? (
+            <>
+              Messenger only allows replies within 24 hours of the customer's last message{until && <> (closed {until.toLocaleString()})</>}
+              .
+            </>
+          ) : (
+            until && <>You can reply until {until.toLocaleString()}.</>
+          )}
         </small>
         {status && <span role="status">{status}</span>}
         {image ? (
@@ -118,14 +141,33 @@ export default function Reply({ conversationId, text, setText, orderId, until, o
           </span>
         ) : (
           <label className="attach" title="Attach image">
-            <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg
+              aria-hidden="true"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
               <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
             </svg>
             <span className="sr-only">Attach image</span>
-            <input key={picker} type="file" accept={demo ? DEMO_IMAGE_TYPES : IMAGE_TYPES} disabled={closed} hidden onChange={(e) => setImage(e.target.files?.[0])} />
+            <input
+              key={picker}
+              type="file"
+              accept={demo ? DEMO_IMAGE_TYPES : IMAGE_TYPES}
+              disabled={closed}
+              hidden
+              onChange={(e) => setImage(e.target.files?.[0])}
+            />
           </label>
         )}
-        <button className="primary" disabled={busy || closed || (!text.trim() && !image)}>{busy ? 'Sending…' : 'Send'}</button>
+        <button className="primary" disabled={busy || closed || (!text.trim() && !image)}>
+          {busy ? 'Sending…' : 'Send'}
+        </button>
       </div>
     </form>
   )

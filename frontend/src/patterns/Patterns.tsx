@@ -48,7 +48,10 @@ export function PatternCard({ card, compact, onReviewed }: { card: Card; compact
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key: card.key, incidents_hash: card.incidents_hash, status, reason }),
-    }).then((r) => (onReviewed?.(r), setReason('')), (e) => setError(e.message))
+    }).then(
+      (r) => (onReviewed?.(r), setReason('')),
+      (e) => setError(e.message),
+    )
   }
 
   return (
@@ -82,12 +85,7 @@ export function PatternCard({ card, compact, onReviewed }: { card: Card; compact
           </small>
         </p>
       )}
-      <p>
-        Linked:{' '}
-        {card.incidents
-          .map((i) => `order ${i.order_id}${i.type ? ` (${TYPES[i.type] ?? i.type})` : ''}`)
-          .join(', ')}
-      </p>
+      <p>Linked: {card.incidents.map((i) => `order ${i.order_id}${i.type ? ` (${TYPES[i.type] ?? i.type})` : ''}`).join(', ')}</p>
       {!compact && (
         <>
           <p>Next: {card.suggested_review}</p>
@@ -111,8 +109,8 @@ export function PatternCard({ card, compact, onReviewed }: { card: Card; compact
           {card.previous_review && (
             <p>
               <small>
-                An earlier review ({REVIEW[card.previous_review.was ?? ''] ?? card.previous_review.was}: {card.previous_review.reason}) was superseded because the linked cases
-                changed.
+                An earlier review ({REVIEW[card.previous_review.was ?? ''] ?? card.previous_review.was}: {card.previous_review.reason}) was
+                superseded because the linked cases changed.
               </small>
             </p>
           )}
@@ -165,7 +163,10 @@ export default function Patterns() {
   const setCards = (c: Card[] | undefined) => c && setResult({ days, cards: c })
 
   useEffect(() => {
-    load<Card[]>(`/patterns?days=${days}`).then((c) => setResult({ days, cards: c }), (e) => setError(e.message))
+    load<Card[]>(`/patterns?days=${days}`).then(
+      (c) => setResult({ days, cards: c }),
+      (e) => setError(e.message),
+    )
   }, [days])
 
   const shown = (cards ?? []).filter((c) => (!rule || c.rule === rule) && (!state || c.review.status === state))
@@ -174,8 +175,8 @@ export default function Patterns() {
       <section className="order">
         <h2>Patterns</h2>
         <p>
-          Counts and rates from your own orders, for you to look into. They do not show intent, label anyone, or block a refund or shipment. Small numbers are marked as too
-          little history.
+          Counts and rates from your own orders, for you to look into. They do not show intent, label anyone, or block a refund or shipment.
+          Small numbers are marked as too little history.
         </p>
         <p className="actions">
           <label>

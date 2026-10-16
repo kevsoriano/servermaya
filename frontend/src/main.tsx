@@ -7,8 +7,4 @@ import Confirm from './customer/Confirm.tsx'
 // Customer confirmation links are /c/<token>. Everything else is the seller app.
 const token = location.pathname.match(/^\/c\/([\w-]+)$/)?.[1]
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    {token ? <Confirm token={token} /> : <App />}
-  </StrictMode>,
-)
+createRoot(document.getElementById('root')!).render(<StrictMode>{token ? <Confirm token={token} /> : <App />}</StrictMode>)

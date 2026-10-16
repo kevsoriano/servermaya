@@ -34,8 +34,7 @@ export default function App() {
     [],
   )
 
-  const signIn = () =>
-    signInWithPopup(auth, new GoogleAuthProvider()).catch((e) => setError(e.message))
+  const signIn = () => signInWithPopup(auth, new GoogleAuthProvider()).catch((e) => setError(e.message))
   const tryDemo = () => signInAnonymously(auth).catch((e) => setError(e.message))
   // A demo visitor who signs out cannot come back to the same demo, so say so first.
   const leave = () => (!me?.demo || confirm('Signing out ends this demo. Your demo chats and orders will not come back.')) && signOut(auth)
@@ -52,11 +51,12 @@ export default function App() {
         ) : (
           <>
             <p>
-              Try it with demo chats: you play both the seller and the customer. Nothing reaches real customers, Messenger, or real
-              money.
+              Try it with demo chats: you play both the seller and the customer. Nothing reaches real customers, Messenger, or real money.
             </p>
             <p className="actions">
-              <button className="primary" onClick={tryDemo}>Try the demo</button>
+              <button className="primary" onClick={tryDemo}>
+                Try the demo
+              </button>
               <button onClick={signIn}>Seller sign-in with Google</button>
             </p>
           </>

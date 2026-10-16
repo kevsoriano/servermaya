@@ -99,7 +99,10 @@ function AfterPayment({ token, order, setOrder }: { token: string; order: Summar
         <form
           onSubmit={(e) => {
             e.preventDefault()
-            post('Sending…', '/claims', { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, narrative }) }).then(() => setReporting(false))
+            post('Sending…', '/claims', {
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ type, narrative }),
+            }).then(() => setReporting(false))
           }}
         >
           <label>
@@ -209,8 +212,9 @@ export default function Confirm({ token }: { token: string }) {
           </p>
           {order.test_mode && (
             <p className="claim" role="note">
-              <mark>TEST</mark> <strong>This is a test. Do not scan the QR code</strong>: in test mode it is a real QR, and paying it with a real app sends
-              real money. On the payment page, press <strong>Simulate Payment</strong>, then <strong>Authorize Test Payment</strong>.
+              <mark>TEST</mark> <strong>This is a test. Do not scan the QR code</strong>: in test mode it is a real QR, and paying it with a
+              real app sends real money. On the payment page, press <strong>Simulate Payment</strong>, then{' '}
+              <strong>Authorize Test Payment</strong>.
             </p>
           )}
           <p className="actions">

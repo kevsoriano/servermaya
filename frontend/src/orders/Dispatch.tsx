@@ -3,7 +3,14 @@ import { load } from '../lib/firebase'
 import { peso } from '../lib/format'
 import type { Order } from './OrderView'
 
-type Event = { id: string; source: 'provider' | 'seller_reported' | 'customer_reported' | 'demo'; raw_status: string; status: string; at: string; note?: string | null }
+type Event = {
+  id: string
+  source: 'provider' | 'seller_reported' | 'customer_reported' | 'demo'
+  raw_status: string
+  status: string
+  at: string
+  note?: string | null
+}
 export type Fulfillment = {
   id: string
   courier: 'lalamove' | 'simulator' | 'other'
@@ -100,7 +107,11 @@ export default function Dispatch({ order, onChange }: { order: Order; onChange: 
           {f?.quotation && (
             <p>
               Lalamove {f.quotation.service.toLowerCase()}: <strong>{peso(f.quotation.price)}</strong>, paid by you.{' '}
-              {expired ? <em>The quote has expired; get a new one.</em> : <>Valid until {new Date(f.quotation.expires_at).toLocaleTimeString()}.</>}
+              {expired ? (
+                <em>The quote has expired; get a new one.</em>
+              ) : (
+                <>Valid until {new Date(f.quotation.expires_at).toLocaleTimeString()}.</>
+              )}
               {f.problem && (
                 <>
                   <br />
@@ -166,8 +177,8 @@ export default function Dispatch({ order, onChange }: { order: Order; onChange: 
           <ol className="timeline">
             {f.events.map((e) => (
               <li key={e.id}>
-                {STATUS[e.status] ?? e.status} <small>({e.raw_status})</small> · <mark className={`source ${e.source}`}>{SOURCE[e.source]}</mark>{' '}
-                <small>{new Date(e.at).toLocaleString()}</small>
+                {STATUS[e.status] ?? e.status} <small>({e.raw_status})</small> ·{' '}
+                <mark className={`source ${e.source}`}>{SOURCE[e.source]}</mark> <small>{new Date(e.at).toLocaleString()}</small>
                 {e.note && <small> · {e.note}</small>}
               </li>
             ))}

@@ -32,7 +32,10 @@ export function Photo({ path, alt, caption }: { path: string; alt: string; capti
     let url: string | undefined
     api(path)
       .then((r) => (r.ok ? r.blob() : Promise.reject()))
-      .then((b) => setSrc((url = URL.createObjectURL(b))), () => {})
+      .then(
+        (b) => setSrc((url = URL.createObjectURL(b))),
+        () => {},
+      )
     return () => {
       if (url) URL.revokeObjectURL(url)
     }
@@ -52,7 +55,8 @@ export default function Packing({ order, onChange }: { order: Order; onChange: (
   const [inspecting, setInspecting] = useState<number>()
   const [reason, setReason] = useState('')
 
-  if (!packing) return order.status === 'confirmed' && order.packing_blocked ? <p className="packing">Packing: {order.packing_blocked}.</p> : null
+  if (!packing)
+    return order.status === 'confirmed' && order.packing_blocked ? <p className="packing">Packing: {order.packing_blocked}.</p> : null
 
   const run = (label: string, path: string, init: RequestInit = { method: 'POST' }) => {
     setBusy(label)
@@ -84,29 +88,47 @@ export default function Packing({ order, onChange }: { order: Order; onChange: (
   return (
     <section className="packing">
       <h3>Packing{done && ' · packed'}</h3>
-      {order.manual_payment?.status === 'seller_confirmed' && order.manual_payment.version === order.version && order.payment?.status !== 'verified' && (
-        <p>
-          <small>Paid by direct GCash, confirmed by {order.manual_payment.confirmed?.by} in their GCash history. Not verified by PayMongo.</small>
-        </p>
-      )}
+      {order.manual_payment?.status === 'seller_confirmed' &&
+        order.manual_payment.version === order.version &&
+        order.payment?.status !== 'verified' && (
+          <p>
+            <small>
+              Paid by direct GCash, confirmed by {order.manual_payment.confirmed?.by} in their GCash history. Not verified by PayMongo.
+            </small>
+          </p>
+        )}
       {done && (
         <p role="status">
           Marked packed by {packing.completed!.by} on {new Date(packing.completed!.at).toLocaleString()}.
         </p>
       )}
-      {!done && <p>Lay all items out so they can be counted, then take one overview photo. Add close-ups for anything the check cannot see.</p>}
+      {!done && (
+        <p>Lay all items out so they can be counted, then take one overview photo. Add close-ups for anything the check cannot see.</p>
+      )}
 
       {packing.photos.length > 0 && (
         <div className="photos">
           {packing.photos.map((p, n) => (
-            <Photo key={p.id} path={`/orders/${order.id}/packing/photos/${p.id}`} alt={`Packing photo ${n + 1}`} caption={`Photo ${n + 1}`} />
+            <Photo
+              key={p.id}
+              path={`/orders/${order.id}/packing/photos/${p.id}`}
+              alt={`Packing photo ${n + 1}`}
+              caption={`Photo ${n + 1}`}
+            />
           ))}
         </div>
       )}
       {!done && (
         <label className="upload">
           Add packing photos
-          <input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" capture="environment" multiple disabled={!!busy} onChange={(e) => upload(e.target.files).then(() => (e.target.value = ''))} />
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+            capture="environment"
+            multiple
+            disabled={!!busy}
+            onChange={(e) => upload(e.target.files).then(() => (e.target.value = ''))}
+          />
         </label>
       )}
 
@@ -128,7 +150,9 @@ export default function Packing({ order, onChange }: { order: Order; onChange: (
               <td>
                 {r.observed ? (
                   <>
-                    {r.observed.counts.length ? r.observed.counts.map((c) => `${c.quantity} ${c.variant ?? 'unknown variant'}`).join(', ') : 'Could not count'}
+                    {r.observed.counts.length
+                      ? r.observed.counts.map((c) => `${c.quantity} ${c.variant ?? 'unknown variant'}`).join(', ')
+                      : 'Could not count'}
                     {r.observed.damage && <strong> · Damage: {r.observed.damage}</strong>}
                     <br />
                     <small>
@@ -191,7 +215,10 @@ export default function Packing({ order, onChange }: { order: Order; onChange: (
       {busy && <p role="status">{busy}</p>}
       {!done && (
         <p className="actions">
-          <button disabled={!!busy || packing.photos.length === 0} onClick={() => run('Checking photos… this takes about 15 seconds', '/check')}>
+          <button
+            disabled={!!busy || packing.photos.length === 0}
+            onClick={() => run('Checking photos… this takes about 15 seconds', '/check')}
+          >
             {packing.checked_at ? 'Check photos again' : 'Check photos'}
           </button>
           <button disabled={!!busy || !ready} onClick={() => run('Saving…', '/complete')}>
@@ -201,7 +228,8 @@ export default function Packing({ order, onChange }: { order: Order; onChange: (
       )}
       <p>
         <small>
-          The check only reports what is visible. It cannot see inside wrapping or prove what stays in the parcel after sealing. You decide when it is packed.
+          The check only reports what is visible. It cannot see inside wrapping or prove what stays in the parcel after sealing. You decide
+          when it is packed.
         </small>
       </p>
     </section>

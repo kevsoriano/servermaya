@@ -181,8 +181,8 @@ export default function Signals({ conversationId, messages, latest }: Props) {
       )}
       <p>
         <small>
-          AI reading of what was said, to help you decide what to verify. "Not seen" means the AI did not spot it, not that it was
-          checked. Never a judgement of the customer, and it never blocks an order.
+          AI reading of what was said, to help you decide what to verify. "Not seen" means the AI did not spot it, not that it was checked.
+          Never a judgement of the customer, and it never blocks an order.
         </small>
       </p>
     </section>

@@ -26,7 +26,10 @@ export default function DispatchSettings() {
       .then(show, (e) => setError(e.message))
       .finally(() => setBusy(false))
   }
-  const field = (k: keyof typeof form) => ({ value: form[k], onChange: (e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [k]: e.target.value }) })
+  const field = (k: keyof typeof form) => ({
+    value: form[k],
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [k]: e.target.value }),
+  })
 
   return (
     <section className="order">

@@ -17,7 +17,15 @@ export type ManualPayment = {
   claims: Claim[]
   history_check?: { status: 'found' | 'amount_differs' | 'not_found'; checked_at: string } | null
   history_read?: { reference: string | null; entry: { invno: string | null }; checks: Check[] } | null
-  confirmed: { reference: string; invno?: string | null; claim_id: string | null; history_image?: object | null; by: string; at: string; reason: string | null } | null
+  confirmed: {
+    reference: string
+    invno?: string | null
+    claim_id: string | null
+    history_image?: object | null
+    by: string
+    at: string
+    reason: string | null
+  } | null
 }
 
 const HISTORY = {
@@ -41,8 +49,9 @@ function Guardrails({ m }: { m: ManualPayment }) {
         <dd>From {from} (Philippine time) until the screenshot was sent</dd>
         <dt>{LABEL.reference}</dt>
         <dd>
-          13 digits from GCash, or 6 digits from a bank app such as BPI, and not used on another order. Find the payment in your own GCash history: for a
-          bank payment, GCash shows its own reference, and the invno starts with the transfer date and ends in the bank&apos;s 6 digits.
+          13 digits from GCash, or 6 digits from a bank app such as BPI, and not used on another order. Find the payment in your own GCash
+          history: for a bank payment, GCash shows its own reference, and the invno starts with the transfer date and ends in the
+          bank&apos;s 6 digits.
         </dd>
         <dt>{LABEL.recipient_name}</dt>
         <dd>
@@ -74,7 +83,15 @@ function Guardrails({ m }: { m: ManualPayment }) {
 }
 
 /** Direct GCash, for customers who will not use the PayMongo link. Screenshots are claims; only the seller's own GCash history confirms. */
-export default function GcashPayment({ order, onChange, write }: { order: Order; onChange: (o: Order) => void; write: (text: string) => void }) {
+export default function GcashPayment({
+  order,
+  onChange,
+  write,
+}: {
+  order: Order
+  onChange: (o: Order) => void
+  write: (text: string) => void
+}) {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [reference, setReference] = useState('')
@@ -104,13 +121,17 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
   const ask = () =>
     run('Saving…', '/request').then((o) => {
       const p = o?.manual_payment
-      if (p) write(`You can also pay ${peso(p.amount)} by GCash to ${p.pay_to.name}, ${localMobile(p.pay_to.mobile)}. Please send a screenshot of the receipt here after paying.`)
+      if (p)
+        write(
+          `You can also pay ${peso(p.amount)} by GCash to ${p.pay_to.name}, ${localMobile(p.pay_to.mobile)}. Please send a screenshot of the receipt here after paying.`,
+        )
     })
 
   // The customer says they already paid: nothing to ask for, only proof to match against the seller's own GCash history.
   const saysPaid = () =>
     run('Saving…', '/request', { says_paid: true }).then((o) => {
-      if (o?.manual_payment) write('Thank you! Please send a screenshot of your GCash receipt here so we can match it with our GCash history.')
+      if (o?.manual_payment)
+        write('Thank you! Please send a screenshot of your GCash receipt here so we can match it with our GCash history.')
     })
 
   // The seller's screenshot of the payment in their own GCash history fills in the form; the seller still confirms.
@@ -128,12 +149,17 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
 
   const tail = invno.replace(/\W/g, '').toUpperCase()
   // Mirrors receipts.confirm: the invno starts with the transfer date (or the next day) and ends in the bank's 6 digits.
-  const days = (at: string) => [0, 1].map((d) => new Date(Date.parse(`${at.slice(0, 10)}T00:00Z`) + d * 864e5).toISOString().slice(0, 10).replace(/-/g, ''))
+  const days = (at: string) =>
+    [0, 1].map((d) => new Date(Date.parse(`${at.slice(0, 10)}T00:00Z`) + d * 864e5).toISOString().slice(0, 10).replace(/-/g, ''))
   const matching = current?.claims.findLast(
     (c) =>
       c.reference &&
       (c.reference === reference.replace(/\s/g, '') ||
-        (tail && c.reference.length === 6 && tail.endsWith(c.reference) && !!c.receipt.paid_at && days(c.receipt.paid_at).includes(tail.slice(0, 8)))),
+        (tail &&
+          c.reference.length === 6 &&
+          tail.endsWith(c.reference) &&
+          !!c.receipt.paid_at &&
+          days(c.receipt.paid_at).includes(tail.slice(0, 8)))),
   )
   const fromBank = current?.claims.some((c) => c.reference?.length === 6)
   const history = current?.history_read?.reference === reference.replace(/\s/g, '') ? current.history_read : null
@@ -169,14 +195,14 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
         <>
           {current.kind === 'says_paid' && current.counts_from ? (
             <p>
-              The customer says they already paid {peso(current.amount)} to {current.pay_to.name} ({localMobile(current.pay_to.mobile)}). What they say is not proof: only a
-              payment you find in your own GCash history confirms it. Receipts dated before {new Date(current.counts_from).toLocaleString()}, when the conversation about this
-              order began, do not count.
+              The customer says they already paid {peso(current.amount)} to {current.pay_to.name} ({localMobile(current.pay_to.mobile)}).
+              What they say is not proof: only a payment you find in your own GCash history confirms it. Receipts dated before{' '}
+              {new Date(current.counts_from).toLocaleString()}, when the conversation about this order began, do not count.
             </p>
           ) : (
             <p>
-              Asked for {peso(current.amount)} to {current.pay_to.name} ({localMobile(current.pay_to.mobile)}) on {new Date(current.requested_at).toLocaleString()}. Receipts dated
-              before then do not count.
+              Asked for {peso(current.amount)} to {current.pay_to.name} ({localMobile(current.pay_to.mobile)}) on{' '}
+              {new Date(current.requested_at).toLocaleString()}. Receipts dated before then do not count.
             </p>
           )}
           <Guardrails m={current} />
@@ -186,7 +212,11 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
                 <strong>Screenshot sent {new Date(c.received_at).toLocaleString()}</strong>
                 {c.reference && <> (reference {c.reference})</>}
               </p>
-              <Photo path={`/orders/${order.id}/gcash/claims/${c.id}/image`} alt="Receipt screenshot from the customer" caption="Compare the screenshot with each row" />
+              <Photo
+                path={`/orders/${order.id}/gcash/claims/${c.id}/image`}
+                alt="Receipt screenshot from the customer"
+                caption="Compare the screenshot with each row"
+              />
               <table>
                 <thead>
                   <tr>
@@ -213,12 +243,15 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
           ))}
           {current.status === 'seller_confirmed' && current.confirmed ? (
             <p>
-              <strong>Seller confirmed in GCash</strong> by {current.confirmed.by} on {new Date(current.confirmed.at).toLocaleString()}: reference {current.confirmed.reference}
+              <strong>Seller confirmed in GCash</strong> by {current.confirmed.by} on {new Date(current.confirmed.at).toLocaleString()}:
+              reference {current.confirmed.reference}
               {current.confirmed.reason && <> ({current.confirmed.reason})</>}. Not verified by PayMongo.
               {current.history_check && (
                 <>
                   <br />
-                  <span className={`result ${current.history_check.status === 'found' ? 'pass' : 'fail'}`}>{HISTORY[current.history_check.status]}</span>{' '}
+                  <span className={`result ${current.history_check.status === 'found' ? 'pass' : 'fail'}`}>
+                    {HISTORY[current.history_check.status]}
+                  </span>{' '}
                   <small>(GCash history uploaded {new Date(current.history_check.checked_at).toLocaleString()})</small>
                 </>
               )}
@@ -237,11 +270,19 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
                 }}
               >
                 <p>
-                  <small>Passing checks do not prove payment; a good fake passes them all. Open your GCash app and find the payment in your transaction history.</small>
+                  <small>
+                    Passing checks do not prove payment; a good fake passes them all. Open your GCash app and find the payment in your
+                    transaction history.
+                  </small>
                 </p>
                 <label>
                   Faster: upload a screenshot of this payment in your GCash history
-                  <input type="file" accept="image/*" disabled={!!busy} onChange={(e) => (readHistory(e.target.files?.[0]), (e.target.value = ''))} />
+                  <input
+                    type="file"
+                    accept="image/*"
+                    disabled={!!busy}
+                    onChange={(e) => (readHistory(e.target.files?.[0]), (e.target.value = ''))}
+                  />
                 </label>
                 {demo && (
                   <p className="demo-note">
@@ -285,8 +326,8 @@ export default function GcashPayment({ order, onChange, write }: { order: Order;
                   </label>
                 )}
                 <label>
-                  <input type="checkbox" checked={found} onChange={(e) => setFound(e.target.checked)} /> I found this payment of {peso(current.amount)} in my own GCash
-                  history
+                  <input type="checkbox" checked={found} onChange={(e) => setFound(e.target.checked)} /> I found this payment of{' '}
+                  {peso(current.amount)} in my own GCash history
                 </label>
                 <button disabled={!!busy || !found || !reference.trim() || (doubtful && !reason.trim())}>Confirm GCash payment</button>
               </form>

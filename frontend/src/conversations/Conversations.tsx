@@ -67,16 +67,27 @@ function DemoTools({ onDone }: { onDone: (id?: string) => void }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: name.trim() || 'Demo customer', chat }),
     })
-      .then(({ id }) => (setOpen(false), setName(''), setChat(''), onDone(id)), (e) => setError(e.message))
+      .then(
+        ({ id }) => (setOpen(false), setName(''), setChat(''), onDone(id)),
+        (e) => setError(e.message),
+      )
       .finally(() => setBusy(false))
   }
 
   const reset = () => {
-    if (!confirm('Delete your demo chats and every order made from them, then load the starting demo chats again? Messenger chats and their orders are not touched.')) return
+    if (
+      !confirm(
+        'Delete your demo chats and every order made from them, then load the starting demo chats again? Messenger chats and their orders are not touched.',
+      )
+    )
+      return
     setBusy(true)
     setError('')
     load('/demo/reset', { method: 'POST' })
-      .then(() => onDone(), (e) => setError(e.message))
+      .then(
+        () => onDone(),
+        (e) => setError(e.message),
+      )
       .finally(() => setBusy(false))
   }
 
@@ -102,14 +113,22 @@ function DemoTools({ onDone }: { onDone: (id?: string) => void }) {
             />
           </label>
           <p className="actions">
-            <button className="primary" disabled={busy}>Create</button>
-            <button type="button" onClick={() => setOpen(false)}>Cancel</button>
+            <button className="primary" disabled={busy}>
+              Create
+            </button>
+            <button type="button" onClick={() => setOpen(false)}>
+              Cancel
+            </button>
           </p>
         </form>
       ) : (
         <p className="actions">
-          <button onClick={() => setOpen(true)} disabled={busy}>New demo chat</button>
-          <button onClick={reset} disabled={busy}>{busy ? 'Resetting…' : 'Reset demo chats'}</button>
+          <button onClick={() => setOpen(true)} disabled={busy}>
+            New demo chat
+          </button>
+          <button onClick={reset} disabled={busy}>
+            {busy ? 'Resetting…' : 'Reset demo chats'}
+          </button>
         </p>
       )}
       {error && <p role="alert">{error}</p>}
@@ -120,14 +139,25 @@ function DemoTools({ onDone }: { onDone: (id?: string) => void }) {
 export function Avatar({ name, src }: { name: string; src?: string | null }) {
   const [broken, setBroken] = useState(false) // Meta's photo links expire; fall back to initials
   if (src && !broken) return <img className="avatar" src={src} alt="" onError={() => setBroken(true)} />
-  const initials = name.split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase()
-  return <span className="avatar" aria-hidden="true">{initials || '?'}</span>
+  const initials = name
+    .split(/\s+/)
+    .map((w) => w[0])
+    .slice(0, 2)
+    .join('')
+    .toUpperCase()
+  return (
+    <span className="avatar" aria-hidden="true">
+      {initials || '?'}
+    </span>
+  )
 }
 
 /** Time today, date otherwise, like an inbox list. */
 const when = (iso: string) => {
   const d = new Date(iso)
-  return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : d.toLocaleDateString()
+  return d.toDateString() === new Date().toDateString()
+    ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    : d.toLocaleDateString()
 }
 
 /** What the seller still has to do on a thread. The open-checks badge is shown separately. */
@@ -167,7 +197,10 @@ export default function Conversations() {
     let live = true // a reply for the previous thread must not land in the next one
     const tick = () => {
       if (document.visibilityState !== 'visible') return
-      load<Conversation[]>('/conversations').then((l) => live && setList((old) => (same(old, l, (c) => c.id + c.updated_time) ? old : l)), () => {})
+      load<Conversation[]>('/conversations').then(
+        (l) => live && setList((old) => (same(old, l, (c) => c.id + c.updated_time) ? old : l)),
+        () => {},
+      )
       if (openId && !openId.startsWith('demo_'))
         load<Message[]>(`/conversations/${openId}`).then(
           // Keep the old array when nothing new arrived, so playing audio or video is not reloaded with fresh Meta links.
@@ -203,7 +236,10 @@ export default function Conversations() {
     setError('')
     load<Message[]>(`/conversations/${id}`).then(setMessages, (e) => setError(e.message))
     // Open the order still in progress; otherwise the newest, so a returning customer's history is one click away.
-    load<Order[]>(`/conversations/${id}/orders`).then((l) => (setOrders(l), setOrder(l.find((o) => !done(o)) ?? l[0])), (e) => setError(e.message))
+    load<Order[]>(`/conversations/${id}/orders`).then(
+      (l) => (setOrders(l), setOrder(l.find((o) => !done(o)) ?? l[0])),
+      (e) => setError(e.message),
+    )
   }
 
   // Demo chats are not polled, so refresh the list after anything that changes its snippet or order badges.
@@ -235,14 +271,23 @@ export default function Conversations() {
       setMessages(undefined)
       setOrder(undefined)
     }
-    load<Conversation[]>('/conversations').then((l) => {
-      setList(l)
-      if (id) open(id)
-    }, (e) => setError(e.message))
+    load<Conversation[]>('/conversations').then(
+      (l) => {
+        setList(l)
+        if (id) open(id)
+      },
+      (e) => setError(e.message),
+    )
   }
 
   const createDraft = () => {
-    if (openOrder && !confirm('Is this a separate order? It is drafted from the messages after the last order. If the customer is changing the open order, edit that order instead.')) return
+    if (
+      openOrder &&
+      !confirm(
+        'Is this a separate order? It is drafted from the messages after the last order. If the customer is changing the open order, edit that order instead.',
+      )
+    )
+      return
     setDrafting(true)
     setError('')
     load<Order>(`/conversations/${openId}/draft-order`, { method: 'POST' })
@@ -267,7 +312,11 @@ export default function Conversations() {
         <ul className="threads">
           {list?.map((c) => (
             <li key={c.id}>
-              <button onClick={() => open(c.id)} aria-current={c.id === openId} className={c.unread && c.id !== openId ? 'unread' : undefined}>
+              <button
+                onClick={() => open(c.id)}
+                aria-current={c.id === openId}
+                className={c.unread && c.id !== openId ? 'unread' : undefined}
+              >
                 <Avatar name={c.customer?.name ?? ''} src={c.customer?.picture} />
                 <div>
                   <div className="thread-head">
@@ -281,7 +330,11 @@ export default function Conversations() {
                   </div>
                   <span className="snippet">{c.snippet}</span>
                   {c.demo && <mark className="source demo">Demo</mark>}
-                  {!!c.open_checks && <mark>{c.open_checks} {c.open_checks === 1 ? 'check' : 'checks'} before shipping</mark>}
+                  {!!c.open_checks && (
+                    <mark>
+                      {c.open_checks} {c.open_checks === 1 ? 'check' : 'checks'} before shipping
+                    </mark>
+                  )}
                   {pending(c).map((p) => (
                     <mark key={p} className="pending">
                       {p}
@@ -334,15 +387,8 @@ export default function Conversations() {
           </div>
         )}
         {openId && messages && !thread?.demo && (
-          <Reply
-            conversationId={openId}
-            text={reply}
-            setText={setReply}
-            until={replyUntil(messages)}
-            onSent={reloadMessages}
-          />
+          <Reply conversationId={openId} text={reply} setText={setReply} until={replyUntil(messages)} onSent={reloadMessages} />
         )}
-
       </section>
       {openId && messages && (
         <aside className="pane side">
@@ -356,8 +402,15 @@ export default function Conversations() {
               <ul className="chat-orders">
                 {orders.map((o) => (
                   <li key={o.id}>
-                    <button type="button" className={o.id === order?.id ? 'selected' : undefined} onClick={() => setOrder(o)} aria-pressed={o.id === order?.id}>
-                      <span>{o.draft.items.map((i) => `${i.quantity}× ${i.name}${i.variant ? ` (${i.variant})` : ''}`).join(', ') || 'No items'}</span>
+                    <button
+                      type="button"
+                      className={o.id === order?.id ? 'selected' : undefined}
+                      onClick={() => setOrder(o)}
+                      aria-pressed={o.id === order?.id}
+                    >
+                      <span>
+                        {o.draft.items.map((i) => `${i.quantity}× ${i.name}${i.variant ? ` (${i.variant})` : ''}`).join(', ') || 'No items'}
+                      </span>
                       <small>
                         {new Date(o.created_at).toLocaleDateString()} · {o.draft.total === null ? 'no total' : peso(o.draft.total)} ·{' '}
                         {o.receipt?.status === 'customer_confirmed' ? 'Received' : STATUS[o.status]}

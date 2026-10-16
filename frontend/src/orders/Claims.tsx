@@ -5,7 +5,13 @@ import type { Order } from './OrderView'
 import { Photo } from './Packing'
 import { PatternCard, type Card } from '../patterns/Patterns'
 
-type Finding = { statement: string; status: 'supported' | 'conflicting' | 'unverified' | 'insufficient_data'; evidence: string[]; uncertainty: string; withheld?: boolean }
+type Finding = {
+  statement: string
+  status: 'supported' | 'conflicting' | 'unverified' | 'insufficient_data'
+  evidence: string[]
+  uncertainty: string
+  withheld?: boolean
+}
 type Action = 'clarification' | 'refund' | 'partial_refund' | 'replacement' | 'redelivery' | 'escalation'
 export type Claim = {
   id: string
@@ -26,7 +32,15 @@ export type Claim = {
     at: string
   } | null
   review_stale?: boolean
-  decision: { action: Action; amount: number | null; reason: string; reply: string | null; by: string; at: string; followed_ai: boolean } | null
+  decision: {
+    action: Action
+    amount: number | null
+    reason: string
+    reply: string | null
+    by: string
+    at: string
+    followed_ai: boolean
+  } | null
   resolution: { how: string; note: string | null; by: string; at: string } | null
   escalation: { owner: string; next_action: string } | null
 }
@@ -70,15 +84,18 @@ function Review({ c, onDecide }: { c: Claim; onDecide: (a: Action, amount: numbe
     <div className="review">
       <p>
         <small>
-          AI review by {r.model}, {new Date(r.at).toLocaleString()}. Every statement cites the records below it; check them before you decide.
+          AI review by {r.model}, {new Date(r.at).toLocaleString()}. Every statement cites the records below it; check them before you
+          decide.
           {c.review_stale && <strong> New evidence arrived since: review again.</strong>}
         </small>
       </p>
       <ul className="findings">
         {r.findings.map((f, n) => (
           <li key={n} className={`finding ${f.status}`}>
-            <span className={`result ${f.status === 'supported' ? 'pass' : f.status === 'conflicting' ? 'fail' : 'unreadable'}`}>{FINDING[f.status]}</span>:{' '}
-            {f.statement}
+            <span className={`result ${f.status === 'supported' ? 'pass' : f.status === 'conflicting' ? 'fail' : 'unreadable'}`}>
+              {FINDING[f.status]}
+            </span>
+            : {f.statement}
             {f.evidence.length > 0 && (
               <>
                 {' '}
@@ -95,7 +112,8 @@ function Review({ c, onDecide }: { c: Claim; onDecide: (a: Action, amount: numbe
       </ul>
       <p>
         Suggested: <strong>{ACTIONS[r.recommendation.action]}</strong>
-        {r.recommendation.amount_php != null && <> of {peso(Math.round(r.recommendation.amount_php * 100))}</>}. {r.recommendation.explanation}{' '}
+        {r.recommendation.amount_php != null && <> of {peso(Math.round(r.recommendation.amount_php * 100))}</>}.{' '}
+        {r.recommendation.explanation}{' '}
         {r.recommendation.evidence.map((e) => (
           <abbr key={e} title={r.sources?.[e]}>
             [{e}]
@@ -113,7 +131,15 @@ function Review({ c, onDecide }: { c: Claim; onDecide: (a: Action, amount: numbe
         </details>
       )}
       {!c.decision && (
-        <button onClick={() => onDecide(r.recommendation.action, r.recommendation.amount_php != null ? Math.round(r.recommendation.amount_php * 100) : null, r.draft_reply)}>
+        <button
+          onClick={() =>
+            onDecide(
+              r.recommendation.action,
+              r.recommendation.amount_php != null ? Math.round(r.recommendation.amount_php * 100) : null,
+              r.draft_reply,
+            )
+          }
+        >
           Use as a starting point
         </button>
       )}
@@ -134,7 +160,8 @@ function RefundPanel({ order, c, run }: { order: Order; c: Claim; run: (label: s
   return (
     <div>
       <p>
-        Approved refund {peso(decided)}. Still to refund: <strong>{peso(Math.max(left, 0))}</strong>. The payment can still refund {peso(order.refundable)}.
+        Approved refund {peso(decided)}. Still to refund: <strong>{peso(Math.max(left, 0))}</strong>. The payment can still refund{' '}
+        {peso(order.refundable)}.
       </p>
       {mine.length > 0 && (
         <ul>
@@ -188,7 +215,11 @@ function RefundPanel({ order, c, run }: { order: Order; c: Claim; run: (label: s
               )}
               <label>
                 Transfer reference{method === 'paymongo_dashboard' && viaPayMongo ? ' (optional)' : ''}
-                <input value={reference} onChange={(e) => setReference(e.target.value)} required={method === 'outside_paymongo' || !viaPayMongo} />
+                <input
+                  value={reference}
+                  onChange={(e) => setReference(e.target.value)}
+                  required={method === 'outside_paymongo' || !viaPayMongo}
+                />
               </label>
               <button>Record refund of {peso(left)}</button>
               <p>
@@ -232,21 +263,31 @@ function ClaimCard({ order, c, onChange, write }: { order: Order; c: Claim; onCh
   return (
     <div className={`claim ${open ? '' : 'done'}`}>
       <p>
-        <strong>{TYPES[c.type]}</strong> · {c.status.replace(/_/g, ' ')} · from {c.source === 'customer_link' ? 'the customer (order link)' : c.created_by},{' '}
-        {new Date(c.created_at).toLocaleString()}
+        <strong>{TYPES[c.type]}</strong> · {c.status.replace(/_/g, ' ')} · from{' '}
+        {c.source === 'customer_link' ? 'the customer (order link)' : c.created_by}, {new Date(c.created_at).toLocaleString()}
       </p>
       <blockquote>{c.narrative}</blockquote>
       {c.photos.length > 0 && (
         <div className="photos">
           {c.photos.map((p, n) => (
-            <Photo key={p.id} path={`/orders/${order.id}/claims/${c.id}/photos/${p.id}`} alt={`Claim photo ${n + 1}`} caption={`CP${n + 1} · ${p.source}`} />
+            <Photo
+              key={p.id}
+              path={`/orders/${order.id}/claims/${c.id}/photos/${p.id}`}
+              alt={`Claim photo ${n + 1}`}
+              caption={`CP${n + 1} · ${p.source}`}
+            />
           ))}
         </div>
       )}
       {open && c.photos.length < 4 && (
         <label className="upload">
           Add a photo to this report
-          <input type="file" accept="image/*" disabled={!!busy} onChange={(e) => e.target.files?.[0] && run('Uploading…', '/photos', e.target.files[0])} />
+          <input
+            type="file"
+            accept="image/*"
+            disabled={!!busy}
+            onChange={(e) => e.target.files?.[0] && run('Uploading…', '/photos', e.target.files[0])}
+          />
         </label>
       )}
 
@@ -270,7 +311,9 @@ function ClaimCard({ order, c, onChange, write }: { order: Order; c: Claim; onCh
           onSubmit={(e) => {
             e.preventDefault()
             const amount = deciding.action === 'partial_refund' ? Math.round(parseFloat(deciding.amount) * 100) : null
-            run('Saving…', '/decide', { action: deciding.action, amount, reason: deciding.reason, reply: deciding.reply }).then(() => setDeciding(undefined))
+            run('Saving…', '/decide', { action: deciding.action, amount, reason: deciding.reason, reply: deciding.reply }).then(() =>
+              setDeciding(undefined),
+            )
           }}
         >
           <label>
@@ -286,7 +329,12 @@ function ClaimCard({ order, c, onChange, write }: { order: Order; c: Claim; onCh
           {deciding.action === 'partial_refund' && (
             <label>
               Amount in pesos
-              <input required inputMode="decimal" value={deciding.amount} onChange={(e) => setDeciding({ ...deciding, amount: e.target.value })} />
+              <input
+                required
+                inputMode="decimal"
+                value={deciding.amount}
+                onChange={(e) => setDeciding({ ...deciding, amount: e.target.value })}
+              />
             </label>
           )}
           <label>
@@ -323,7 +371,9 @@ function ClaimCard({ order, c, onChange, write }: { order: Order; c: Claim; onCh
           Start the {act === 'replacement' ? 'replacement (pack and ship again)' : 'redelivery'}
         </button>
       )}
-      {order.replacement?.claim_id === c.id && <p>In progress: pack and dispatch it in the panels above. The original shipment stays on record.</p>}
+      {order.replacement?.claim_id === c.id && (
+        <p>In progress: pack and dispatch it in the panels above. The original shipment stays on record.</p>
+      )}
 
       {c.escalation && (
         <p>
@@ -338,7 +388,8 @@ function ClaimCard({ order, c, onChange, write }: { order: Order; c: Claim; onCh
           }}
         >
           <label>
-            Close the report once the outcome has happened{['clarification', 'escalation'].includes(act!) ? ': how it was resolved' : ' (note optional)'}
+            Close the report once the outcome has happened
+            {['clarification', 'escalation'].includes(act!) ? ': how it was resolved' : ' (note optional)'}
             <input value={note} onChange={(e) => setNote(e.target.value)} />
           </label>
           <button disabled={!!busy}>Close report</button>
@@ -394,8 +445,14 @@ export default function Claims({ order, onChange, write }: { order: Order; onCha
   const add = (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
-    load<Order>(`/orders/${order.id}/claims`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, narrative }) })
-      .then((o) => (onChange(o), setAdding(false), setNarrative('')), (e) => setError(e.message))
+    load<Order>(`/orders/${order.id}/claims`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, narrative }),
+    }).then(
+      (o) => (onChange(o), setAdding(false), setNarrative('')),
+      (e) => setError(e.message),
+    )
   }
 
   return (

@@ -110,7 +110,10 @@ export default function OrderView({ order, onChange, checks = true }: { order: O
   const paymentClaim = draft.claims.find((c) => c.kind === 'payment')
 
   const details = [
-    ...draft.items.map((i) => `${i.quantity} × ${i.name}${i.variant ? ` (${i.variant})` : ''} - ${peso(i.unit_price === null ? null : i.unit_price * i.quantity)}`),
+    ...draft.items.map(
+      (i) =>
+        `${i.quantity} × ${i.name}${i.variant ? ` (${i.variant})` : ''} - ${peso(i.unit_price === null ? null : i.unit_price * i.quantity)}`,
+    ),
     `Total: ${draft.total === null ? 'to be confirmed' : peso(draft.total)}`,
     '',
     `Deliver to: ${[draft.recipient_name.value, draft.phone.value, draft.address.value].filter(Boolean).join(', ')}`,
@@ -166,9 +169,11 @@ export default function OrderView({ order, onChange, checks = true }: { order: O
     )
 
   // Read the actual words behind each value: a citation only proves the message exists, not that it says what the draft claims.
-  const citedIds = new Set(
-    [...draft.items.flatMap((i) => i.sources), ...FIELDS.flatMap(([key]) => draft[key].sources), ...draft.claims.flatMap((c) => c.sources)],
-  )
+  const citedIds = new Set([
+    ...draft.items.flatMap((i) => i.sources),
+    ...FIELDS.flatMap(([key]) => draft[key].sources),
+    ...draft.claims.flatMap((c) => c.sources),
+  ])
   const cited = messages.map((m, k) => ({ n: k + 1, m })).filter(({ m }) => citedIds.has(m.id))
 
   const cancel = () => {
@@ -193,19 +198,27 @@ export default function OrderView({ order, onChange, checks = true }: { order: O
         </p>
       )}
       {confirmation?.kind === 'customer' && (
-        <p role="status">Customer confirmed version {confirmation.version} through the link on {new Date(confirmation.at).toLocaleString()}.</p>
+        <p role="status">
+          Customer confirmed version {confirmation.version} through the link on {new Date(confirmation.at).toLocaleString()}.
+        </p>
       )}
       {confirmation?.kind === 'seller_asserted' && (
         <p role="status" className="claim">
-          <strong>Not confirmed by the customer.</strong> {confirmation.by} recorded that the customer agreed to version {confirmation.version} on{' '}
-          {new Date(confirmation.at).toLocaleString()}.
+          <strong>Not confirmed by the customer.</strong> {confirmation.by} recorded that the customer agreed to version{' '}
+          {confirmation.version} on {new Date(confirmation.at).toLocaleString()}.
         </p>
       )}
       {earlier.length > 0 && (
         <p>
           <small>
-            Earlier agreements: {earlier.map((c) => `version ${c.version} (${c.kind === 'customer' ? 'customer' : 'seller-reported'}, ${new Date(c.at).toLocaleDateString()})`).join('; ')}.
-            {order.status !== 'confirmed' && ' The order changed since, so it needs confirming again.'}
+            Earlier agreements:{' '}
+            {earlier
+              .map(
+                (c) =>
+                  `version ${c.version} (${c.kind === 'customer' ? 'customer' : 'seller-reported'}, ${new Date(c.at).toLocaleDateString()})`,
+              )
+              .join('; ')}
+            .{order.status !== 'confirmed' && ' The order changed since, so it needs confirming again.'}
           </small>
         </p>
       )}
@@ -222,17 +235,29 @@ export default function OrderView({ order, onChange, checks = true }: { order: O
                 Variant <input value={i.variant} onChange={(e) => setItem(n, { variant: e.target.value })} />
               </label>
               <label>
-                Quantity <input required type="number" min="1" step="1" value={i.quantity} onChange={(e) => setItem(n, { quantity: e.target.value })} />
+                Quantity{' '}
+                <input
+                  required
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={i.quantity}
+                  onChange={(e) => setItem(n, { quantity: e.target.value })}
+                />
               </label>
               <label>
-                Unit price (₱) <input type="number" min="0" step="0.01" value={i.price} onChange={(e) => setItem(n, { price: e.target.value })} />
+                Unit price (₱){' '}
+                <input type="number" min="0" step="0.01" value={i.price} onChange={(e) => setItem(n, { price: e.target.value })} />
               </label>
               <button type="button" onClick={() => setForm({ ...form, items: form.items.filter((_, k) => k !== n) })}>
                 Remove item
               </button>
             </fieldset>
           ))}
-          <button type="button" onClick={() => setForm({ ...form, items: [...form.items, { name: '', variant: '', quantity: '1', price: '' }] })}>
+          <button
+            type="button"
+            onClick={() => setForm({ ...form, items: [...form.items, { name: '', variant: '', quantity: '1', price: '' }] })}
+          >
             Add item
           </button>
           {FIELDS.map(([key, label]) => (
@@ -323,14 +348,15 @@ export default function OrderView({ order, onChange, checks = true }: { order: O
       )}
 
       {checks && fromChat(order) && <Signals conversationId={order.source.conversation_id} messages={messages} />}
-      {!fromChat(order) && draft.claims.map((c, n) => (
-        <p key={n} className="claim">
-          <strong>Unverified {c.kind} claim.</strong> {c.text}
-          {src(c.sources)}
-          {c.reference && <> Reference: {c.reference}.</>}
-          {c.pressure && <> The customer is asking you to act before this is verified.</>}
-        </p>
-      ))}
+      {!fromChat(order) &&
+        draft.claims.map((c, n) => (
+          <p key={n} className="claim">
+            <strong>Unverified {c.kind} claim.</strong> {c.text}
+            {src(c.sources)}
+            {c.reference && <> Reference: {c.reference}.</>}
+            {c.pressure && <> The customer is asking you to act before this is verified.</>}
+          </p>
+        ))}
       {draft.clarification_questions.length > 0 && (
         <>
           <h3>Ask the customer</h3>
@@ -356,17 +382,21 @@ export default function OrderView({ order, onChange, checks = true }: { order: O
               {payment?.status === 'verified' && (
                 <p>
                   <strong>Verified by PayMongo:</strong> {peso(payment.paid_amount ?? null)} received ({payment.payment_id}).
-                  {payment.version !== order.version && <> This was for version {payment.version}; the order has changed since and needs review.</>}
+                  {payment.version !== order.version && (
+                    <> This was for version {payment.version}; the order has changed since and needs review.</>
+                  )}
                 </p>
               )}
               {payment?.status === 'mismatched' && (
                 <p>
-                  <strong>Needs review:</strong> {payment.problem}. Expected {peso(payment.amount)}, received {peso(payment.paid_amount ?? null)} ({payment.payment_id}).
+                  <strong>Needs review:</strong> {payment.problem}. Expected {peso(payment.amount)}, received{' '}
+                  {peso(payment.paid_amount ?? null)} ({payment.payment_id}).
                 </p>
               )}
               {paymentClaim && payment?.status !== 'verified' && (
                 <p>
-                  The customer says they already paid{paymentClaim.reference && <> (reference {paymentClaim.reference})</>}. <strong>No matching verified payment.</strong> Verify before you ship.
+                  The customer says they already paid{paymentClaim.reference && <> (reference {paymentClaim.reference})</>}.{' '}
+                  <strong>No matching verified payment.</strong> Verify before you ship.
                 </p>
               )}
               {order.payment_review?.map((r) => (
@@ -376,7 +406,11 @@ export default function OrderView({ order, onChange, checks = true }: { order: O
               ))}
               {payment && (
                 <p>
-                  <small>{payment.checked_at ? `Last checked with PayMongo ${new Date(payment.checked_at).toLocaleString()}.` : 'Not checked with PayMongo yet.'}</small>{' '}
+                  <small>
+                    {payment.checked_at
+                      ? `Last checked with PayMongo ${new Date(payment.checked_at).toLocaleString()}.`
+                      : 'Not checked with PayMongo yet.'}
+                  </small>{' '}
                   <button disabled={busy} onClick={() => call('/check-payment', { method: 'POST' })}>
                     Recheck payment
                   </button>
@@ -393,7 +427,9 @@ export default function OrderView({ order, onChange, checks = true }: { order: O
               {order.status === 'confirmed' ? 'Customer link (order summary and payment):' : 'Send this link to the customer:'}
               <br />
               <input readOnly value={link} onFocus={(e) => e.target.select()} aria-label="Confirmation link" />{' '}
-              <button onClick={() => navigator.clipboard.writeText(link).then(() => setCopied('link'))}>{copied === 'link' ? 'Copied' : 'Copy'}</button>{' '}
+              <button onClick={() => navigator.clipboard.writeText(link).then(() => setCopied('link'))}>
+                {copied === 'link' ? 'Copied' : 'Copy'}
+              </button>{' '}
               <button
                 onClick={() =>
                   setMessage(
@@ -423,7 +459,10 @@ export default function OrderView({ order, onChange, checks = true }: { order: O
             {order.status !== 'confirmed' && (
               <button
                 disabled={busy || order.missing.length > 0}
-                onClick={() => confirm('Record that the customer agreed, without their own confirmation?') && call('/assert-confirmation', { method: 'POST' })}
+                onClick={() =>
+                  confirm('Record that the customer agreed, without their own confirmation?') &&
+                  call('/assert-confirmation', { method: 'POST' })
+                }
               >
                 Customer agreed another way
               </button>
