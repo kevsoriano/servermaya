@@ -19,6 +19,10 @@ GRAPH = "https://graph.facebook.com"
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 
 
+# Memory Bank for past claim decisions: projects/.../locations/global/reasoningEngines/... from `make memory-bank`. Empty turns it off.
+MEMORY_BANK = os.environ.get("MEMORY_BANK", "")
+
+
 # ponytail: one store, add real store ids when a second seller onboards
 STORE = "main"
 

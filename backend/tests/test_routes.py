@@ -15,7 +15,7 @@ from domain import claim_agent
 from domain import claims as cases
 from domain import packing as pack
 from helpers import client, fake_google, fake_token, ready_order
-from integrations import lalamove, messenger, paymongo
+from integrations import lalamove, memory, messenger, paymongo
 from routes import dispatch
 from seed import samples
 
@@ -90,7 +90,10 @@ class Canned(BaseLlm):
     async def generate_content_async(self, llm_request, stream=False):
         asked.append(llm_request)
         if not any(p.function_response for c in llm_request.contents for p in c.parts):
-            reads = [types.Part(function_call=types.FunctionCall(name=f"read_{n}", args={})) for n in ("order", "chat", "packing", "delivery")]
+            reads = [
+                types.Part(function_call=types.FunctionCall(name=f"read_{n}", args={}))
+                for n in ("order", "chat", "packing", "delivery", "past_decisions")
+            ]
             yield LlmResponse(content=types.Content(role="model", parts=reads))
             return
         review = cases.Review(
@@ -138,10 +141,19 @@ def test_packing_delivery_claims_refunds_and_replacement(monkeypatch, seller):
     chat = [{"id": "m1", "from_page": False, "created_time": "t", "text": "cracked!"}]
     monkeypatch.setattr(messenger, "fetch_messages", lambda conversation_id: chat)
     monkeypatch.setattr(claim_agent, "gemini", lambda model, project: Canned(model="canned"))
+    recalled, remembered = [], []
+    monkeypatch.setattr(
+        memory, "recall", lambda order, query: recalled.append(query) or ["Decided 2026-10-01: Damaged claim on 1 x Mug (blue): replaced."]
+    )
+    monkeypatch.setattr(memory, "remember", lambda order, fact: remembered.append((order["id"], fact)))
     review = client.post(f"/api/orders/o1/claims/{cid}/review", headers=SELLER).json()["claims"][0]["review"]
     assert review["findings"][0]["evidence"] == ["C"] and set(review["sources"]) == {"C"}
+    assert review["read"][-1] == "past" and recalled == ["Damaged claim on 1 x Mug (blue)"]
     decision = {"action": "partial_refund", "amount": 20000, "reason": "Cracked in the photo"}
     assert client.post(f"/api/orders/o1/claims/{cid}/decide", json=decision, headers=SELLER).json()["claims"][0]["status"] == "resolution_approved"
+    assert remembered == [
+        ("o1", "Damaged claim on 1 x Mug (blue): the seller approved a partial refund of ₱200.00. Seller's reason: Cracked in the photo")
+    ]
 
     # PayMongo does not answer the refund; its refund webhook later settles it through the payment's refund list.
     monkeypatch.setattr(paymongo, "paymongo_refund", lambda *a: {})
@@ -281,7 +293,7 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     up_front = [p for c in asked[0].contents for p in c.parts if p.inline_data]
     fetched = [r for c in asked[-1].contents for p in c.parts if p.function_response for r in p.function_response.parts or []]
     assert len(up_front) == 1 and len(fetched) == 1  # her photo comes with the claim; the packing photo, when the agent reads packing
-    assert claim["review"]["read"] == ["order", "chat", "packing", "delivery"]
+    assert claim["review"]["read"] == ["order", "chat", "packing", "delivery"]  # Memory Bank is off here: past decisions unavailable
 
     # Nico: one click checks his packing photo, and code holds it back as too shaky, whatever Gemini read.
     nico = orders["Nico Ramos"]

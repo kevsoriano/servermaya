@@ -10,13 +10,14 @@ comma := ,
 empty :=
 space := $(empty) $(empty)
 
-.PHONY: help setup dev dev-backend dev-frontend test eval deploy deploy-backend deploy-frontend secrets
+.PHONY: help setup dev dev-backend dev-frontend test eval memory-bank deploy deploy-backend deploy-frontend secrets
 
 help:
 	@echo "make setup            install dependencies, create backend/.env"
 	@echo "make dev              run backend (:8000) and frontend (:5173)"
 	@echo "make test             backend lint, format check and tests; frontend lint, format check and build"
 	@echo "make eval             live Gemini evaluation; writes docs/eval-results.md"
+	@echo "make memory-bank      create the Memory Bank for past claim decisions (once), then write its demo examples"
 	@echo "make deploy           deploy backend to Cloud Run, then frontend to Firebase Hosting"
 	@echo "make deploy-backend   backend only"
 	@echo "make deploy-frontend  frontend only"
@@ -45,6 +46,9 @@ test:
 
 eval:
 	cd backend && uv run python -m evals.run $(or $(RUNS),3)
+
+memory-bank: backend/.env
+	cd backend && uv run --env-file .env python -m integrations.memory setup
 
 deploy: deploy-backend deploy-frontend
 

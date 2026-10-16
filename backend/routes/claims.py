@@ -2,7 +2,7 @@ import hashlib
 import secrets
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from google.api_core.exceptions import PreconditionFailed
 from google.genai import types
@@ -13,6 +13,7 @@ from domain import claim_agent
 from domain import claims as cases
 from domain import orders as rules
 from domain import packing as pack
+from integrations import memory
 from services import chats, customer_link
 
 router = APIRouter()
@@ -123,12 +124,19 @@ def review_claim(order_id: str, cid: str, user: dict = Depends(auth.current_user
     auth.ai_budget(user)  # one review; the agent's tool turns make a few Gemini calls, counted as one like any other read
     now = datetime.now(UTC)
     try:
-        review = claim_agent.review(claim_agent.gemini(config.GEMINI_MODEL, config.PROJECT_ID), config.GEMINI_MODEL, blocks, shown, now)
+        review = claim_agent.review(
+            claim_agent.gemini(config.GEMINI_MODEL, config.PROJECT_ID),
+            config.GEMINI_MODEL,
+            blocks,
+            shown,
+            now,
+            recall=lambda: memory.recall(order, cases.recall_query(order, c)),
+        )
     except Exception:
         raise HTTPException(502, "Could not review this claim. Try again.")
     # The text behind each citation, so the seller can check it without hunting.
     cited = {e for f in review["findings"] for e in f["evidence"]} | set(review["recommendation"]["evidence"])
-    texts = {b[1 : b.index("]")]: b for b in blocks} | {label: f"[{label}] Photo" for label, _ in shown}
+    texts = {b[1 : b.index("]")]: b for b in blocks} | {label: f"[{label}] Photo" for label, _ in shown} | review.pop("recalled")
     review["sources"] = {k: v for k, v in texts.items() if k in cited}
     return db.change(ref, lambda o: cases.record_review(o, cid, review, user["email"], now))
 
@@ -140,9 +148,12 @@ def wait_claim(order_id: str, cid: str, user: dict = Depends(auth.current_user))
 
 
 @router.post("/api/orders/{order_id}/claims/{cid}/decide")
-def decide_claim(order_id: str, cid: str, body: cases.DecisionIn, user: dict = Depends(auth.current_user)):
+def decide_claim(order_id: str, cid: str, body: cases.DecisionIn, tasks: BackgroundTasks, user: dict = Depends(auth.current_user)):
     now = datetime.now(UTC)
-    return db.change(db.orders().document(order_id), lambda o: cases.decide(o, cid, body, user["email"], now))
+    order = db.change(db.orders().document(order_id), lambda o: cases.decide(o, cid, body, user["email"], now))
+    # After the response: the shop's memory of how it decides claims, for later reviews (see claims.decision_fact).
+    tasks.add_task(memory.remember, order, cases.decision_fact(order, cases.claim(order, cid)))
+    return order
 
 
 class EscalateIn(BaseModel):

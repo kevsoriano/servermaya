@@ -121,7 +121,7 @@ def evidence(order: dict, messages: list[dict], c: dict) -> tuple[list[str], lis
     d = order["draft"]
     blocks, images = [], []
     agreed = [x for x in order.get("confirmations", []) if x["version"] == order["version"]]
-    items = "; ".join(f"{i['quantity']} x {inline(i['name'])}" + (f" ({inline(i['variant'])})" if i["variant"] else "") for i in d["items"])
+    items = items_text(order)
     blocks.append(
         f"[V{order['version']}] Order version {order['version']}: {items}. Total {money(d['total'])}. Recipient {inline(d['recipient_name']['value'])}, "
         f"address {inline(d['address']['value'])}. "
@@ -179,6 +179,35 @@ def evidence(order: dict, messages: list[dict], c: dict) -> tuple[list[str], lis
     for n, photo in enumerate(c["photos"], 1):
         images.append((f"CP{n}", photo))
     return blocks, images
+
+
+# Memory of past decisions. A memory is read back into later reviews of other customers' claims, so it holds only the
+# claim type, the items and the seller's own decision and reason: customer text in it would be a stored injection.
+DECIDED = {
+    "clarification": "asked the customer for clarification",
+    "refund": "approved a full refund",
+    "partial_refund": "approved a partial refund",
+    "replacement": "approved a replacement",
+    "redelivery": "approved delivering again",
+    "escalation": "escalated it",
+}
+
+
+def items_text(order: dict) -> str:
+    return "; ".join(
+        f"{i['quantity']} x {inline(i['name'])}" + (f" ({inline(i['variant'])})" if i["variant"] else "") for i in order["draft"]["items"]
+    )
+
+
+def decision_fact(order: dict, c: dict) -> str:
+    d = c["decision"]
+    amount = f" of {money(d['amount'])}" if d["action"] == "partial_refund" else ""
+    return f"{TYPES[c['type']]} claim on {items_text(order)}: the seller {DECIDED[d['action']]}{amount}. Seller's reason: {inline(d['reason'])}"
+
+
+def recall_query(order: dict, c: dict) -> str:
+    """What to search past decisions for: the claim type and the items, not the customer's words."""
+    return f"{TYPES[c['type']]} claim on {items_text(order)}"
 
 
 def ids(blocks: list[str], images: list[tuple[str, dict]]) -> set[str]:

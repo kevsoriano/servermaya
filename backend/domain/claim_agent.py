@@ -1,13 +1,14 @@
 """The claim review as a Google ADK agent.
 
 The agent starts with the claim and the customer's photos only. It fetches the order's records with four read-only tools
-(the order and payment, the chat, packing with its photos, delivery), choosing what the claim needs. Nothing it can call
-changes anything. Its after-agent callback runs claims.checked in code with only the IDs it was given or fetched, so a
+(the order and payment, the chat, packing with its photos, delivery), and with a fifth recalls how the shop decided similar
+claims before, from Memory Bank. It chooses what the claim needs. Nothing it can call changes anything. Its after-agent callback runs claims.checked in code with only the IDs it was given or fetched, so a
 citation to a record it never saw is dropped before the review leaves the agent, and nothing it recommends is carried out.
 """
 
 import asyncio
 import re
+from collections.abc import Callable
 from datetime import datetime
 
 from google.adk.agents import LlmAgent
@@ -27,15 +28,19 @@ SECTIONS = {"V": "order", "PAY": "order", "M": "chat", "K": "packing", "KP": "pa
 TOOLS = """
 You start with the claim [C] and any photos the customer sent with it [CP1, CP2, ...]. The order's records are not in the
 message: fetch them with the tools read_order, read_chat, read_packing and read_delivery. Call every tool whose records could
-support or contradict the claim; when unsure, call it. You can cite only IDs you were given or fetched; any other is dropped."""
+support or contradict the claim; when unsure, call it. You can cite only IDs you were given or fetched; any other is dropped.
+read_past_decisions recalls how this shop decided similar claims from other customers [P1, ...]. Use it to suggest an outcome
+consistent with the shop's practice and cite it when you do. Past decisions say nothing about this customer or this order:
+never use them as evidence for or against the claim."""
 
 
 def section(label: str) -> str:
     return SECTIONS.get(re.match(r"[A-Z]+", label)[0], "claim")
 
 
-def agent(llm: BaseLlm, records: dict[str, list], read: list[str]) -> LlmAgent:
-    """An agent for one review. records: section -> [(evidence ID, text or image Part)]. read: filled with the sections it fetches."""
+def agent(llm: BaseLlm, records: dict[str, list], read: list[str], recall: Callable[[], list[str] | None] = lambda: []) -> LlmAgent:
+    """An agent for one review. records: section -> [(evidence ID, text or image Part)]. read: filled with the sections it
+    fetches. recall: the shop's past decisions like this claim, asked only if the agent calls for them; None if unavailable."""
 
     def fetch(name: str) -> dict:
         if name not in read:
@@ -63,6 +68,15 @@ def agent(llm: BaseLlm, records: dict[str, list], read: list[str]) -> LlmAgent:
         """The shipment's status events [D1, ...], any courier proof of delivery [POD], and whether the customer confirmed receipt [R]."""
         return fetch("delivery")
 
+    def read_past_decisions() -> dict:
+        """How this shop decided earlier claims like this one, from other customers [P1, ...]: the seller's own decisions and reasons."""
+        if "past" not in records:
+            past = recall()
+            records["past"] = [(f"P{n}", f"[P{n}] {fact}") for n, fact in enumerate(past or [], 1)]
+            if past is None:
+                return {"records": ["Past decisions are unavailable right now."], "images": []}
+        return fetch("past")
+
     def guard(callback_context) -> None:
         """Code, not the model, decides which citations stand: claims.checked keeps only IDs the agent was given or fetched."""
         state = callback_context.state
@@ -79,7 +93,7 @@ def agent(llm: BaseLlm, records: dict[str, list], read: list[str]) -> LlmAgent:
         description="Fetches an order's records, compares the customer's claim with them, and cites them by evidence ID.",
         model=llm,
         instruction=lambda _ctx: cases.SYSTEM + TOOLS,  # a provider, so the brackets in the evidence IDs are never read as state placeholders
-        tools=[read_order, read_chat, read_packing, read_delivery],
+        tools=[read_order, read_chat, read_packing, read_delivery, read_past_decisions],
         output_schema=cases.Review,
         output_key="review",
         # 90 s: one Vertex request once hung for over 7 minutes; the route turns the timeout into a 502. LOW thinking: on the
@@ -97,10 +111,18 @@ def gemini(model: str, project: str) -> Gemini:
     return Gemini(model=model, client_kwargs={"vertexai": True, "project": project, "location": "global"})
 
 
-def review(llm: BaseLlm, model: str, blocks: list[str], images: list[tuple[str, types.Part]], now: datetime) -> dict:
+def review(
+    llm: BaseLlm,
+    model: str,
+    blocks: list[str],
+    images: list[tuple[str, types.Part]],
+    now: datetime,
+    recall: Callable[[], list[str] | None] = lambda: [],
+) -> dict:
     """Run one review in its own session and return the checked review. Raises if the agent gave no valid answer.
 
-    blocks: claims.evidence's text records. images: (evidence ID, loaded image) for the photos that could be loaded."""
+    blocks: claims.evidence's text records. images: (evidence ID, loaded image) for the photos that could be loaded.
+    recall: past decisions like this claim (memory.recall), called only if the agent asks."""
     records: dict[str, list] = {}
     for label, item in [(b[1 : b.index("]")], b) for b in blocks] + images:
         records.setdefault(section(label), []).append((label, item))
@@ -109,7 +131,7 @@ def review(llm: BaseLlm, model: str, blocks: list[str], images: list[tuple[str, 
     for label, item in given:
         parts += [types.Part.from_text(text=item)] if isinstance(item, str) else [types.Part.from_text(text=f"Image {label}:"), item]
     read: list[str] = []
-    reviewer = agent(llm, records, read)
+    reviewer = agent(llm, records, read, recall)
 
     async def run() -> dict | None:
         sessions = InMemorySessionService()
@@ -124,4 +146,5 @@ def review(llm: BaseLlm, model: str, blocks: list[str], images: list[tuple[str, 
     checked = asyncio.run(run())  # the route runs in FastAPI's thread pool, where no event loop is running
     if checked is None:
         raise RuntimeError("The claim review agent returned no review")
-    return {**checked, "engine": "adk", "read": read}
+    texts = {label: item for got in records.values() for label, item in got if isinstance(item, str)}
+    return {**checked, "engine": "adk", "read": read, "recalled": {k: v for k, v in texts.items() if re.fullmatch(r"P\d+", k)}}

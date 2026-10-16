@@ -86,8 +86,8 @@ function Review({ c, onDecide }: { c: Claim; onDecide: (a: Action, amount: numbe
       <p>
         <small>
           AI review by {r.model}, {new Date(r.at).toLocaleString()}.
-          {r.read && <> It read the order's {r.read.length ? r.read.join(', ') : 'no'} records.</>} Every statement cites the records below
-          it; check them before you decide.
+          {r.read && <> It read: {r.read.map((x) => (x === 'past' ? 'past decisions' : x)).join(', ') || 'nothing'}.</>} Every statement
+          cites the records below it; check them before you decide.
           {c.review_stale && <strong> New evidence arrived since: review again.</strong>}
         </small>
       </p>
