@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { load } from './firebase'
+import { load } from '../lib/firebase'
 
 const IMAGE_TYPES = 'image/jpeg,image/png,image/gif' // what Messenger shows as an image
 const DEMO_IMAGE_TYPES = `${IMAGE_TYPES},image/webp`

@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { CLAIM_TYPES as TYPES, load, peso } from './firebase'
+import { load } from '../lib/firebase'
+import { CLAIM_TYPES as TYPES, peso } from '../lib/format'
 import type { Order } from './OrderView'
 import { Photo } from './Packing'
-import { PatternCard, type Card } from './Patterns'
+import { PatternCard, type Card } from '../patterns/Patterns'
 
 type Finding = { statement: string; status: 'supported' | 'conflicting' | 'unverified' | 'insufficient_data'; evidence: string[]; uncertainty: string; withheld?: boolean }
 type Action = 'clarification' | 'refund' | 'partial_refund' | 'replacement' | 'redelivery' | 'escalation'

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, load } from './firebase'
+import { api, load } from '../lib/firebase'
 import type { Order } from './OrderView'
 
 type Row = {

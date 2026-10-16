@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { load } from './firebase'
+import { load } from '../lib/firebase'
 
 type Signal = {
   key: string

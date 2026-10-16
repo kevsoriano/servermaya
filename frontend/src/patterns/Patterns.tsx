@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { CLAIM_TYPES as TYPES, load } from './firebase'
+import { load } from '../lib/firebase'
+import { CLAIM_TYPES as TYPES } from '../lib/format'
 
 type Ratio = { numerator: number; denominator: number; rate: number | null; of: string }
 type Review = { status: string; reason?: string; by?: string; at?: string; was?: string }

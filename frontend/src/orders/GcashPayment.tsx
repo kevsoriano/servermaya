@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { fromChat, load, localMobile, peso } from './firebase'
+import { load } from '../lib/firebase'
+import { fromChat, localMobile, peso } from '../lib/format'
 import type { Order } from './OrderView'
 import { Photo } from './Packing'
-import { LABEL, RESULT, shown, type Check, type Claim } from './receiptChecks'
+import { LABEL, RESULT, shown, type Check, type Claim } from '../lib/receiptChecks'
 
 export type ManualPayment = {
   status: 'requested' | 'claimed' | 'seller_confirmed'

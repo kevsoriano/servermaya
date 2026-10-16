@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { load } from './firebase'
+import { load } from '../lib/firebase'
 
 type Saved = { address: string; lat: number; lng: number; name: string; phone: string; updated_by: string; updated_at: string } | null
 

@@ -1,11 +1,11 @@
 import { GoogleAuthProvider, onAuthStateChanged, signInAnonymously, signInWithPopup, signOut, type User } from 'firebase/auth'
 import { useEffect, useState } from 'react'
-import Conversations from './Conversations'
-import Orders from './Orders'
-import Patterns from './Patterns'
-import DispatchSettings from './DispatchSettings'
-import GcashSettings from './GcashSettings'
-import { api, auth } from './firebase'
+import Conversations from './conversations/Conversations'
+import Orders from './orders/Orders'
+import Patterns from './patterns/Patterns'
+import DispatchSettings from './settings/DispatchSettings'
+import GcashSettings from './settings/GcashSettings'
+import { api, auth } from './lib/firebase'
 
 type Me = { uid: string; email: string; name: string | null; demo: boolean }
 

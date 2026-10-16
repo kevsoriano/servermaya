@@ -1,4 +1,4 @@
-import { peso } from './firebase'
+import { peso } from './format'
 
 /** A customer's GCash screenshot as Gemini transcribed it, and the checks code ran on it. Shared by the order panel and the image viewer. */
 export type Check = { check: string; result: 'pass' | 'fail' | 'unreadable'; detail: string }

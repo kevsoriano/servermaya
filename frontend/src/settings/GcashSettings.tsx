@@ -1,6 +1,7 @@
 import jsQR from 'jsqr'
 import { useEffect, useState } from 'react'
-import { api, load, localMobile } from './firebase'
+import { api, load } from '../lib/firebase'
+import { localMobile } from '../lib/format'
 
 type Saved = {
   name: string

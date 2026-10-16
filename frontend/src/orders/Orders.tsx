@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { load, peso, STATUS } from './firebase'
+import { load } from '../lib/firebase'
+import { peso, STATUS } from '../lib/format'
 import OrderView, { type Order } from './OrderView'
-import { Avatar } from './Conversations'
+import { Avatar } from '../conversations/Conversations'
 
 export default function Orders() {
   const [list, setList] = useState<Order[]>()

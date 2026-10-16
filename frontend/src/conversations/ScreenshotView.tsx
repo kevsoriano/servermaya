@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { load, localMobile, peso } from './firebase'
-import type { ManualPayment } from './GcashPayment'
-import { LABEL, RESULT, shown, type Claim } from './receiptChecks'
-import type { Order } from './OrderView'
+import { load } from '../lib/firebase'
+import { localMobile, peso } from '../lib/format'
+import type { ManualPayment } from '../orders/GcashPayment'
+import { LABEL, RESULT, shown, type Claim } from '../lib/receiptChecks'
+import type { Order } from '../orders/OrderView'
 
 const MARK = { pass: '✓', fail: '✗', unreadable: '?' }
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { loadPublic, peso } from './firebase'
+import { loadPublic } from '../lib/firebase'
+import { peso } from '../lib/format'
 
 type Summary = {
   status: string

@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { load, peso } from './firebase'
+import { load } from '../lib/firebase'
+import { peso } from '../lib/format'
 import type { Order } from './OrderView'
 
 type Event = { id: string; source: 'provider' | 'seller_reported' | 'customer_reported' | 'demo'; raw_status: string; status: string; at: string; note?: string | null }
