@@ -9,8 +9,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-import extraction
-import orders as rules
+from . import extraction
+from . import orders as rules
 
 Kind = Literal["pressure", "payment_claim", "changed_payment_details", "inconsistent_details", "receipt_image"]
 

@@ -15,7 +15,7 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-import claims as cases
+from . import claims as cases
 
 APP = "claim_review"
 USER = "seller"

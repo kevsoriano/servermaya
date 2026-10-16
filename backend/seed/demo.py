@@ -7,11 +7,10 @@ import re
 import secrets
 from datetime import datetime, timedelta
 
-import delivery
-import extraction
-import orders as rules
-import packing as pack
-import receipts as gcash
+from domain import delivery, extraction
+from domain import orders as rules
+from domain import packing as pack
+from domain import receipts as gcash
 
 SHOP = "Demo shop"
 MAX_MESSAGES = 200  # keeps a thread document well under Firestore's 1 MB limit

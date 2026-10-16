@@ -30,18 +30,16 @@ from google import genai
 from google.genai import types
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
-import claim_agent
-import claims as cases
-import extraction
-import orders as rules
-import packing as pack
-import receipts as gcash
-import samples
-import signals
+from domain import claim_agent, extraction, signals
+from domain import claims as cases
+from domain import orders as rules
+from domain import packing as pack
+from domain import receipts as gcash
+from seed import samples
 
 PROJECT = os.environ.get("FIREBASE_PROJECT_ID", "servermaya-ai-builder-cup")
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
-OUT = Path(__file__).resolve().parent.parent / "docs" / "eval-results.md"
+OUT = Path(__file__).resolve().parents[2] / "docs" / "eval-results.md"
 NOW = datetime(2026, 10, 16, 12, 0, tzinfo=UTC)
 RUNS = int(sys.argv[1]) if len(sys.argv) > 1 else 3  # each case runs this many times: one run cannot show a flaky answer
 KINDS = {"pressure", "payment_claim", "changed_payment_details", "inconsistent_details", "receipt_image"}
@@ -1157,7 +1155,7 @@ def report(convs: list[list[dict]], claims_: list[list[dict]], packs: list[list[
     out = [
         "# Evaluation results",
         "",
-        f"Run {datetime.now(UTC):%Y-%m-%d %H:%M} UTC with `{MODEL}`, by `make eval` ([backend/eval.py](../backend/eval.py)). "
+        f"Run {datetime.now(UTC):%Y-%m-%d %H:%M} UTC with `{MODEL}`, by `make eval` ([backend/evals/run.py](../backend/evals/run.py)). "
         f"Each case ran {RUNS} times; totals count every run. Synthetic cases, scored in code: workflow validation on a small set, "
         "not an accuracy estimate for real traffic. Packing images are generated drawings, not photos.",
         "",

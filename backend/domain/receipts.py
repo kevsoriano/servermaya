@@ -11,8 +11,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from extraction import centavos
-from orders import Refused
+from .extraction import centavos
+from .orders import Refused
 
 PHT = timezone(timedelta(hours=8), "PHT")  # GCash receipts show Philippine time; the Philippines has no DST
 SLACK = timedelta(minutes=2)  # receipts show minutes only, and the request time is to the second

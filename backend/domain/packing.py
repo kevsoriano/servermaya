@@ -10,7 +10,7 @@ from datetime import datetime
 from PIL import Image, ImageFilter, ImageStat
 from pydantic import BaseModel, Field
 
-from orders import Refused
+from .orders import Refused
 
 IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
 MAX_PHOTO_BYTES = 10 * 1024 * 1024

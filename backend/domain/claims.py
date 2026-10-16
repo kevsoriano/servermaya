@@ -10,8 +10,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from extraction import inline
-from orders import Refused
+from .extraction import inline
+from .orders import Refused
 
 TYPES = {
     "missing_item": "Missing item",

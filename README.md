@@ -63,21 +63,26 @@ Other services: Messenger Graph API (conversations and replies), PayMongo (check
 
 ```
 backend/    FastAPI on Cloud Run
-  main.py         routes, webhooks, Messenger, PayMongo and Lalamove clients
-  extraction.py   chat to order, price check, prompt-text flattening
-  signals.py      checks before shipping
-  orders.py       order versions, confirmation and payment rules
-  receipts.py     GCash receipt, history screenshot and history PDF checks
-  packing.py      packing photo checks
-  delivery.py     dispatch gate and delivery events
-  claims.py       evidence pack and claim review
-  claim_agent.py  the claim review as an ADK agent, with the citation check as its callback
-  refunds.py      refunds
-  patterns.py     store-wide pattern cards
-  demo.py         demo chats, including the returning customer's earlier order
-  samples.py      sample GCash receipts, history screenshot and history PDF for demo chats
-  test_main.py    tests
-  eval.py         live evaluation: conversations, injection, returning customers, claim reviews, packing
+  main.py           the app: includes one router per area
+  routes/           HTTP routes by area: conversations, demo, orders, customer (the customer's link), gcash, packing,
+                    dispatch, claims, refunds, patterns, webhooks
+  core/             config, auth (sign-in, allowlist, demo gate, demo AI limits) and Firestore/Storage access
+  integrations/     Messenger Graph API, PayMongo and Lalamove clients
+  services/         shared helpers the routes call: demo chats, demo seeding, the customer link, payment and delivery sync
+  domain/           business rules as pure functions, no I/O:
+    extraction.py     chat to order, price check, prompt-text flattening
+    signals.py        checks before shipping, and which order each check belongs to
+    orders.py         order versions, confirmation and payment rules
+    receipts.py       GCash receipt, history screenshot and history PDF checks
+    packing.py        packing photo checks, including the sharpness check
+    delivery.py       dispatch gate and delivery events
+    claims.py         evidence pack and claim review
+    claim_agent.py    the claim review as an ADK agent, with the citation check as its callback
+    refunds.py        refunds
+    patterns.py       store-wide pattern cards
+  seed/             demo chats and sample GCash files (receipts, history screenshot and PDF)
+  tests/            unit tests by area (make test)
+  evals/run.py      live evaluation against Gemini (make eval)
 frontend/   React + Vite on Firebase Hosting
 docs/       product requirements, implementation plan, test scenarios and eval results
 ```

@@ -9,8 +9,8 @@ are separate records, and neither proves the parcel held the right items.
 import re
 from datetime import datetime
 
-from orders import Refused
-from packing import paid_by
+from .orders import Refused
+from .packing import paid_by
 
 # Normalized statuses in the order a shipment moves through them. Booking or a driver match is not a pickup.
 RANK = {"quoted": 0, "booking": 1, "booked": 2, "driver_assigned": 3, "picked_up": 4, "delivered": 5}

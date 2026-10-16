@@ -22,9 +22,16 @@ dev = [
     "ruff>=0.15",
 ]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "tests"]
+
 [tool.ruff]
 line-length = 150
 target-version = "py313"
+
+[tool.ruff.lint.isort]
+known-first-party = ["core", "domain", "evals", "helpers", "integrations", "routes", "seed", "services"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "C4"]

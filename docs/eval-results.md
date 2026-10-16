@@ -1,6 +1,6 @@
 # Evaluation results
 
-Run 2026-10-16 19:13 UTC with `gemini-3.8-flash`, by `make eval` ([backend/eval.py](../backend/eval.py)). Each case ran 3 times; totals count every run. Synthetic cases, scored in code: workflow validation on a small set, not an accuracy estimate for real traffic. Packing images are generated drawings, not photos.
+Run 2026-10-16 19:13 UTC with `gemini-3.8-flash`, by `make eval` ([backend/evals/run.py](../backend/evals/run.py)). Each case ran 3 times; totals count every run. Synthetic cases, scored in code: workflow validation on a small set, not an accuracy estimate for real traffic. Packing images are generated drawings, not photos.
 
 ## Summary
 

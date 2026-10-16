@@ -12,7 +12,7 @@ from datetime import datetime
 import pypdf
 from PIL import Image, ImageDraw, ImageFont
 
-from receipts import PHT
+from domain.receipts import PHT
 
 # The demo store's fictional GCash account, as GCash would show it on a receipt.
 PAY_TO_NAME, PAY_TO_MOBILE = "JU*N D**A C.", "+63 917 123 ****"
