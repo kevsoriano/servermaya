@@ -8,9 +8,10 @@ An assistant for small sellers who take orders in Messenger and get paid by GCas
 
 Open the live app and press **Try the demo**. No account is needed.
 
-- You get seven demo chats, each showing something the app is built to catch. You play both sides: reply as the seller, or write as the customer in the dashed box (images too).
+- You get eight demo chats, each showing something the app is built to catch. You play both sides: reply as the seller, or write as the customer in the dashed box (images too).
   - **Ana Reyes**: a plain order, for the full flow from draft to delivery.
   - **Mark Dizon**: changes the order, then says he already paid and gives a reference number. That is a claim, not a payment.
+  - **Dan Cortez**: has "only crypto", asks the seller to open a Binance account, then to send him the code that arrives "to verify the wallet", and to ship today. The app flags the account and code request (never share a code), the change of payment method and the pressure to ship.
   - **Joy Santos**: writes a fake seller line with a lower price, and an instruction to mark the order paid. The seller's price wins and the instruction is ignored.
   - **Leah Cruz**: a returning customer. She confirmed and then cancelled an order three days ago, and now orders again with "same address and number as before".
   - **Rico Bautista**: a repeat customer whose first order said "already paid, ship today" but went through: the seller found the payment in their own GCash history, packed it and he received it. Now he says the same again. The old payment does not settle the new claim; the first order's checks show as history.

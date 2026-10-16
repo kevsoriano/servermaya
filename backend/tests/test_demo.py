@@ -14,7 +14,7 @@ def test_demo_chats_parse_seed_and_never_reach_messenger(monkeypatch):
 
     from seed import demo
 
-    assert demo.parse("Customer: hi\n  2 pcs po\n\nseller: ₱180 each") == [(False, "hi\n2 pcs po"), (True, "₱180 each")]
+    assert demo.parse("Customer: hi\n  2 pcs please\n\nseller: ₱180 each") == [(False, "hi\n2 pcs please"), (True, "₱180 each")]
     assert demo.parse("") == []
     for bad in ("hello", "Customer:"):
         with pytest.raises(ValueError):
@@ -38,10 +38,10 @@ def test_demo_chats_parse_seed_and_never_reach_messenger(monkeypatch):
         cid = demo.new_id()
         assert client.get(f"/api/conversations/{cid}").json()[0]["id"] == m[0]["id"]
         assert client.post("/api/conversations/t_1/customer", json={"text": "hi"}).status_code == 404  # only demo chats
-        assert client.post(f"/api/conversations/{cid}/customer", json={"text": "Bayad na po"}).status_code == 200
-        assert client.post(f"/api/conversations/{cid}/reply", json={"text": "Salamat po"}).status_code == 200
+        assert client.post(f"/api/conversations/{cid}/customer", json={"text": "I paid already"}).status_code == 200
+        assert client.post(f"/api/conversations/{cid}/reply", json={"text": "Thank you"}).status_code == 200
         sent = [u["messages"].values[0] for u in posted]
-        assert [(x["from_page"], x["from_name"], x["text"]) for x in sent] == [(False, "Ana", "Bayad na po"), (True, demo.SHOP, "Salamat po")]
+        assert [(x["from_page"], x["from_name"], x["text"]) for x in sent] == [(False, "Ana", "I paid already"), (True, demo.SHOP, "Thank you")]
     finally:
         main.app.dependency_overrides.clear()
 

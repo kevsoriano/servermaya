@@ -96,9 +96,11 @@ def test_payment_claim_says_whether_payment_details_were_shared_first():
     assert risk.payment_context(check, mark, [])[0].startswith("No payment link, GCash request or payment details from you")
 
     # The seller typed their GCash number first: that message is named.
-    told = demo.thread("Mark Dizon", [(True, "Send to GCash 0917 123 4567 po"), (False, "Already paid, ref 1234567890123")], "u1", now)["messages"]
+    told = demo.thread("Mark Dizon", [(True, "Send to GCash 0917 123 4567 please"), (False, "Already paid, ref 1234567890123")], "u1", now)[
+        "messages"
+    ]
     [check] = risk.resolve([claim(told[-1])], [])
-    assert "your message “Send to GCash 0917 123 4567 po”" in risk.payment_context(check, told, [])[0]
+    assert "your message “Send to GCash 0917 123 4567 please”" in risk.payment_context(check, told, [])[0]
 
     # Rico: his first order had a GCash request and a payment the seller found. Both facts show; the new claim stays open.
     chat, old = demo.repeat(

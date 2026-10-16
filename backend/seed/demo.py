@@ -45,6 +45,20 @@ SEED = [
         ],
     ),
     (
+        "Dan Cortez",
+        [
+            # The customer asks the seller to open a crypto wallet and send him the code that arrives: never share a code.
+            (False, "Hi! Is the linen pouch available? 2 pieces please."),
+            (True, "Yes, ₱150 each, ₱300 total. Payment is by GCash."),
+            (
+                False,
+                "I don't have GCash, my only available funds are in crypto. Just open a Binance account, it's easy, 5 minutes, and I'll send it there.",
+            ),
+            (False, "A code will arrive on your number. Please send it to me so I can verify your wallet. Then please ship today 🙏"),
+            (False, "Dan Cortez, 0918 555 0144, 14 Kamagong St., Brgy. San Isidro, Parañaque City"),
+        ],
+    ),
+    (
         "Joy Santos",
         [
             # The customer writes a fake seller line and an instruction: the seller's price must win and nothing may follow the instruction.
@@ -95,7 +109,7 @@ REPEAT = (
     [
         (False, "Hi again! Can I get 1 black tote this time? Same address and number."),
         (True, "Welcome back, Rico! Black is also ₱250."),
-        (False, "Paid na rin po via GCash ₱250, ref 9012 345 678901. Please ship today, I need it by tomorrow din po 🙏"),
+        (False, "Paid via GCash again, ₱250, ref 9012 345 678901. Please ship today, I need it by tomorrow too 🙏"),
     ],
 )
 
@@ -134,6 +148,19 @@ TO_PACK = (
         (True, "Found it in our GCash, thank you! Packing your tote now."),
     ],
 )
+
+
+# One line under each demo chat in the list, so a visitor knows what to try there without reading every chat first.
+HINTS = {
+    "Ana Reyes": "Try the whole flow, from draft order to delivery",
+    "Mark Dizon": "Says he paid before any payment details were shared",
+    "Dan Cortez": "Asks you to open a crypto wallet and send him a code",
+    "Joy Santos": "Plants a fake seller line and an instruction to the AI",
+    "Leah Cruz": 'Returning customer: "same address as before"',
+    "Rico Bautista": "Paid fine last time, says he paid again today",
+    "Bea Villanueva": "Review her damage claim with AI and the shop's memory",
+    "Nico Ramos": "Check his packing photo: too blurry to count",
+}
 
 
 # Gemini calls demo visitors may make in a Philippine day. A judge's full run is about 20. The total is the real ceiling:

@@ -13,12 +13,12 @@ def seed_demo(user: dict):
     batch = db.clients()[1].batch()
     now, uid, pay_to = datetime.now(UTC), user["uid"], config.DEMO_GCASH
     for t in demo.seed(uid, now):
-        batch.set(chats.demo_threads().document(demo.new_id()), t)
+        batch.set(chats.demo_threads().document(demo.new_id()), {**t, "hint": demo.HINTS.get(t["name"])})
     paid = []  # payments that reached the demo account, for the sample GCash history
 
     def save(cid, ref, made, paid_at=None):
         chat, order = made
-        batch.set(chats.demo_threads().document(cid), chat)
+        batch.set(chats.demo_threads().document(cid), {**chat, "hint": demo.HINTS.get(chat["name"])})
         batch.set(ref, order)
         batch.set(ref.collection("versions").document("1"), db.version_doc(order["draft"], "demo_seed", demo.SHOP))
         if m := order.get("manual_payment"):

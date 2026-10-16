@@ -17,6 +17,8 @@ type Conversation = {
   reply_until: string | null
   order_actions: string[]
   demo?: boolean
+  /** Seeded demo chats: what to try in this one. */
+  hint?: string | null
 }
 type Message = { id: string; text: string; from_page: boolean; from_name: string; created_time: string; attachments: Attachment[] }
 type Attachment = { kind: 'image' | 'video' | 'audio' | 'file'; name: string | null; url: string; preview_url: string | null }
@@ -329,6 +331,7 @@ export default function Conversations() {
                     </time>
                   </div>
                   <span className="snippet">{c.snippet}</span>
+                  {c.hint && <span className="hint">{c.hint}</span>}
                   {c.demo && <mark className="source demo">Demo</mark>}
                   {!!c.open_checks && (
                     <mark>

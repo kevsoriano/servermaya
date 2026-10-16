@@ -17,7 +17,7 @@ from domain import packing as pack
 from helpers import client, fake_google, fake_token, ready_order
 from integrations import lalamove, memory, messenger, paymongo
 from routes import dispatch
-from seed import samples
+from seed import demo, samples
 
 SELLER = {"Authorization": "Bearer x"}
 asked = []
@@ -279,7 +279,8 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     monkeypatch.setattr(claim_agent, "gemini", lambda model, project: Canned(model="canned"))
 
     chats = {c["customer"]["name"]: c for c in client.get("/api/conversations", headers=SELLER).json()}  # the first visit seeds
-    assert len(chats) == 7 and chats["Bea Villanueva"]["order_actions"] == ["Review a customer claim"]
+    assert len(chats) == 8 and chats["Bea Villanueva"]["order_actions"] == ["Review a customer claim"]
+    assert {n: c["hint"] for n, c in chats.items()} == demo.HINTS  # every seeded chat says what to try in it
     assert chats["Nico Ramos"]["order_actions"] == ["Ready to pack"] and chats["Rico Bautista"]["order_actions"] == []
     orders = {o["draft"]["recipient_name"]["value"]: o for o in client.get("/api/orders", headers=SELLER).json()}
     assert set(orders) == {"Leah Cruz", "Rico Bautista", "Bea Villanueva", "Nico Ramos"}
@@ -305,5 +306,5 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     history = client.get("/api/demo/sample-statement", headers=SELLER)
     assert history.status_code == 200 and history.headers["content-type"] == "application/pdf"
     assert len(store.docs[f"stores/{config.STORE}/demoUsers/u1"]["samples"]) == 3
-    assert client.post("/api/demo/reset", headers=SELLER).json() == {"deleted_chats": 7, "deleted_orders": 4}
-    assert len(client.get("/api/orders", headers=SELLER).json()) == 4 and len(client.get("/api/conversations", headers=SELLER).json()) == 7
+    assert client.post("/api/demo/reset", headers=SELLER).json() == {"deleted_chats": 8, "deleted_orders": 4}
+    assert len(client.get("/api/orders", headers=SELLER).json()) == 4 and len(client.get("/api/conversations", headers=SELLER).json()) == 8

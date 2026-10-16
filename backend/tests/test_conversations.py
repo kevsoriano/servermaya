@@ -22,7 +22,7 @@ def test_conversations(monkeypatch):
         def json(self):
             return {
                 "data": [
-                    {"id": "m2", "message": "magkano po?", "from": {"id": "7", "name": "Ana"}},
+                    {"id": "m2", "message": "how much?", "from": {"id": "7", "name": "Ana"}},
                     {"id": "m1", "message": "hello", "from": {"id": "99", "name": "Shop"}},
                 ]
             }

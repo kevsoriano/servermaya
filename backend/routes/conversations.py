@@ -80,6 +80,7 @@ def demo_list(user: dict) -> list[dict]:
             "updated_time": d.get("updated_time"),
             "snippet": d.get("snippet"),
             "customer": {"id": d.id, "name": d.get("name"), "picture": None},
+            "hint": (d.to_dict() or {}).get("hint"),  # seeded chats only: what to try in this one
             "open_checks": cached_open_checks(d.id),
             "unread": False,
             "awaiting_reply": False,

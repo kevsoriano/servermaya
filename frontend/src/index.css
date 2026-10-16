@@ -264,6 +264,14 @@ mark.status.confirmed {
   color: var(--ok);
 }
 
+.threads .hint {
+  color: var(--accent-text);
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .threads button.unread .snippet {
   color: var(--text);
   font-weight: 600;
