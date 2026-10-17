@@ -264,42 +264,6 @@ mark.status.confirmed {
   color: var(--ok);
 }
 
-.demo-guide {
-  margin: 0 0 0.75rem;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  font-size: 0.85rem;
-}
-
-.demo-guide summary {
-  cursor: pointer;
-  font-weight: 600;
-}
-
-.demo-guide ul {
-  list-style: none;
-  margin: 0.4rem 0 0;
-  padding: 0;
-}
-
-.demo-guide button {
-  width: 100%;
-  padding: 0.3rem 0.4rem;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  color: var(--text);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.demo-guide button:hover,
-.demo-guide button[aria-current='true'] {
-  background: var(--selected);
-}
-
 .demo-hint {
   margin: 0.5rem 1rem;
   padding: 0.6rem 0.8rem;

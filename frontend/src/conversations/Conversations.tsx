@@ -17,7 +17,7 @@ type Conversation = {
   reply_until: string | null
   order_actions: string[]
   demo?: boolean
-  /** Seeded demo chats: what to try in this one, as a line for the demo guide and steps for the open chat. */
+  /** Seeded demo chats: what to try in this one, shown as steps above the open chat. */
   hint?: { short: string; steps: string } | null
 }
 type Message = {
@@ -363,22 +363,6 @@ export default function Conversations({ replyHours }: { replyHours: number }) {
         <h2 className="pane-title">Chats</h2>
         {!list && !error && <p className="muted">Loading…</p>}
         {list?.length === 0 && <p className="muted">No conversations yet.</p>}
-        {list?.some((c) => c.hint) && (
-          <details className="demo-guide" open>
-            <summary>Demo guide: what each chat shows</summary>
-            <ul>
-              {list
-                .filter((c) => c.hint)
-                .map((c) => (
-                  <li key={c.id}>
-                    <button onClick={() => open(c.id)} aria-current={c.id === openId}>
-                      <strong>{c.customer?.name.split(' ')[0]}</strong> {c.hint!.short}
-                    </button>
-                  </li>
-                ))}
-            </ul>
-          </details>
-        )}
         <ul className="threads">
           {list?.map((c) => (
             <li key={c.id}>
