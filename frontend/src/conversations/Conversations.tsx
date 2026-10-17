@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import { load } from '../lib/firebase'
 import { peso, STATUS } from '../lib/format'
 import type { Order } from '../orders/OrderView'
@@ -169,8 +169,10 @@ export function Avatar({ name, src }: { name: string; src?: string | null }) {
     .slice(0, 2)
     .join('')
     .toUpperCase()
+  // A steady hue per name, so each customer keeps the same color across the app.
+  const hue = [...name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7)
   return (
-    <span className="avatar" aria-hidden="true">
+    <span className="avatar" aria-hidden="true" style={{ '--hue': hue } as CSSProperties}>
       {initials || '?'}
     </span>
   )

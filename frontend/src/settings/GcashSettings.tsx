@@ -55,7 +55,6 @@ function SampleHistory() {
       )
   return (
     <p className="demo-banner" role="note">
-      Demo:{' '}
       <button type="button" onClick={download}>
         Download a sample history PDF
       </button>{' '}

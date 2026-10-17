@@ -103,7 +103,7 @@ export default function App() {
       </header>
       {me.demo && (
         <p className="demo-banner" role="note">
-          Demo: you see only your own demo chats and orders. Payments are PayMongo test mode and deliveries are the Lalamove sandbox.
+          You see only your own demo chats and orders. Payments are PayMongo test mode and deliveries are the Lalamove sandbox.
         </p>
       )}
       {tab === 'conversations' ? (
@@ -116,7 +116,7 @@ export default function App() {
         <div className="page">
           {me.demo && (
             <p className="demo-banner" role="note">
-              Demo settings: a made-up catalog, GCash account and pickup address. They can't be changed in the demo.
+              A made-up catalog, GCash account and pickup address. They can't be changed in the demo.
             </p>
           )}
           <Catalog readOnly={!!me.demo} />
