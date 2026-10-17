@@ -368,8 +368,15 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     assert len(chats) == 8 and chats["Bea Villanueva"]["order_actions"] == ["Review a customer claim"]
     assert {n: c["hint"] for n, c in chats.items()} == demo.HINTS  # every seeded chat says what to try in it
     assert chats["Nico Ramos"]["order_actions"] == ["Ready to pack"] and chats["Rico Bautista"]["order_actions"] == []
-    orders = {o["draft"]["recipient_name"]["value"]: o for o in client.get("/api/orders", headers=SELLER).json()}
-    assert set(orders) == {"Leah Cruz", "Rico Bautista", "Bea Villanueva", "Nico Ramos"}
+    listed = client.get("/api/orders", headers=SELLER).json()  # newest first
+    orders = {o["draft"]["recipient_name"]["value"]: o for o in reversed(listed)}  # each customer's newest order
+    # Every chat but Ana's has earlier orders: delivered by simulated sandbox riders, some with a claim decided and refunded.
+    assert len(listed) == 4 + sum(len(h) for h in demo.HISTORY.values()) and "Ana Reyes" not in orders
+    past = [o for o in listed if (o.get("fulfillment") or {}).get("courier") == "lalamove"]
+    assert {o["fulfillment"]["driver"]["source"] for o in past} == {"simulated"} and all(o["receipt"] for o in past)
+    assert {c["decision"]["cause"] for o in past for c in o.get("claims", [])} == {"courier_transit", "unknown", "seller_error"}
+    cards = {c["key"]: c for c in client.get("/api/patterns", headers=SELLER).json()}
+    assert cards["loss_concentration:driver:sim-2"]["elevated"] and client.get("/api/patterns/returns", headers=SELLER).json()["causes"]
 
     # Bea: one click reviews her open report, with her damage photo and the packing photo in front of the reviewer.
     bea = orders["Bea Villanueva"]
@@ -429,9 +436,10 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     # Their payments are in the sample GCash history; a reset deletes all four orders and seeds them again.
     history = client.get("/api/demo/sample-statement", headers=SELLER)
     assert history.status_code == 200 and history.headers["content-type"] == "application/pdf"
-    assert len(store.docs[f"stores/{config.STORE}/demoUsers/u1"]["samples"]) == 3
-    assert client.post("/api/demo/reset", headers=SELLER).json() == {"deleted_chats": 8, "deleted_orders": 5}
-    assert len(client.get("/api/orders", headers=SELLER).json()) == 4 and len(client.get("/api/conversations", headers=SELLER).json()) == 8
+    gcash_paid = 3 + sum(len(h) for name, h in demo.HISTORY.items() if name != "Dan Cortez")  # Dan paid his by card
+    assert len(store.docs[f"stores/{config.STORE}/demoUsers/u1"]["samples"]) == gcash_paid
+    assert client.post("/api/demo/reset", headers=SELLER).json() == {"deleted_chats": 8, "deleted_orders": len(listed) + 1}
+    assert len(client.get("/api/orders", headers=SELLER).json()) == len(listed) and len(client.get("/api/conversations", headers=SELLER).json()) == 8
 
 
 def test_catalog_edit_photos_demo_read_only_and_notes_on_drafts(monkeypatch, seller):

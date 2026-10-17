@@ -40,7 +40,6 @@ const pct = (r: number | null) => (r == null ? 'n/a' : `${Math.round(r * 100)}%`
 type Returns = {
   days: number
   delivered: number
-  samples: number
   causes: Record<string, { count: number; rate: number | null; refunded: number; shipping: number; cost: number }>
   by: Record<'courier' | 'vehicle' | 'product', Record<string, Record<string, number>>>
 }
@@ -120,7 +119,6 @@ function ReturnsByCause({ r }: { r: Returns }) {
         <small>
           The cause is what you recorded on each claim; the custody check only suggests it. Cost is refunds made plus the courier fee of
           replacement and return shipments.
-          {r.samples > 0 && ` Includes ${r.samples} sample orders with simulated riders, for the demo.`}
         </small>
       </p>
     </div>

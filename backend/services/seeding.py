@@ -12,34 +12,43 @@ from services import chats
 def seed_demo(user: dict):
     batch = db.clients()[1].batch()
     now, uid, pay_to = datetime.now(UTC), user["uid"], config.DEMO_GCASH
-    for t in demo.seed(uid, now):
-        batch.set(chats.demo_threads().document(demo.new_id()), {**t, "hint": demo.HINTS.get(t["name"])})
     paid = []  # payments that reached the demo account, for the sample GCash history
+    # One stored packing photo per product, shared by the earlier sample orders.
+    shared = {
+        product: packing_sample(f"demo-{uid}", catalog.image(name))
+        for product, name in (("mug", "packing-mug-blue"), ("tote", "packing-tote-cream"), ("candle", "candle-vanilla"), ("pouch", "pouch-linen"))
+    }
 
-    def save(cid, ref, made, paid_at=None):
-        chat, order = made
-        batch.set(chats.demo_threads().document(cid), {**chat, "hint": demo.HINTS.get(chat["name"])})
+    def put_order(ref, order, name, paid_at=None):
         batch.set(ref, order)
         batch.set(ref.collection("versions").document("1"), db.version_doc(order["draft"], "demo_seed", demo.SHOP))
-        if m := order.get("manual_payment"):
+        if (m := order.get("manual_payment")) and m.get("status") == "seller_confirmed":
             paid.append(
-                {
-                    "reference": m["confirmed"]["reference"],
-                    "amount": m["amount"],
-                    "at": paid_at or m["requested_at"],
-                    "sender": samples.sender(chat["name"]),
-                }
+                {"reference": m["confirmed"]["reference"], "amount": m["amount"], "at": paid_at or m["requested_at"], "sender": samples.sender(name)}
             )
 
+    def save(cid, chat, orders):
+        """A chat with its earlier sample orders first (their messages before the chat's own), then its own orders."""
+        refs = [db.orders().document() for _ in demo.HISTORY.get(chat["name"], [])]
+        earlier, past = demo.history(uid, cid, chat["name"], now, [r.id for r in refs], shared, pay_to)
+        batch.set(chats.demo_threads().document(cid), {**chat, "messages": earlier + chat["messages"], "hint": demo.HINTS.get(chat["name"])})
+        for ref, order in zip(refs, past):
+            put_order(ref, order, chat["name"])
+        for ref, order, paid_at in orders:
+            put_order(ref, order, chat["name"], paid_at)
+
+    for t in demo.seed(uid, now):
+        save(demo.new_id(), t, [])
+
     cid = demo.new_id()
-    save(cid, db.orders().document(), demo.returning(uid, cid, now))
+    chat, order = demo.returning(uid, cid, now)
+    save(cid, chat, [(db.orders().document(), order, None)])
 
     cid, ref = demo.new_id(), db.orders().document()
     paid_at, reference = now - timedelta(days=10), samples.new_reference()
     receipt = chats.demo_attachment(samples.receipt_png(25000, reference, paid_at, samples.PAY_TO_NAME, samples.PAY_TO_MOBILE), "image/png")
-    save(
-        cid, ref, demo.repeat(uid, cid, ref.id, now, receipt, packing_sample(ref.id, catalog.image("packing-tote-cream")), pay_to, reference), paid_at
-    )
+    chat, order = demo.repeat(uid, cid, ref.id, now, receipt, packing_sample(ref.id, catalog.image("packing-tote-cream")), pay_to, reference)
+    save(cid, chat, [(ref, order, paid_at)])
 
     # Her ID starts with the code on the packing label in her videos, so the claim review's label check finds her order's code.
     cid, ref, claim_id = demo.new_id(), db.orders().document(demo.LABEL_CODE.lower() + secrets.token_hex(8)), secrets.token_hex(6)
@@ -47,10 +56,12 @@ def seed_demo(user: dict):
     packed = packing_sample(ref.id, catalog.image("packing-mug-blue")), packing_sample(ref.id, catalog.video("packing-labelled"), "video/mp4")
     sent = chats.demo_attachment(cracked, "image/jpeg"), chats.demo_attachment(unboxing, "video/mp4")
     media = [claim_sample(ref.id, claim_id, cracked), claim_sample(ref.id, claim_id, unboxing, "video/mp4")]
-    save(cid, ref, demo.damaged(uid, cid, ref.id, now, packed, sent, claim_id, media, pay_to, samples.new_reference()))
+    chat, order = demo.damaged(uid, cid, ref.id, now, packed, sent, claim_id, media, pay_to, samples.new_reference())
+    save(cid, chat, [(ref, order, None)])
 
     cid, ref = demo.new_id(), db.orders().document()
-    save(cid, ref, demo.to_pack(uid, cid, now, packing_sample(ref.id, catalog.image("packing-tote-cream", blur=8)), pay_to, samples.new_reference()))
+    chat, order = demo.to_pack(uid, cid, now, packing_sample(ref.id, catalog.image("packing-tote-cream", blur=8)), pay_to, samples.new_reference())
+    save(cid, chat, [(ref, order, None)])
 
     batch.set(db.store_doc().collection("demoUsers").document(uid), {"samples": firestore.ArrayUnion(paid)}, merge=True)
     batch.commit()

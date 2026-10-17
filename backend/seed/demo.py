@@ -8,11 +8,11 @@ import secrets
 from datetime import datetime, timedelta
 
 from domain import claims as cases
-from domain import delivery, extraction
+from domain import custody, delivery, extraction, refunds, returns
 from domain import orders as rules
 from domain import packing as pack
 from domain import receipts as gcash
-from seed import catalog
+from seed import catalog, samples
 
 SHOP = "Demo shop"
 # Bea's order code, printed on the packing label in her sample videos (seed.make_videos): her order ID starts with it
@@ -426,62 +426,198 @@ def parse(chat: str) -> list[tuple[bool, str]]:
     return out
 
 
-# Sample delivery history for the Patterns tab. Real shops rarely see one Lalamove driver twice, but sellers who book a
-# Favourite Driver or keep a regular rider do; this shows what a driver card looks like then. Built in memory on each
-# Patterns load for a demo visitor, never stored, never listed with their orders, and labelled as sample data.
-SAMPLE_PREFIX = "sample-"
-# (rider, product, area, what happened: None, or (claim type, cause, outcome))
-SAMPLE_HISTORY = [
-    *[(0, "Tote bag (Cream)", "Quezon City", None)] * 3,
-    *[(0, "Ceramic mug (Blue)", "Pasig City", None)] * 3,
-    (1, "Ceramic mug (Blue)", "Makati City", ("damage", "courier_transit", "refund")),
-    (1, "Ceramic mug (White)", "Makati City", ("damage", "courier_transit", "replacement")),
-    (1, "Ceramic mug (Blue)", "Pasig City", ("damage", "courier_transit", "refund")),
-    *[(1, "Tote bag (Black)", "Quezon City", None)] * 3,
-    (2, "Ceramic mug (White)", "Mandaluyong City", ("damage", "unknown", "partial_refund")),
-    (2, "Tote bag (Cream)", "Quezon City", ("wrong_item", "seller_error", "replacement")),
-    *[(2, "Scented soy candle (Vanilla)", "Pasig City", None)] * 4,
-]
+# Earlier orders for every demo chat except Ana's, so Orders and Patterns have history to show. Each goes through the same
+# rules as a real one: drafted from its own messages, confirmed in the chat, paid, packed, sent by Lalamove's sandbox with a
+# simulated rider, received, and some with a claim decided and refunded. All within the last 26 days. Sample Rider 2 carried
+# three of the parcels that arrived crushed, so the Patterns tab has a driver card to show; the others carried one between them.
+# A chat's newest earlier order never has a claim: messages after it would be read as part of the order the demo drafts next.
+# (days ago, product, variant, quantity, rider (0-2), sandbox outcome, claim or None)
+# claim: (type, the customer's words, cause the seller recorded, action, partial amount in centavos, returned item or None)
+CUSTOMERS = {
+    "Mark Dizon": ("0918 555 0199", "45 Rizal Ave., Brgy. 3, Pasig City"),
+    "Dan Cortez": ("0918 555 0144", "14 Kamagong St., Brgy. San Isidro, Parañaque City"),
+    "Joy Santos": ("0927 555 0123", "Unit 5B, 88 Katipunan Ave., Quezon City"),
+    "Leah Cruz": ("0919 555 0177", "7 Sampaguita St., Brgy. Malamig, Mandaluyong City"),
+    "Rico Bautista": ("0917 555 0166", "23 Kalayaan Ave., Brgy. Pinyahan, Quezon City"),
+    "Bea Villanueva": ("0917 555 0188", "31 Molave St., Brgy. Bagong Ilog, Pasig City"),
+    "Nico Ramos": ("0918 555 0133", "9 Acacia Lane, Brgy. Kapitolyo, Pasig City"),
+}
+HISTORY = {
+    "Mark Dizon": [
+        (
+            24,
+            "mug",
+            "White",
+            1,
+            1,
+            "damaged",
+            ("damage", "The mug arrived with a crack down the side 😞 The box was crushed too.", "courier_transit", "refund", None, None),
+        ),
+        (
+            17,
+            "candle",
+            "Vanilla",
+            2,
+            2,
+            "delivered",
+            ("missing_item", "Only 1 candle was in the box, I ordered 2.", "unknown", "partial_refund", 22000, None),
+        ),
+        (9, "tote", "Black", 1, 0, "delivered", None),
+    ],
+    "Dan Cortez": [
+        (
+            22,
+            "mug",
+            "Blue",
+            1,
+            1,
+            "damaged",
+            ("damage", "The mug is broken, the box looks like something heavy sat on it.", "courier_transit", "refund", None, None),
+        ),
+        (12, "pouch", None, 2, 0, "delivered", None),
+    ],
+    "Joy Santos": [
+        (20, "tote", "Cream", 1, 0, "delivered", ("wrong_item", "I got the black tote, but I ordered cream.", "seller_error", "refund", None, None)),
+        (8, "pouch", None, 3, 2, "delivered", None),
+    ],
+    "Leah Cruz": [
+        (
+            26,
+            "candle",
+            "Lavender",
+            1,
+            2,
+            "delivered",
+            (
+                "damage",
+                "The candle jar has a crack, the box looked fine though.",
+                "unknown",
+                "partial_refund",
+                11000,
+                "The jar is cracked across the side; the box has no dent.",
+            ),
+        ),
+        (14, "candle", "Vanilla", 1, 0, "delivered", None),
+    ],
+    "Rico Bautista": [
+        (25, "mug", "Blue", 1, 1, "damaged", ("damage", "The mug arrived chipped and the box was dented.", "courier_transit", "refund", None, None)),
+        (18, "tote", "Cream", 1, 1, "delivered", None),
+    ],
+    "Bea Villanueva": [
+        (23, "candle", "Vanilla", 1, 2, "delivered", None),
+        (15, "tote", "Black", 1, 0, "delivered", None),
+        (6, "pouch", None, 1, 2, "delivered", None),
+    ],
+    "Nico Ramos": [
+        (21, "mug", "Blue", 2, 0, "delivered", None),
+        (11, "candle", "Vanilla", 1, 1, "delivered", None),
+    ],
+}
+NOUNS = {
+    "mug": ("ceramic mug", "ceramic mugs"),
+    "tote": ("tote bag", "tote bags"),
+    "candle": ("soy candle", "soy candles"),
+    "pouch": ("linen pouch", "linen pouches"),
+}
+PRICES = {p["id"]: p["variants"][0]["price"] for p in catalog.DEMO}
+NAMES = {p["id"]: p["name"] for p in catalog.DEMO}
 
 
-def sample_history(now: datetime) -> list[dict]:
-    out = []
-    for n, (rider, product, place, what) in enumerate(SAMPLE_HISTORY):
-        oid, fid, at = f"{SAMPLE_PREFIX}{n + 1}", f"{SAMPLE_PREFIX}f{n + 1}", now - timedelta(days=24 - n, hours=3)
-        name, variant = product.rsplit(" (", 1)
-        driver_id, rider_name, plate = delivery.SANDBOX_DRIVERS[rider]
-        f = {
-            "id": fid,
-            "courier": "lalamove",
-            "status": "delivered",
-            "quotation": {"service": "MOTORCYCLE", "price": 12000, "livemode": False},
-            "driver_id": driver_id,
-            "driver": delivery.driver_record("simulated", driver_id, rider_name, plate, at),
-            "events": [],
-            "created_at": at,
+def rider_shipment_id(order_id: str, rider: int) -> str:
+    """A shipment ID that the sandbox's rider pick maps to this rider, so each sample parcel has the rider the history wants."""
+    n = 0
+    while delivery.sandbox_driver(f"{order_id}-{n}", None)["driver_id"] != delivery.SANDBOX_DRIVERS[rider][0]:
+        n += 1
+    return f"{order_id}-{n}"
+
+
+def history(owner: str, conversation_id: str, name: str, now: datetime, ids: list[str], photos: dict, pay_to: dict) -> tuple[list[dict], list[dict]]:
+    """This customer's earlier orders and the chat messages they came from, oldest first. ids: an order ID for each.
+    photos: a stored packing photo by product, shared by the sample orders."""
+    chat, orders = [], []
+    if name not in HISTORY:
+        return chat, orders
+    phone, address = CUSTOMERS[name]
+    for (days, product, variant, qty, rider, outcome, claim), oid in zip(HISTORY.get(name, []), ids):
+        start = (now - timedelta(days=days)).replace(hour=2, minute=0, second=0, microsecond=0)  # 10:00 in Manila
+        at = lambda minutes, start=start: start + timedelta(minutes=minutes)
+        noun = NOUNS[product][qty > 1]
+        what = f"{qty} {variant.lower() + ' ' if variant else ''}{noun}"
+        price = PRICES[product] // 100
+        lines = [
+            (False, f"Hi! Can I order {what}?"),
+            (True, f"Yes! The {(variant.lower() + ' ') if variant else ''}{NOUNS[product][0]} is ₱{price} each."),
+            (False, f"{name}, {phone}, {address}"),
+            (True, "Thanks! I'll send the order here so you can confirm it."),
+        ]
+        messages = [message(p, name, t, at(n)) for n, (p, t) in enumerate(lines)]
+        item = extraction.Item(
+            name=NAMES[product],
+            variant=variant,
+            quantity=qty,
+            unit_price_php=price,
+            price_source=2,
+            sources=[1],
+            catalog=catalog.line(product, variant),
+        )
+        order = confirmed(owner, conversation_id, messages, item, [name, phone, address], 3, at(3))
+        if name == "Dan Cortez":
+            # He paid by card through PayMongo's checkout (test mode): he has no GCash, as he says today.
+            total = order["draft"]["total"]
+            order["payment"] = {
+                "status": "verified",
+                "version": 1,
+                "amount": total,
+                "paid_amount": total,
+                "payment_id": f"pay_demo_{oid[:10]}",
+                "livemode": False,
+            }
+        else:
+            order |= gcash.request(order, pay_to, SHOP, at(5))
+            order |= gcash.confirm(
+                order, samples.new_reference(), SHOP, f"Found ₱{order['draft']['total'] / 100:,.2f} from {name} in our GCash history", at(20), False
+            )
+        order |= pack.add_photo(order, photos[product])
+        order |= pack.confirm_row(order, 1, SHOP, f"Checked by hand: {what}, no damage", at(60))
+        order |= pack.complete(order, SHOP, at(61))
+        quote = {
+            "id": f"q_{oid[:10]}",
+            "service": "MOTORCYCLE",
+            "price": 11000 + 1000 * rider,
+            "currency": "PHP",
+            "expires_at": at(70),
+            "stop_ids": ["pickup", "dropoff"],
+            "dropoff": None,
+            "distance_m": 9000 + 1500 * rider,
+            "livemode": False,
         }
-        order = {
-            "id": oid,
-            "sample": True,
-            "created_at": at,
-            "source": {"type": "demo_sample", "conversation_id": oid},
-            "draft": {"items": [{"name": name, "variant": variant.rstrip(")"), "quantity": 1}], "address": {"value": f"Sample St., {place}"}},
-            "fulfillment": f,
-            "claims": [],
-            "refunds": [],
-        }
-        if what:
-            kind, cause, action = what
-            cid, amount = f"{SAMPLE_PREFIX}c{n + 1}", (18000 if action == "refund" else 9000 if action == "partial_refund" else None)
-            decision = {"action": action, "amount": amount, "cause": cause, "by": SHOP, "at": at + timedelta(days=2)}
-            order["claims"] = [
-                {"id": cid, "type": kind, "fulfillment_id": fid, "created_at": at + timedelta(days=1), "status": "resolved", "decision": decision}
-            ]
-            if amount:
-                order["refunds"] = [{"id": f"{cid}-r", "claim_id": cid, "amount": amount, "status": "seller_reported"}]
-            if action == "replacement":
-                order["fulfillment_history"] = [
-                    {**f, "id": f"{fid}-r", "claim_id": cid, "created_at": at + timedelta(days=3), "driver": None, "driver_id": None}
-                ]
-        out.append(order)
-    return out
+        order |= delivery.start(order, rider_shipment_id(oid, rider), "lalamove", SHOP, at(65), quotation=quote)
+        order |= delivery.begin_booking(order, at(66), outcome)
+        order |= delivery.booked(order, f"SANDBOX{oid[:8].upper()}", None, at(66))
+        order |= delivery.sandbox_progress(order, at(67))
+        received = message(False, name, "Received, thank you!", at(60 * 24))
+        order |= delivery.acknowledge(order, "customer_chat", at(60 * 24))
+        chat += messages + [received]
+        if claim:
+            kind, words, cause, action, amount, returned = claim
+            said = message(False, name, words, at(60 * 26))
+            cid = f"c_{oid[:10]}"
+            order |= cases.open_claim(order, cid, cases.ClaimIn(type=kind, narrative=words), "customer_chat", SHOP, at(60 * 26 + 5), [], [said["id"]])
+            suggested = custody.check(order, cases.claim(order, cid))["suggested_cause"]
+            body = cases.DecisionIn(action=action, amount=amount, reason=words, cause=cause)
+            order |= cases.decide(order, cid, body, SHOP, at(60 * 27), suggested)
+            paid = cases.claim(order, cid)["decision"]["amount"]
+            if returned:
+                rid = f"r_{oid[:10]}"
+                order |= returns.request(order, rid, cid, SHOP, at(60 * 27 + 1))
+                order |= returns.sent(order, rid, "J&T", f"JT{oid[:8].upper()}", SHOP, at(60 * 50))
+                order |= returns.receive(order, rid, SHOP, at(60 * 74))
+                order |= returns.add_photo(order, rid, photos[product])
+                order |= returns.inspect(order, rid, returns.InspectionIn(result="damaged_as_reported", condition=returned), SHOP, at(60 * 75))
+            refund = refunds.ManualIn(claim_id=cid, amount=paid, method="outside_paymongo", reference=samples.new_reference())
+            order |= refunds.manual(order, f"op_{oid[:10]}", refund, SHOP, at(60 * 76))
+            order |= cases.resolve(order, cid, "", SHOP, at(60 * 77))
+            reply = message(True, SHOP, f"So sorry, {name.split()[0]}! We've sent ₱{paid / 100:,.2f} back to you by GCash.", at(60 * 77))
+            chat += [said, reply]
+        orders.append(order)
+    return chat, orders

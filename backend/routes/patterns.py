@@ -7,17 +7,14 @@ from pydantic import BaseModel, Field
 
 from core import auth, db
 from domain import patterns
-from seed import demo
 
 router = APIRouter()
 
 
 # Patterns. Recomputed on every load from the store's own orders.
 def visible_orders(user: dict) -> list[dict]:
-    """The orders patterns are counted from. A demo visitor's include the sample delivery history (never stored)."""
     # ponytail: reads every order on each load; keep a rolling aggregate when a store has thousands of orders
-    found = [{**o, "id": d.id} for d in db.orders().stream() if auth.visible(o := d.to_dict(), user)]
-    return found + (demo.sample_history(datetime.now(UTC)) if user.get("demo") else [])
+    return [{**o, "id": d.id} for d in db.orders().stream() if auth.visible(o := d.to_dict(), user)]
 
 
 def pattern_cards(days: int, user: dict) -> list[dict]:
@@ -33,9 +30,7 @@ def list_patterns(days: int = 30, user: dict = Depends(auth.current_user)):
 
 @router.get("/api/patterns/returns")
 def returns_by_cause(days: int = 30, user: dict = Depends(auth.current_user)):
-    found = visible_orders(user)
-    summary = patterns.returns_summary(found, datetime.now(UTC), max(1, min(days, 365)))
-    return {**summary, "samples": sum(1 for o in found if o.get("sample"))}
+    return patterns.returns_summary(visible_orders(user), datetime.now(UTC), max(1, min(days, 365)))
 
 
 @router.get("/api/orders/{order_id}/patterns")
