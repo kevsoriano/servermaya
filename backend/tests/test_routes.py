@@ -366,7 +366,6 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
 
     chats = {c["customer"]["name"]: c for c in client.get("/api/conversations", headers=SELLER).json()}  # the first visit seeds
     assert len(chats) == 8 and chats["Bea Villanueva"]["order_actions"] == ["Review a customer claim"]
-    assert {n: c["hint"] for n, c in chats.items()} == demo.HINTS  # every seeded chat says what to try in it
     assert chats["Nico Ramos"]["order_actions"] == ["Ready to pack"] and chats["Rico Bautista"]["order_actions"] == []
     listed = client.get("/api/orders", headers=SELLER).json()  # newest first
     orders = {o["draft"]["recipient_name"]["value"]: o for o in reversed(listed)}  # each customer's newest order
@@ -420,7 +419,7 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     assert last["from_page"] and last["quick_replies"] == ["Confirm #ANA1 v1"]
     client.post(f"/api/conversations/{ana}/customer", json={"text": "Confirm #ANA1 v1"}, headers=SELLER)
     assert client.get("/api/orders/ana1", headers=SELLER).json()["confirmations"][-1]["by"] == "chat"
-    # Ask for GCash payment sends the instructions in the chat itself, with the demo shop's account and the total
+    # Send GCash QR code sends the instructions in the chat itself, with the demo shop's account and the total
     assert client.post("/api/orders/ana1/gcash/request", headers=SELLER).json()["manual_payment"]["status"] == "requested"
     told, qr = client.get(f"/api/conversations/{ana}", headers=SELLER).json()[-2:]
     assert told["from_page"] and told["text"].startswith("To pay by GCash, send ₱500.00 to Juan Dela Cruz, 0917 123 4567")

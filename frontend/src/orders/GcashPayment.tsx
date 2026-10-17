@@ -88,11 +88,14 @@ export default function GcashPayment({
   onChange,
   write,
   onSent,
+  bare,
 }: {
   order: Order
   onChange: (o: Order) => void
   write: (text: string) => void
   onSent?: () => void
+  /** Inside the Verify pane's next step: no box or heading, and before a request only its two buttons, beside the PayMongo one. */
+  bare?: boolean
 }) {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -172,21 +175,34 @@ export default function GcashPayment({
   const historyDoubt = !!history?.checks.some((c) => c.result !== 'pass')
   const doubtful = !matching || matching.checks.some((c) => c.result !== 'pass') || historyDoubt
 
+  const choices = (
+    <>
+      <button disabled={!!busy} onClick={ask}>
+        Send GCash QR code
+      </button>{' '}
+      <button
+        disabled={!!busy}
+        onClick={saysPaid}
+        title="They sent GCash before you asked: their receipts count from the start of the conversation"
+      >
+        Already paid by GCash (outside the chat)
+      </button>
+    </>
+  )
+  if (bare && !current)
+    return (
+      <>
+        {choices}
+        {error && <p role="alert">{error}</p>}
+        {busy && <p role="status">{busy}</p>}
+      </>
+    )
+
   return (
-    <div className={current?.status === 'seller_confirmed' ? undefined : 'claim'}>
-      <h3>Direct GCash</h3>
+    <div className={bare || current?.status === 'seller_confirmed' ? undefined : 'claim'}>
+      {!bare && <h3>Direct GCash</h3>}
       {m && !current && <p>A GCash request was made for version {m.version}. The order has changed since; ask again for this version.</p>}
-      {!current && (
-        <p>
-          For customers who will not use the payment link.{' '}
-          <button disabled={!!busy} onClick={ask}>
-            Ask for GCash payment
-          </button>{' '}
-          <button disabled={!!busy} onClick={saysPaid}>
-            They say they already paid
-          </button>
-        </p>
-      )}
+      {!current && <p>For customers who will not use the payment link. {choices}</p>}
       {current && current.kind !== 'says_paid' && current.status !== 'seller_confirmed' && (
         <p>
           <small>

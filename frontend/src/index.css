@@ -481,6 +481,11 @@ mark.status.confirmed {
   max-width: 44rem;
 }
 
+/* The Orders tab's open order uses the room for its two columns. */
+.side.wide > .order {
+  max-width: 80rem;
+}
+
 .profile {
   display: grid;
   justify-items: center;
@@ -1031,4 +1036,91 @@ mark.source.provider {
 .from-catalog {
   display: block;
   color: var(--muted);
+}
+
+/* Order workspace (Orders tab): the evidence beside the stages that act on it. One column, evidence first, when narrow. */
+.workspace {
+  display: grid;
+  gap: 1.5rem;
+}
+
+@media (min-width: 1200px) {
+  .workspace {
+    grid-template-columns: minmax(0, 1.2fr) minmax(18rem, 1fr);
+    grid-template-areas: 'stages evidence';
+    align-items: start;
+  }
+
+  .workspace > .stages {
+    grid-area: stages;
+  }
+
+  .workspace > .evidence {
+    grid-area: evidence;
+  }
+}
+
+/* Verify pane (beside a chat): one line per guardrail, then the one step due now. */
+.verify-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 0.5rem;
+}
+
+.verify-head button {
+  flex: none;
+}
+
+.gates {
+  list-style: none;
+  margin: 0.75rem 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+
+.gates li {
+  display: grid;
+  grid-template-columns: 1.1rem 5.5rem 1fr;
+  gap: 0.25rem;
+}
+
+.gates li.ok > span:first-child {
+  color: var(--ok);
+}
+
+.gates li.warn {
+  color: var(--warn);
+}
+
+.gates li.off,
+.gates li.todo > span:first-child {
+  color: var(--muted);
+}
+
+.verify .next {
+  padding: 0.75rem;
+  border-radius: 10px;
+  background: var(--hover);
+}
+
+.verify .next h4 {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Equal options in a next step, such as how the customer pays. */
+.verify .choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.verify .choices > div {
+  flex-basis: 100%;
 }

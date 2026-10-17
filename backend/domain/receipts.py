@@ -327,7 +327,7 @@ def conversation_start(order: dict) -> datetime:
     walk(order.get("draft"))
     found = [times[i] for i in cited if i in times] or list(times.values())
     if not found:
-        raise Refused("This order has no chat messages to date a payment from. Ask for GCash payment instead.")
+        raise Refused("This order has no chat messages to date a payment from. Send the GCash QR code instead.")
     return min(found)
 
 
@@ -370,7 +370,7 @@ def request(order: dict, pay_to: dict, by: str, now: datetime, says_paid: bool =
 def current(order: dict) -> dict:
     m = order.get("manual_payment")
     if not m or m["version"] != order["version"] or order["status"] != "confirmed":
-        raise Refused("Ask for GCash payment on this version of the order first")
+        raise Refused("Send the GCash QR code for this version of the order first")
     return m
 
 

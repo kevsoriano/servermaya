@@ -117,7 +117,7 @@ export default function Reply({ conversationId, text, setText, orderId, until, o
           <p className="samples">
             <small>
               Sample GCash receipts unlock once the seller asks for GCash: create the draft order, send it for confirmation, tap Confirm as
-              the customer, then press Ask for GCash payment or They say they already paid.
+              the customer, then press Send GCash QR code or Already paid by GCash (outside the chat).
             </small>
           </p>
         ))}

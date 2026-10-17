@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { load } from '../lib/firebase'
 import { peso, STATUS } from '../lib/format'
-import OrderView, { type Order } from '../orders/OrderView'
+import type { Order } from '../orders/OrderView'
+import VerifyPanel from '../orders/VerifyPanel'
 import Reply from './Reply'
 import ScreenshotView from './ScreenshotView'
 import Signals from './Signals'
@@ -17,8 +18,6 @@ type Conversation = {
   reply_until: string | null
   order_actions: string[]
   demo?: boolean
-  /** Seeded demo chats: what to try in this one, shown as steps above the open chat. */
-  hint?: { short: string; steps: string } | null
 }
 type Message = {
   id: string
@@ -196,7 +195,7 @@ function pending(c: Conversation) {
 
 const done = (o: Order) => o.status === 'cancelled' || o.receipt?.status === 'customer_confirmed'
 
-export default function Conversations({ replyHours }: { replyHours: number }) {
+export default function Conversations({ replyHours, onOpenOrder }: { replyHours: number; onOpenOrder: (id: string) => void }) {
   const [list, setList] = useState<Conversation[]>()
   const [openId, setOpenId] = useState<string>()
   const [messages, setMessages] = useState<Message[]>()
@@ -350,10 +349,6 @@ export default function Conversations({ replyHours }: { replyHours: number }) {
   const customerWroteSince = !!messages?.some(
     (m) => !m.from_page && !taps.has(m.text.trim()) && (!lastDrafted || Date.parse(m.created_time) > Date.parse(lastDrafted)),
   )
-  // The chat as far as the selected order goes: a newer order's messages are about that one.
-  const newer = orders && order && orders[orders.findIndex((o) => o.id === order.id) - 1]
-  const cutoff = Date.parse(newer?.messages[0]?.created_time ?? '')
-  const orderChat = messages?.filter((m) => !(Date.parse(m.created_time) >= cutoff))
   const customer = thread?.customer
   const name = customer?.name ?? 'Unknown'
 
@@ -465,9 +460,18 @@ export default function Conversations({ replyHours }: { replyHours: number }) {
             <Avatar name={name} src={customer?.picture} />
             <strong>{name}</strong>
           </div>
-          {orders && (orders.length > 1 || orders.some(done)) && (
+          {messages.length > 0 && <Signals conversationId={openId} messages={messages} latest={messages.at(-1)?.id} />}
+          {order && <VerifyPanel order={order} onChange={orderChanged} onSent={reloadMessages} onOpen={onOpenOrder} chat={messages} />}
+          {messages.length > 0 && orders && (!orders.length || customerWroteSince || drafting) && (
             <div className="block">
-              <h3>Orders in this chat</h3>
+              <button className={openOrder ? undefined : 'primary'} onClick={createDraft} disabled={drafting}>
+                {drafting ? 'Reading the conversation…' : orders.length ? '+ New order from the newer messages' : '+ Create draft order'}
+              </button>
+            </div>
+          )}
+          {orders && orders.length > 1 && (
+            <details className="block">
+              <summary>Orders in this chat ({orders.length})</summary>
               <ul className="chat-orders">
                 {orders.map((o) => (
                   <li key={o.id}>
@@ -488,18 +492,8 @@ export default function Conversations({ replyHours }: { replyHours: number }) {
                   </li>
                 ))}
               </ul>
-            </div>
+            </details>
           )}
-          {messages.length > 0 && orders && (!orders.length || customerWroteSince || drafting) && (
-            <div className="block">
-              {!orders.length && <h3>Order</h3>}
-              <button className={openOrder ? undefined : 'primary'} onClick={createDraft} disabled={drafting}>
-                {drafting ? 'Reading the conversation…' : orders.length ? '+ New order from the newer messages' : '+ Create draft order'}
-              </button>
-            </div>
-          )}
-          {order && <OrderView order={order} onChange={orderChanged} checks={false} chat={orderChat} onSent={reloadMessages} />}
-          {messages.length > 0 && <Signals conversationId={openId} messages={messages} latest={messages.at(-1)?.id} />}
         </aside>
       )}
       {viewing && (

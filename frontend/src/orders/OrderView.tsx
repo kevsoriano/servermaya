@@ -194,6 +194,97 @@ export default function OrderView({
   const setItem = (n: number, patch: Partial<Form['items'][number]>) =>
     setForm((f) => f && { ...f, items: f.items.map((i, k) => (k === n ? { ...i, ...patch } : i)) })
 
+  const stages = !form && order.status !== 'cancelled' && (
+    <>
+      {order.missing.length > 0 && <p>Before asking the customer to confirm, fill in: {order.missing.join(', ')}.</p>}
+      {(order.status === 'confirmed' || payment) && (
+        <div className={payment?.status === 'verified' ? undefined : 'claim'}>
+          <h3>Payment {payment?.livemode === false && <mark>TEST</mark>}</h3>
+          {!payment && <p>Not requested yet. Send the PayMongo link in the chat, or ask for direct GCash below.</p>}
+          {fromChat(order) && order.status === 'confirmed' && (!payment || payment.status === 'expired') && (
+            <p>
+              <button className="primary" disabled={busy} onClick={() => call('/payment-link', { method: 'POST' }, true)}>
+                Send payment link in chat
+              </button>
+            </p>
+          )}
+          {payment?.status === 'pending' && <p>Waiting for payment of {peso(payment.amount)}. Nothing has been received.</p>}
+          {payment?.status === 'expired' && <p>The payment request expired unpaid. Send a new payment link in the chat.</p>}
+          {payment?.status === 'verified' && (
+            <p>
+              <strong>Verified by PayMongo:</strong> {peso(payment.paid_amount ?? null)} received ({payment.payment_id}).
+              {payment.version !== order.version && (
+                <> This was for version {payment.version}; the order has changed since and needs review.</>
+              )}
+            </p>
+          )}
+          {payment?.status === 'mismatched' && (
+            <p>
+              <strong>Needs review:</strong> {payment.problem}. Expected {peso(payment.amount)}, received{' '}
+              {peso(payment.paid_amount ?? null)} ({payment.payment_id}).
+            </p>
+          )}
+          {paymentClaim && payment?.status !== 'verified' && (
+            <p>
+              The customer says they already paid{paymentClaim.reference && <> (reference {paymentClaim.reference})</>}.{' '}
+              <strong>No matching verified payment.</strong> Verify before you ship.
+            </p>
+          )}
+          {order.payment_review?.map((r) => (
+            <p key={r.payment_id}>
+              <strong>Unexpected payment:</strong> {peso(r.paid_amount)} ({r.payment_id}). {r.reason}.
+            </p>
+          ))}
+          {payment && (
+            <p>
+              <small>
+                {payment.checked_at
+                  ? `Last checked with PayMongo ${new Date(payment.checked_at).toLocaleString()}.`
+                  : 'Not checked with PayMongo yet.'}
+              </small>{' '}
+              <button disabled={busy} onClick={() => call('/check-payment', { method: 'POST' })}>
+                Recheck payment
+              </button>
+            </p>
+          )}
+        </div>
+      )}
+      <GcashPayment order={order} onChange={onChange} write={setMessage} onSent={onSent} />
+      <Packing order={order} onChange={onChange} />
+      <Dispatch order={order} onChange={onChange} onSent={onSent} chat={chat} />
+      <Claims order={order} onChange={onChange} write={setMessage} chat={chat} />
+      {fromChat(order) && message && (
+        <Reply conversationId={order.source.conversation_id} orderId={order.id} text={message} setText={setMessage} onSent={onSent} />
+      )}
+      <p className="actions">
+        <button onClick={() => setForm(toForm(draft))}>Edit</button>
+        {order.status === 'draft' && fromChat(order) && (
+          <button
+            className="primary"
+            disabled={busy || order.missing.length > 0}
+            onClick={() => call('/ask-confirmation', { method: 'POST' }, true)}
+          >
+            Send for confirmation in chat
+          </button>
+        )}
+        {order.status !== 'confirmed' && (
+          <button
+            disabled={busy || order.missing.length > 0}
+            onClick={() =>
+              confirm('Record that the customer agreed, without their own confirmation?') &&
+              call('/assert-confirmation', { method: 'POST' })
+            }
+          >
+            Customer agreed another way
+          </button>
+        )}
+        <button disabled={busy} onClick={cancel}>
+          Cancel order
+        </button>
+      </p>
+    </>
+  )
+
   return (
     <section className="order">
       <h2>
@@ -242,253 +333,171 @@ export default function OrderView({
         </p>
       )}
 
-      {form ? (
-        <form onSubmit={save}>
-          {form.items.map((i, n) => (
-            <fieldset key={n}>
-              <legend>Item {n + 1}</legend>
-              <label>
-                Name <input required value={i.name} onChange={(e) => setItem(n, { name: e.target.value })} />
-              </label>
-              <label>
-                Variant <input value={i.variant} onChange={(e) => setItem(n, { variant: e.target.value })} />
-              </label>
-              <label>
-                Quantity{' '}
-                <input
-                  required
-                  type="number"
-                  min="1"
-                  step="1"
-                  value={i.quantity}
-                  onChange={(e) => setItem(n, { quantity: e.target.value })}
-                />
-              </label>
-              <label>
-                Unit price (₱){' '}
-                <input type="number" min="0" step="0.01" value={i.price} onChange={(e) => setItem(n, { price: e.target.value })} />
-              </label>
-              <button type="button" onClick={() => setForm({ ...form, items: form.items.filter((_, k) => k !== n) })}>
-                Remove item
-              </button>
-            </fieldset>
-          ))}
-          <button
-            type="button"
-            onClick={() => setForm({ ...form, items: [...form.items, { name: '', variant: '', quantity: '1', price: '' }] })}
-          >
-            Add item
-          </button>
-          {FIELDS.map(([key, label]) => (
-            <label key={key}>
-              {label} <input value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })} />
-            </label>
-          ))}
-          {order.status !== 'draft' && <p>Saving a change creates a new version, and the customer will need to confirm again.</p>}
-          <button disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>{' '}
-          <button type="button" onClick={() => setForm(undefined)}>
-            Cancel
-          </button>
-        </form>
-      ) : (
-        <>
-          {!!order.catalog_notes?.length && (
-            <ul className="catalog-notes">
-              {order.catalog_notes.map((n) => (
-                <li key={n}>{n}</li>
-              ))}
-            </ul>
-          )}
-          <table>
-            <thead>
-              <tr>
-                <th>Item</th>
-                <th>Qty</th>
-                <th>Unit price</th>
-              </tr>
-            </thead>
-            <tbody>
-              {draft.items.map((i, n) => (
-                <tr key={n}>
-                  <td>
-                    {i.name}
-                    {i.variant && ` (${i.variant})`}
-                    {src(i.sources)}
-                  </td>
-                  <td>{i.quantity}</td>
-                  <td>
-                    {peso(i.unit_price)}
-                    {i.price_withheld && <small className="withheld"> None of your messages states this price. Enter it with Edit.</small>}
-                    {i.price_from === 'catalog' && (
-                      <small className="from-catalog"> From your catalog: no message states this price.</small>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr>
-                <th colSpan={2}>Total</th>
-                <td>{draft.total === null ? 'Unknown' : peso(draft.total)}</td>
-              </tr>
-            </tfoot>
-          </table>
-          <dl>
-            {FIELDS.map(([key, label]) => (
-              <div key={key}>
-                <dt>{label}</dt>
-                <dd>
-                  {draft[key].value ? (
-                    <>
-                      {draft[key].value}
-                      {draft[key].from_order ? (
-                        <sup title="Not said in this part of the chat: copied from this customer's earlier order, which they confirmed. Check it is still right.">
-                          {' '}
-                          [earlier order]
-                        </sup>
-                      ) : (
-                        src(draft[key].sources)
-                      )}
-                    </>
-                  ) : (
-                    <em>Missing</em>
-                  )}
-                </dd>
-              </div>
-            ))}
-          </dl>
-          <p>
-            <small>Numbers in brackets are the chat messages each value came from.</small>
-          </p>
-          {cited.length > 0 && (
-            <details className="cited">
-              <summary>Cited messages ({cited.length})</summary>
-              {cited.map(({ n, m }) => (
-                <blockquote key={m.id}>
-                  <strong>
-                    [{n}] {m.from_page ? 'You' : 'Customer'}:
-                  </strong>{' '}
-                  {m.text}
-                </blockquote>
-              ))}
-            </details>
-          )}
-        </>
-      )}
-
-      {checks && fromChat(order) && <Signals conversationId={order.source.conversation_id} messages={messages} />}
-      {!fromChat(order) &&
-        draft.claims.map((c, n) => (
-          <p key={n} className="claim">
-            <strong>Unverified {c.kind} claim.</strong> {c.text}
-            {src(c.sources)}
-            {c.reference && <> Reference: {c.reference}.</>}
-            {c.pressure && <> The customer is asking you to act before this is verified.</>}
-          </p>
-        ))}
-      {draft.clarification_questions.length > 0 && (
-        <>
-          <h3>Ask the customer</h3>
-          <ul>
-            {draft.clarification_questions.map((q) => (
-              <li key={q}>{q}</li>
-            ))}
-          </ul>
-          <button onClick={() => setMessage(draft.clarification_questions.join('\n'))}>Write these to the customer</button>
-        </>
-      )}
-
       {error && <p role="alert">{error}</p>}
-      {!form && order.status !== 'cancelled' && (
-        <>
-          {order.missing.length > 0 && <p>Before asking the customer to confirm, fill in: {order.missing.join(', ')}.</p>}
-          {(order.status === 'confirmed' || payment) && (
-            <div className={payment?.status === 'verified' ? undefined : 'claim'}>
-              <h3>Payment {payment?.livemode === false && <mark>TEST</mark>}</h3>
-              {!payment && <p>Not requested yet. Send the PayMongo link in the chat, or ask for direct GCash below.</p>}
-              {fromChat(order) && order.status === 'confirmed' && (!payment || payment.status === 'expired') && (
-                <p>
-                  <button className="primary" disabled={busy} onClick={() => call('/payment-link', { method: 'POST' }, true)}>
-                    Send payment link in chat
+      {/* The workspace: the evidence (what was agreed, cited to the chat, and the checks) beside the stages that act on it.
+          One column when narrow or when there is nothing to act on, evidence first. */}
+      <div className={stages ? 'workspace' : undefined}>
+        <div className="evidence">
+          {form ? (
+            <form onSubmit={save}>
+              {form.items.map((i, n) => (
+                <fieldset key={n}>
+                  <legend>Item {n + 1}</legend>
+                  <label>
+                    Name <input required value={i.name} onChange={(e) => setItem(n, { name: e.target.value })} />
+                  </label>
+                  <label>
+                    Variant <input value={i.variant} onChange={(e) => setItem(n, { variant: e.target.value })} />
+                  </label>
+                  <label>
+                    Quantity{' '}
+                    <input
+                      required
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={i.quantity}
+                      onChange={(e) => setItem(n, { quantity: e.target.value })}
+                    />
+                  </label>
+                  <label>
+                    Unit price (₱){' '}
+                    <input type="number" min="0" step="0.01" value={i.price} onChange={(e) => setItem(n, { price: e.target.value })} />
+                  </label>
+                  <button type="button" onClick={() => setForm({ ...form, items: form.items.filter((_, k) => k !== n) })}>
+                    Remove item
                   </button>
-                </p>
-              )}
-              {payment?.status === 'pending' && <p>Waiting for payment of {peso(payment.amount)}. Nothing has been received.</p>}
-              {payment?.status === 'expired' && <p>The payment request expired unpaid. Send a new payment link in the chat.</p>}
-              {payment?.status === 'verified' && (
-                <p>
-                  <strong>Verified by PayMongo:</strong> {peso(payment.paid_amount ?? null)} received ({payment.payment_id}).
-                  {payment.version !== order.version && (
-                    <> This was for version {payment.version}; the order has changed since and needs review.</>
-                  )}
-                </p>
-              )}
-              {payment?.status === 'mismatched' && (
-                <p>
-                  <strong>Needs review:</strong> {payment.problem}. Expected {peso(payment.amount)}, received{' '}
-                  {peso(payment.paid_amount ?? null)} ({payment.payment_id}).
-                </p>
-              )}
-              {paymentClaim && payment?.status !== 'verified' && (
-                <p>
-                  The customer says they already paid{paymentClaim.reference && <> (reference {paymentClaim.reference})</>}.{' '}
-                  <strong>No matching verified payment.</strong> Verify before you ship.
-                </p>
-              )}
-              {order.payment_review?.map((r) => (
-                <p key={r.payment_id}>
-                  <strong>Unexpected payment:</strong> {peso(r.paid_amount)} ({r.payment_id}). {r.reason}.
-                </p>
+                </fieldset>
               ))}
-              {payment && (
-                <p>
-                  <small>
-                    {payment.checked_at
-                      ? `Last checked with PayMongo ${new Date(payment.checked_at).toLocaleString()}.`
-                      : 'Not checked with PayMongo yet.'}
-                  </small>{' '}
-                  <button disabled={busy} onClick={() => call('/check-payment', { method: 'POST' })}>
-                    Recheck payment
-                  </button>
-                </p>
+              <button
+                type="button"
+                onClick={() => setForm({ ...form, items: [...form.items, { name: '', variant: '', quantity: '1', price: '' }] })}
+              >
+                Add item
+              </button>
+              {FIELDS.map(([key, label]) => (
+                <label key={key}>
+                  {label} <input value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })} />
+                </label>
+              ))}
+              {order.status !== 'draft' && <p>Saving a change creates a new version, and the customer will need to confirm again.</p>}
+              <button disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>{' '}
+              <button type="button" onClick={() => setForm(undefined)}>
+                Cancel
+              </button>
+            </form>
+          ) : (
+            <>
+              {!!order.catalog_notes?.length && (
+                <ul className="catalog-notes">
+                  {order.catalog_notes.map((n) => (
+                    <li key={n}>{n}</li>
+                  ))}
+                </ul>
               )}
-            </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th>Qty</th>
+                    <th>Unit price</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {draft.items.map((i, n) => (
+                    <tr key={n}>
+                      <td>
+                        {i.name}
+                        {i.variant && ` (${i.variant})`}
+                        {src(i.sources)}
+                      </td>
+                      <td>{i.quantity}</td>
+                      <td>
+                        {peso(i.unit_price)}
+                        {i.price_withheld && (
+                          <small className="withheld"> None of your messages states this price. Enter it with Edit.</small>
+                        )}
+                        {i.price_from === 'catalog' && (
+                          <small className="from-catalog"> From your catalog: no message states this price.</small>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <th colSpan={2}>Total</th>
+                    <td>{draft.total === null ? 'Unknown' : peso(draft.total)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+              <dl>
+                {FIELDS.map(([key, label]) => (
+                  <div key={key}>
+                    <dt>{label}</dt>
+                    <dd>
+                      {draft[key].value ? (
+                        <>
+                          {draft[key].value}
+                          {draft[key].from_order ? (
+                            <sup title="Not said in this part of the chat: copied from this customer's earlier order, which they confirmed. Check it is still right.">
+                              {' '}
+                              [earlier order]
+                            </sup>
+                          ) : (
+                            src(draft[key].sources)
+                          )}
+                        </>
+                      ) : (
+                        <em>Missing</em>
+                      )}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+              <p>
+                <small>Numbers in brackets are the chat messages each value came from.</small>
+              </p>
+              {cited.length > 0 && (
+                <details className="cited">
+                  <summary>Cited messages ({cited.length})</summary>
+                  {cited.map(({ n, m }) => (
+                    <blockquote key={m.id}>
+                      <strong>
+                        [{n}] {m.from_page ? 'You' : 'Customer'}:
+                      </strong>{' '}
+                      {m.text}
+                    </blockquote>
+                  ))}
+                </details>
+              )}
+            </>
           )}
-          <GcashPayment order={order} onChange={onChange} write={setMessage} onSent={onSent} />
-          <Packing order={order} onChange={onChange} />
-          <Dispatch order={order} onChange={onChange} onSent={onSent} chat={chat} />
-          <Claims order={order} onChange={onChange} write={setMessage} chat={chat} />
-          {fromChat(order) && message && (
-            <Reply conversationId={order.source.conversation_id} orderId={order.id} text={message} setText={setMessage} onSent={onSent} />
+
+          {checks && fromChat(order) && <Signals conversationId={order.source.conversation_id} messages={messages} />}
+          {!fromChat(order) &&
+            draft.claims.map((c, n) => (
+              <p key={n} className="claim">
+                <strong>Unverified {c.kind} claim.</strong> {c.text}
+                {src(c.sources)}
+                {c.reference && <> Reference: {c.reference}.</>}
+                {c.pressure && <> The customer is asking you to act before this is verified.</>}
+              </p>
+            ))}
+          {draft.clarification_questions.length > 0 && (
+            <>
+              <h3>Ask the customer</h3>
+              <ul>
+                {draft.clarification_questions.map((q) => (
+                  <li key={q}>{q}</li>
+                ))}
+              </ul>
+              <button onClick={() => setMessage(draft.clarification_questions.join('\n'))}>Write these to the customer</button>
+            </>
           )}
-          <p className="actions">
-            <button onClick={() => setForm(toForm(draft))}>Edit</button>
-            {order.status === 'draft' && fromChat(order) && (
-              <button
-                className="primary"
-                disabled={busy || order.missing.length > 0}
-                onClick={() => call('/ask-confirmation', { method: 'POST' }, true)}
-              >
-                Send for confirmation in chat
-              </button>
-            )}
-            {order.status !== 'confirmed' && (
-              <button
-                disabled={busy || order.missing.length > 0}
-                onClick={() =>
-                  confirm('Record that the customer agreed, without their own confirmation?') &&
-                  call('/assert-confirmation', { method: 'POST' })
-                }
-              >
-                Customer agreed another way
-              </button>
-            )}
-            <button disabled={busy} onClick={cancel}>
-              Cancel order
-            </button>
-          </p>
-        </>
-      )}
+        </div>
+        {stages && <div className="stages">{stages}</div>}
+      </div>
     </section>
   )
 }

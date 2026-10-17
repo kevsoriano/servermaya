@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { load } from '../lib/firebase'
-import { peso, STATUS } from '../lib/format'
-import OrderView, { type Order } from './OrderView'
+import { fromChat, peso, STATUS } from '../lib/format'
+import OrderView, { type ChatMessage, type Order } from './OrderView'
 import { Avatar } from '../conversations/Conversations'
 
 /** Who the order's chat is with, when that is not the recipient (a gift, or ordering for someone else), so it can be found. */
@@ -11,16 +11,43 @@ function chatWith(o: Order) {
   return name && name.trim().toLowerCase() !== recipient?.trim().toLowerCase() ? name : null
 }
 
-export default function Orders() {
+/** The order workspace: every order, and the open one's stages beside its evidence. initial: the order to open, such as one
+ * opened from its chat. */
+export default function Orders({ initial }: { initial?: string }) {
   const [list, setList] = useState<Order[]>()
-  const [openId, setOpenId] = useState<string>()
+  const [openId, setOpenId] = useState(initial)
   const [error, setError] = useState('')
+  const [chat, setChat] = useState<{ id: string; messages: ChatMessage[] }>()
 
   useEffect(() => {
-    load<Order[]>('/orders').then(setList, (e) => setError(e.message))
-  }, [])
+    load<Order[]>('/orders').then(
+      // The list holds the newest orders: an older one opened from its chat is fetched and added.
+      (l) =>
+        !initial || l.some((o) => o.id === initial)
+          ? setList(l)
+          : load<Order>(`/orders/${initial}`).then(
+              (o) => setList([o, ...l]),
+              () => setList(l),
+            ),
+      (e) => setError(e.message),
+    )
+  }, [initial])
 
   const open = list?.find((o) => o.id === openId)
+  const conversation = open && fromChat(open) ? open.source.conversation_id : undefined
+  // The live chat, so a complaint there can become a claim and a pin the customer sent can be used. Reloaded after a send.
+  const [sends, setSends] = useState(0)
+  useEffect(() => {
+    if (!conversation) return
+    load<ChatMessage[]>(`/conversations/${conversation}`).then(
+      (m) => setChat({ id: conversation, messages: m }),
+      () => setChat(undefined),
+    )
+  }, [conversation, sends])
+  // The chat as far as the open order goes: a newer order's messages from the same chat are about that one.
+  const newer = open && list?.filter((o) => o.source.conversation_id === conversation && o.created_at > open.created_at).at(-1)
+  const cutoff = Date.parse(newer?.messages[0]?.created_time ?? '')
+  const orderChat = chat?.id === conversation ? chat?.messages.filter((m) => !(Date.parse(m.created_time) >= cutoff)) : undefined
 
   return (
     <div className="inbox two">
@@ -52,7 +79,13 @@ export default function Orders() {
       </aside>
       <section className="pane side wide">
         {open ? (
-          <OrderView key={open.id} order={open} onChange={(o) => setList(list?.map((x) => (x.id === o.id ? o : x)))} />
+          <OrderView
+            key={open.id}
+            order={open}
+            onChange={(o) => setList((l) => l?.map((x) => (x.id === o.id ? o : x)))}
+            chat={orderChat}
+            onSent={() => setSends((n) => n + 1)}
+          />
         ) : (
           <p className="empty">Pick an order to see it.</p>
         )}

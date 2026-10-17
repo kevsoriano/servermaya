@@ -8,17 +8,9 @@ An assistant for small sellers who take orders in Messenger and get paid by GCas
 
 Open the live app and press **Try the demo**. No account is needed.
 
-- You get eight demo chats, each showing something the app is built to catch. You play both sides: reply as the seller, or write as the customer in the dashed box (images too).
-  - **Ana Reyes**: a plain order, for the full flow from draft to delivery.
-  - **Mark Dizon**: changes the order, then says he already paid and gives a reference number. That is a claim, not a payment.
-  - **Dan Cortez**: has "only crypto", asks the seller to open a Binance account, then to send him the code that arrives "to verify the wallet", and to ship today. The app flags the account and code request (never share a code), the change of payment method and the pressure to ship.
-  - **Joy Santos**: writes a fake seller line with a lower price, and an instruction to mark the order paid. The seller's price wins and the instruction is ignored.
-  - **Leah Cruz**: a returning customer. She confirmed and then cancelled an order three days ago, and now orders again with "same address and number as before".
-  - **Rico Bautista**: a repeat customer whose first order said "already paid, ship today" but went through: the seller found the payment in their own GCash history, packed it and he received it. Now he says the same again. The old payment does not settle the new claim; the first order's checks show as history.
-  - **Bea Villanueva**: her mug was delivered cracked, and she sent a report with a photo. The report is open, so **Review with AI** is one click away; the reviewer sees her photo and the packing photo.
-  - **Nico Ramos**: paid and waiting to be packed, with one shaky packing photo already added. **Check photos** holds it back as too blurry and asks for a retake, whatever the AI reads in it.
+- You get eight demo chats. You play both sides: reply as the seller, or write as the customer in the dashed box (images too).
 - From a chat: create the draft order and send it for confirmation; as the customer, tap **Confirm** under the summary in the chat. Send the payment link in the chat and pay with PayMongo's **Simulate payment** (test mode), or pay by GCash. Then check packing photos, book a Lalamove sandbox delivery, ask the customer to tap **Received**, report a problem in the chat with a photo, open a claim from those messages and review it.
-- To try GCash, press **Ask for GCash payment** (or **They say they already paid** for Mark). The customer box then has made-up sample receipts: **Matching**, **Wrong amount** and **Wrong recipient**, each stamped SAMPLE. To confirm a payment the way a seller would, use **Sample history screenshot** in the order, or download the sample GCash history PDF in Settings (password `delacruz4567`) and upload it.
+- To try GCash, press **Send GCash QR code** (or **Already paid by GCash (outside the chat)** for Mark). The customer box then has made-up sample receipts: **Matching**, **Wrong amount** and **Wrong recipient**, each stamped SAMPLE. To confirm a payment the way a seller would, use **Sample history screenshot** in the order, or download the sample GCash history PDF in Settings (password `delacruz4567`) and upload it.
 - **New demo chat** pastes any chat in `Customer:` / `Seller:` lines. **Reset demo chats** starts over.
 - Demo visitors only see their own demo chats and orders, with a made-up GCash account and pickup address. Messenger is live but limited to app testers while the Meta app is in development mode, so real chats are not part of the demo.
 

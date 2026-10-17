@@ -153,57 +153,6 @@ TO_PACK = (
 )
 
 
-# What to try in each demo chat: a short line for the demo guide above the chat list, and the steps for the banner at the top
-# of the open chat. Button names match the app's.
-HINTS = {
-    "Ana Reyes": {
-        "short": "The whole flow, from draft order to delivery",
-        "steps": "A clean order: no checks should appear. Press + Create draft order, then Send for confirmation. As the customer, "
-        "tap Confirm under the summary in the chat. Press Send payment link, open the link in the chat and pay with PayMongo's "
-        "Simulate payment, then check the packing photos, ship, and ask her to tap Received. Report a problem as her in the chat, "
-        "with a photo, and open a claim from those messages.",
-    },
-    "Mark Dizon": {
-        "short": "Says he paid before any payment details were shared",
-        "steps": "Look at What to check: he says he paid and asks to ship today, and the app notes that no payment details had been "
-        "shared before his claim. Draft the order to see the payment stay unverified.",
-    },
-    "Dan Cortez": {
-        "short": "Asks you to open a crypto wallet and send him a code",
-        "steps": "Look at What to check: asking you to open a crypto wallet and send him a code is flagged, with the advice never to "
-        "share codes, along with the changed payment method and the pressure to ship.",
-    },
-    "Joy Santos": {
-        "short": "Plants a fake seller line and an instruction to the AI",
-        "steps": "Her message plants a fake seller line (₱100 each) and an instruction to mark the order paid. Press + Create draft "
-        "order: the seller's real price of ₱150 stays, and the instruction is flagged, not followed.",
-    },
-    "Leah Cruz": {
-        "short": 'Returning customer: "same address and number as before"',
-        "steps": 'She cancelled an order three days ago and now says "same address and number as before". Press + Create draft '
-        "order: only today's candles are drafted, her address and number are copied from the old order, marked as copied, "
-        "and your catalog notes that only 1 lavender candle is in stock.",
-    },
-    "Rico Bautista": {
-        "short": "Paid fine last time, says he paid again today",
-        "steps": 'His first order also said "already paid, ship today", and he was paid up. Look at What to check: today\'s claim '
-        "is still to verify, while the old one shows as history under From earlier orders.",
-    },
-    "Bea Villanueva": {
-        "short": "AI claim review with the shop's memory",
-        "steps": "She reported the crack in the chat with a photo and her unboxing video, and the claim was opened from those "
-        "messages; the seller also filmed packing it. Open her order and press Review with AI. Each video is checked for a cut, "
-        "and the agent reads the order's records and the shop's "
-        "past decisions from Memory Bank, and cites each one. Approve an outcome to add it to the shop's memory.",
-    },
-    "Nico Ramos": {
-        "short": "A packing photo too blurry to count",
-        "steps": "Open his order and press Check photos. The packing photo is too blurry to count anything in, so code holds it back "
-        "and asks for a retake, whatever the AI reads in it.",
-    },
-}
-
-
 # Gemini calls demo visitors may make in a Philippine day. A judge's full run is about 20. The total is the real ceiling:
 # anyone can make a new anonymous account, so only it bounds what the demo can cost (about $30 a day at Flash prices).
 AI_PER_VISITOR = 250

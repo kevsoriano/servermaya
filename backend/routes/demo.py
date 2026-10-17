@@ -104,7 +104,7 @@ def demo_sample_receipt(conversation_id: str, body: SampleReceipt, user: dict = 
         if m["status"] in ("requested", "claimed"):
             waiting.append(m)
     if not waiting:
-        raise HTTPException(409, "Ask for GCash payment on this chat's order first.")
+        raise HTTPException(409, "Send the GCash QR code on this chat's order first.")
     m = max(waiting, key=lambda m: m["requested_at"])
     now, ref = datetime.now(UTC), samples.new_reference()
     amount = m["amount"] - min(10000, m["amount"] // 2) if body.kind == "wrong_amount" else m["amount"]

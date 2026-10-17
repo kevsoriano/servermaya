@@ -25,6 +25,7 @@ export default function App() {
   const [me, setMe] = useState<Me>()
   const [error, setError] = useState('')
   const [tab, setTab] = useState<'conversations' | 'orders' | 'patterns' | 'settings'>('conversations')
+  const [orderId, setOrderId] = useState<string>() // the order to open in the Orders tab, such as one opened from its chat
 
   useEffect(
     () =>
@@ -85,7 +86,7 @@ export default function App() {
           <button onClick={() => setTab('conversations')} aria-current={tab === 'conversations'}>
             Conversations
           </button>
-          <button onClick={() => setTab('orders')} aria-current={tab === 'orders'}>
+          <button onClick={() => (setOrderId(undefined), setTab('orders'))} aria-current={tab === 'orders'}>
             Orders
           </button>
           <button onClick={() => setTab('patterns')} aria-current={tab === 'patterns'}>
@@ -106,9 +107,9 @@ export default function App() {
         </p>
       )}
       {tab === 'conversations' ? (
-        <Conversations replyHours={me.reply_hours ?? 24} />
+        <Conversations replyHours={me.reply_hours ?? 24} onOpenOrder={(id) => (setOrderId(id), setTab('orders'))} />
       ) : tab === 'orders' ? (
-        <Orders />
+        <Orders key={orderId} initial={orderId} />
       ) : tab === 'patterns' ? (
         <Patterns />
       ) : (
