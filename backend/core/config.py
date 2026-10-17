@@ -13,6 +13,17 @@ PAGE_ID = os.environ.get("MESSENGER_PAGE_ID", "")
 PAGE_TOKEN = os.environ.get("MESSENGER_PAGE_TOKEN", "")
 
 
+# The Messenger webhook: Meta signs each event with the app's secret, and checks the verify token once when it is set up.
+# Both empty: the webhook is off, and the inbox works by reading Messenger as before.
+MESSENGER_APP_SECRET = os.environ.get("MESSENGER_APP_SECRET", "")
+MESSENGER_VERIFY_TOKEN = os.environ.get("MESSENGER_VERIFY_TOKEN", "")
+
+
+# "1" only once Meta has granted the app the Human Agent permission (App Review). A person may then reply up to 7 days after
+# the customer's last message, tagged HUMAN_AGENT; without it, Messenger allows 24 hours. Every reply here is a seller's click.
+HUMAN_AGENT = os.environ.get("MESSENGER_HUMAN_AGENT", "") == "1"
+
+
 GRAPH = "https://graph.facebook.com"
 
 

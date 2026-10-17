@@ -214,3 +214,20 @@ def test_profile_pics_batched_cached_and_soft_failing(monkeypatch):
     messenger._pics["a"] = (0, "old")  # expired
     messenger.profile_pics(["a"])
     assert calls[-1] == "a" and messenger._pics["a"][1] == "https://pic/a"
+
+
+def test_human_agent_tag_lets_a_person_reply_for_seven_days_only_when_switched_on(monkeypatch):
+    from datetime import datetime, timedelta
+
+    now = datetime.now(UTC)
+    monkeypatch.setattr(config, "PAGE_ID", "99")
+    monkeypatch.setattr(messenger, "fetch_messages", lambda cid: [{"from_page": False, "created_time": (now - timedelta(hours=30)).isoformat()}])
+    monkeypatch.setattr(messenger, "graph", lambda *a, **k: {"participants": {"data": [{"id": "99"}, {"id": "psid7"}]}})
+    try:
+        chats.customer_to_reply("t_1")
+        raise AssertionError("30 hours after the customer's message, a plain reply is refused")
+    except HTTPException as e:
+        assert e.status_code == 409 and "24 hours" in e.detail
+    monkeypatch.setattr(config, "HUMAN_AGENT", True)
+    assert chats.customer_to_reply("t_1") == ("psid7", "HUMAN_AGENT")
+    assert chats.messaging("HUMAN_AGENT") == {"messaging_type": "MESSAGE_TAG", "tag": "HUMAN_AGENT"}

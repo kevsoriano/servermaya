@@ -4,11 +4,12 @@ import secrets
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import PlainTextResponse
 from google.cloud import firestore
 
 from core import config, db
-from integrations import lalamove, paymongo
-from services import deliveries, payments
+from integrations import lalamove, messenger, paymongo
+from services import chats, deliveries, payments
 
 router = APIRouter()
 
@@ -33,6 +34,34 @@ async def paymongo_webhook(request: Request):
         payment_id = (subject.get("attributes") or {}).get("payment_id") or (subject_id if subject.get("type") == "payment" else None)
         if payment_id:
             await run_in_threadpool(payments.reconcile_refunds_for, payment_id)
+    return {"received": True}
+
+
+@router.get("/api/webhooks/messenger")
+def messenger_verify(request: Request):
+    """Meta's one-time check when the webhook is set up: echo the challenge if the verify token is ours."""
+    q = request.query_params
+    token = config.MESSENGER_VERIFY_TOKEN
+    if not token or q.get("hub.mode") != "subscribe" or not hmac.compare_digest(q.get("hub.verify_token", ""), token):
+        raise HTTPException(403, "Verification failed")
+    return PlainTextResponse(q.get("hub.challenge", ""))
+
+
+@router.post("/api/webhooks/messenger")
+async def messenger_webhook(request: Request):
+    """Messages pushed by Meta. Only a tap on a Confirm or Received button is acted on, at once; everything else in the inbox
+    is still read from Messenger when a seller opens it. Retries are harmless: a confirmed order is not confirmed again."""
+    raw = await request.body()
+    if not config.MESSENGER_APP_SECRET:
+        raise HTTPException(503, "Webhook is not configured")
+    if not messenger.valid_signature(request.headers.get("X-Hub-Signature-256", ""), raw, config.MESSENGER_APP_SECRET):
+        raise HTTPException(401, "Bad signature")
+    try:
+        events = [e for entry in json.loads(raw).get("entry", []) for e in entry.get("messaging", [])]
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(400, "Unrecognised event")
+    for event in events:
+        await run_in_threadpool(chats.apply_tap, event)
     return {"received": True}
 
 

@@ -226,9 +226,14 @@ def test_chat_confirm_payment_link_received_and_claim_from_chat(monkeypatch, sel
     get = lambda: client.get("/api/orders/o1", headers=SELLER).json()
 
     # The summary goes out with a Confirm button naming the order and version; only a tap with exactly that text confirms.
-    assert post("/ask-confirmation").json()["status"] == "awaiting_confirmation"
+    order = post("/ask-confirmation").json()
+    assert order["status"] == "awaiting_confirmation" and order["asked"]["confirm"]["psid"] == "psid7"  # for the webhook's check
     message = sent[-1]["message"]
-    assert "Total: ₱500.00" in message["text"] and message["quick_replies"][0]["title"] == "Confirm #O1 v1"
+    assert "Total: ₱500.00" in message["text"] and message["quick_replies"][0] == {
+        "content_type": "text",
+        "title": "Confirm #O1 v1",
+        "payload": "confirm:o1:1",
+    }
     chat += [say("m2", "Confirm #O1 v0"), say("m3", "Confirm #O1 v1", page=True)]  # wrong version; the Page's own echo
     assert get()["status"] == "awaiting_confirmation"
     chat.append(say("m4", "Confirm #O1 v1"))
@@ -383,6 +388,12 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     given = " ".join(p.text for p in asked[0].contents[0].parts if p.text)
     assert "[CV1C]" in given and "checked in code against this order (#BEA7Q, Bea Villanueva): it matches" in given
     assert claim["review"]["read"] == ["order", "chat", "packing", "delivery"]  # Memory Bank is off here: past decisions unavailable
+    # Reviewed again: both video checks are kept by the videos' hashes, so neither video is watched a second time, and the
+    # agent still gets both checks.
+    before = len(asked)
+    client.post(f"/api/orders/{bea['id']}/claims/{bea['claims'][0]['id']}/review", headers=SELLER)
+    again = " ".join(p.text for p in asked[before].contents[0].parts if p.text)
+    assert len(watched) == 2 and "[CV1C]" in again and "it matches" in again
 
     # Nico: one click checks his packing photo, and code holds it back as too shaky, whatever Gemini read.
     nico = orders["Nico Ramos"]
@@ -452,3 +463,35 @@ def test_catalog_edit_photos_demo_read_only_and_notes_on_drafts(monkeypatch, sel
     assert [p["id"] for p in shown] == ["mug", "tote", "candle", "pouch"]
     assert client.get("/api/catalog/mug/photos/0", headers=SELLER).content == catalog.image("mug-blue")
     assert post("", json=mug).status_code == 403 and client.delete("/api/catalog/mug", headers=SELLER).status_code == 403
+
+
+def test_messenger_webhook_applies_a_tap_from_the_customer_it_was_sent_to(monkeypatch):
+    store, _ = fake_google(monkeypatch)
+    now = datetime.now(UTC)
+    asked = {"confirm": {"text": "Confirm #O1 v1", "version": 1, "at": now - timedelta(minutes=1), "psid": "psid7"}}
+    put_order(store, status="awaiting_confirmation", confirmations=[], payment=None, packing=None, asked=asked)
+    monkeypatch.setattr(config, "MESSENGER_VERIFY_TOKEN", "verify-me")
+    monkeypatch.setattr(config, "MESSENGER_APP_SECRET", "appsecret")
+
+    # Meta's one-time check when the webhook is set up
+    hub = lambda token: client.get(f"/api/webhooks/messenger?hub.mode=subscribe&hub.verify_token={token}&hub.challenge=42")
+    assert hub("wrong").status_code == 403 and hub("verify-me").text == "42"
+
+    def post(sender: str, payload: str, secret="appsecret", **message):
+        event = {
+            "sender": {"id": sender},
+            "timestamp": int(now.timestamp() * 1000),
+            "message": {"mid": "m_9", "quick_reply": {"payload": payload}, **message},
+        }
+        raw = json.dumps({"object": "page", "entry": [{"messaging": [event]}]})
+        sig = "sha256=" + hmac.new(secret.encode(), raw.encode(), hashlib.sha256).hexdigest()
+        return client.post("/api/webhooks/messenger", content=raw, headers={"X-Hub-Signature-256": sig})
+
+    assert post("psid7", "confirm:o1:1", secret="forged").status_code == 401
+    post("psid8", "confirm:o1:1")  # someone else tapping a forwarded button
+    post("psid7", "confirm:o1:0")  # an older version
+    post("psid7", "confirm:o1:1", is_echo=True)  # the Page's own message
+    post("psid7", "confirm:nope:1")  # no such order: ignored, not an error
+    assert saved(store)["status"] == "awaiting_confirmation"
+    assert post("psid7", "confirm:o1:1").json() == {"received": True}
+    assert saved(store)["status"] == "confirmed" and saved(store)["confirmations"][-1]["message_id"] == "m_9"

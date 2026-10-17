@@ -3,7 +3,7 @@ as pure functions, in domain/."""
 
 from fastapi import Depends, FastAPI
 
-from core import auth
+from core import auth, config
 from routes import catalog, claims, conversations, customer, demo, dispatch, gcash, orders, packing, patterns, refunds, webhooks
 
 app = FastAPI()
@@ -16,7 +16,8 @@ def healthz():
 
 @app.get("/api/me")
 def me(user: dict = Depends(auth.current_user)):
-    return user
+    # How long after the customer's last message Messenger lets a seller reply: 24 hours, or 7 days with the Human Agent tag
+    return {**user, "reply_hours": 168 if config.HUMAN_AGENT else 24}
 
 
 # FastAPI matches routes in the order they were added: these keep the order main.py had before it was split.

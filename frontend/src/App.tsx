@@ -8,7 +8,8 @@ import DispatchSettings from './settings/DispatchSettings'
 import GcashSettings from './settings/GcashSettings'
 import { api, auth } from './lib/firebase'
 
-type Me = { uid: string; email: string; name: string | null; demo: boolean }
+/** reply_hours: how long after the customer's last message Messenger lets a seller reply (24, or 168 with the Human Agent tag). */
+type Me = { uid: string; email: string; name: string | null; demo: boolean; reply_hours?: number }
 
 export default function App() {
   // undefined = still loading, null = signed out
@@ -94,7 +95,7 @@ export default function App() {
         </p>
       )}
       {tab === 'conversations' ? (
-        <Conversations />
+        <Conversations replyHours={me.reply_hours ?? 24} />
       ) : tab === 'orders' ? (
         <Orders />
       ) : tab === 'patterns' ? (

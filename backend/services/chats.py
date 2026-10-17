@@ -87,27 +87,41 @@ class Reply(BaseModel):
 
 
 REPLY_WINDOW = timedelta(hours=24)
+HUMAN_AGENT_WINDOW = timedelta(days=7)
 
 
-def reply_until(messages: list[dict]) -> datetime | None:
-    """Messenger only allows a normal reply within 24 hours of the customer's latest message."""
+def reply_window() -> timedelta:
+    return HUMAN_AGENT_WINDOW if config.HUMAN_AGENT else REPLY_WINDOW
+
+
+def reply_until(messages: list[dict], window: timedelta = REPLY_WINDOW) -> datetime | None:
+    """Messenger only allows a normal reply within 24 hours of the customer's latest message (7 days for a person replying
+    under the Human Agent tag)."""
     times = [datetime.fromisoformat(m["created_time"]) for m in messages if not m["from_page"]]
-    return max(times) + REPLY_WINDOW if times else None
+    return max(times) + window if times else None
 
 
-def customer_to_reply(conversation_id: str) -> str:
-    """The customer's PSID, if the 24-hour reply window is still open."""
+def customer_to_reply(conversation_id: str) -> tuple[str, str | None]:
+    """The customer's PSID, and the message tag a reply needs: None within 24 hours, HUMAN_AGENT after that, up to 7 days,
+    if the app has the permission. Refused once the window has closed."""
     # The id goes into a Graph URL sent with the Page token, so only accept the thread-id shape.
     if not re.fullmatch(r"t_\d+", conversation_id):
         raise HTTPException(400, "Invalid conversation id")
-    until = reply_until(messenger.fetch_messages(conversation_id))
-    if not until or datetime.now(UTC) > until:
-        raise HTTPException(409, "Messenger only allows replies within 24 hours of the customer's last message.")
+    messages, now = messenger.fetch_messages(conversation_id), datetime.now(UTC)
+    until = reply_until(messages, reply_window())
+    if not until or now > until:
+        hours = int(reply_window().total_seconds() // 3600)
+        raise HTTPException(409, f"Messenger only allows replies within {hours} hours of the customer's last message.")
     participants = messenger.graph(conversation_id, fields="participants").get("participants", {}).get("data", [])
     customer = next((p["id"] for p in participants if p.get("id") != config.PAGE_ID), None)
     if not customer:
         raise HTTPException(409, "Could not find the customer in this conversation")
-    return customer
+    return customer, None if now <= reply_until(messages) else "HUMAN_AGENT"
+
+
+def messaging(tag: str | None) -> dict:
+    """How a reply is sent: as a response within 24 hours, or tagged HUMAN_AGENT after that."""
+    return {"messaging_type": "MESSAGE_TAG", "tag": tag} if tag else {"messaging_type": "RESPONSE"}
 
 
 def record_sent(conversation_id: str, order_id: str | None, sent: dict, user: dict, **what) -> dict:
@@ -124,14 +138,47 @@ def record_sent(conversation_id: str, order_id: str | None, sent: dict, user: di
     return {"message_id": sent.get("message_id")}
 
 
-def send(conversation_id: str, text: str, user: dict, order_id: str | None = None, button: str | None = None) -> dict:
-    """Send one text message as the Page, with at most one quick-reply button. Only ever called from an explicit seller click."""
+def send(conversation_id: str, text: str, user: dict, order_id: str | None = None, button: str | None = None, payload: str | None = None) -> dict:
+    """Send one text message as the Page, with at most one quick-reply button. Only ever called from an explicit seller click.
+    payload: what Messenger's webhook reports when the button is tapped. Returns the message ID and, on Messenger, the
+    customer's PSID, so a tap can be checked to come from the customer it was sent to."""
     if demo.is_demo(conversation_id):
         return demo_post(conversation_id, True, text, button=button)
-    customer = customer_to_reply(conversation_id)
-    message = {"text": text} | ({"quick_replies": [{"content_type": "text", "title": button, "payload": button}]} if button else {})
-    sent = messenger.graph(f"{config.PAGE_ID}/messages", send={"recipient": {"id": customer}, "messaging_type": "RESPONSE", "message": message})
-    return record_sent(conversation_id, order_id, sent, user, text=text, **({"button": button} if button else {}))
+    customer, tag = customer_to_reply(conversation_id)
+    message = {"text": text} | ({"quick_replies": [{"content_type": "text", "title": button, "payload": payload or button}]} if button else {})
+    sent = messenger.graph(f"{config.PAGE_ID}/messages", send={"recipient": {"id": customer}, **messaging(tag), "message": message})
+    extra = ({"button": button} if button else {}) | ({"tag": tag} if tag else {})
+    return record_sent(conversation_id, order_id, sent, user, text=text, **extra) | {"psid": customer}
+
+
+def apply_tap(event: dict) -> None:
+    """One messaging event from Messenger's webhook. A tap on Confirm or Received carries the payload the seller's message
+    set ("confirm:<order>:<version>" or "received:<order>"). It counts only from the customer the button was sent to, and
+    only for what that order is still waiting for, so a forged or stale payload changes nothing."""
+    m = event.get("message") or {}
+    payload = (m.get("quick_reply") or {}).get("payload") or ""
+    kind, _, rest = payload.partition(":")
+    order_id, _, version = rest.partition(":")
+    if m.get("is_echo") or kind not in ("confirm", "received") or not re.fullmatch(r"\w{1,64}", order_id):
+        return
+    psid = (event.get("sender") or {}).get("id")
+    at = datetime.fromtimestamp(event.get("timestamp", 0) / 1000, UTC)
+
+    def rule(o: dict) -> dict:
+        asked = (o.get("asked") or {}).get(kind) or {}
+        if kind not in rules.waiting_for(o) or not psid or asked.get("psid") != psid or at < asked["at"] - rules.SKEW:
+            return {}
+        if kind == "confirm":
+            return rules.confirm(o, "customer", "chat", at, message_id=m.get("mid")) if version == str(o["version"]) else {}
+        try:
+            return delivery.acknowledge(o, "customer_chat", at)
+        except rules.Refused:
+            return {}
+
+    try:
+        db.change(db.orders().document(order_id), rule)
+    except HTTPException:
+        pass  # no such order
 
 
 def apply_answers(conversation_id: str, messages: list[dict] | None = None) -> None:

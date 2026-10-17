@@ -125,8 +125,8 @@ export default function Reply({ conversationId, text, setText, orderId, until, o
             )
           ) : closed ? (
             <>
-              Messenger only allows replies within 24 hours of the customer's last message{until && <> (closed {until.toLocaleString()})</>}
-              .
+              Messenger's window to reply after the customer's last message has closed{until && <> ({until.toLocaleString()})</>}. The
+              customer page link still works.
             </>
           ) : (
             until && <>You can reply until {until.toLocaleString()}.</>

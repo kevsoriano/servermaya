@@ -54,7 +54,7 @@ def conversations(user: dict = Depends(auth.current_user)):
                 "open_checks": cached_open_checks(c["id"]),
                 "unread": bool(at) and (c["id"] not in seen or seen[c["id"]] < at),
                 "awaiting_reply": waiting,
-                "reply_until": (at + chats.REPLY_WINDOW).isoformat() if at else None,
+                "reply_until": (at + chats.reply_window()).isoformat() if at else None,
                 "order_actions": actions.get(c["id"], []),
             }
         )
@@ -229,7 +229,7 @@ def review_signal(conversation_id: str, body: Review, user: dict = Depends(auth.
 @router.post("/api/conversations/{conversation_id}/reply")
 def reply(conversation_id: str, body: chats.Reply, user: dict = Depends(auth.current_user)):
     """Send one text message as the Page. Only ever called from an explicit seller click."""
-    return chats.send(conversation_id, body.text, user, body.order_id)
+    return {"message_id": chats.send(conversation_id, body.text, user, body.order_id)["message_id"]}
 
 
 REPLY_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif"}  # what Messenger shows as an image
@@ -248,7 +248,7 @@ async def reply_image(conversation_id: str, request: Request, order_id: str | No
         raise HTTPException(413, "Images must be under 10 MB")
     if order_id and not re.fullmatch(r"\w{1,64}", order_id):
         raise HTTPException(400, "Invalid order id")
-    customer = await run_in_threadpool(chats.customer_to_reply, conversation_id)
+    customer, tag = await run_in_threadpool(chats.customer_to_reply, conversation_id)
     sha = hashlib.sha256(data).hexdigest()
     path = f"stores/{config.STORE}/sent/{sha}"
     try:
@@ -260,7 +260,7 @@ async def reply_image(conversation_id: str, request: Request, order_id: str | No
         f"{config.PAGE_ID}/messages",
         {
             "recipient": {"id": customer},
-            "messaging_type": "RESPONSE",
+            **chats.messaging(tag),
             "message": {"attachment": {"type": "image", "payload": {"is_reusable": False}}},
         },
         {"filedata": (f"image.{content_type.split('/')[1]}", data, content_type)},

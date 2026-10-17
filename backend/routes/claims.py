@@ -151,9 +151,11 @@ def review_claim(order_id: str, cid: str, user: dict = Depends(auth.current_user
         except Exception:
             pass  # an image that cannot be loaded cannot be cited
     videos = sum(label[:2] in ("CV", "KV") for label, _ in shown)
-    auth.ai_budget(user, 1 + videos)  # the review (its tool turns count as one, like any other read) and one check per video
+    # the review (its tool turns count as one, like any other read) and one check per video; a kept check still counts
+    auth.ai_budget(user, 1 + videos)
     expect = (rules.code(order_id), order["draft"]["recipient_name"]["value"])
-    blocks += cases.video_records(db.clients()[0], config.GEMINI_MODEL, shown, expect)
+    shas = {label: photo.get("sha256") for label, photo in images}
+    blocks += cases.video_records(db.clients()[0], config.GEMINI_MODEL, shown, expect, shas, db.store_doc().collection("videoChecks"))
     now = datetime.now(UTC)
     try:
         review = claim_agent.review(

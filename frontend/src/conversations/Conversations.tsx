@@ -54,9 +54,9 @@ function same<T>(a: T[] | undefined, b: T[], key: (x: T) => string) {
   return !!a && a.length === b.length && a.every((x, i) => key(x) === key(b[i]))
 }
 
-function replyUntil(messages: Message[]) {
+function replyUntil(messages: Message[], hours: number) {
   const last = Math.max(...messages.filter((m) => !m.from_page).map((m) => Date.parse(m.created_time)))
-  return Number.isFinite(last) ? new Date(last + 24 * 3600 * 1000) : null
+  return Number.isFinite(last) ? new Date(last + hours * 3600 * 1000) : null
 }
 
 const HOUR = 3600 * 1000
@@ -196,7 +196,7 @@ function pending(c: Conversation) {
 
 const done = (o: Order) => o.status === 'cancelled' || o.receipt?.status === 'customer_confirmed'
 
-export default function Conversations() {
+export default function Conversations({ replyHours }: { replyHours: number }) {
   const [list, setList] = useState<Conversation[]>()
   const [openId, setOpenId] = useState<string>()
   const [messages, setMessages] = useState<Message[]>()
@@ -476,7 +476,7 @@ export default function Conversations() {
           </div>
         )}
         {openId && messages && !thread?.demo && (
-          <Reply conversationId={openId} text={reply} setText={setReply} until={replyUntil(messages)} onSent={reloadMessages} />
+          <Reply conversationId={openId} text={reply} setText={setReply} until={replyUntil(messages, replyHours)} onSent={reloadMessages} />
         )}
       </section>
       {openId && messages && (

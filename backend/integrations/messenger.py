@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import json
 import time
 
@@ -29,6 +31,12 @@ def graph(path: str, send: dict | None = None, files: dict | None = None, **para
     if not r.ok:
         raise HTTPException(502, body.get("error", {}).get("message", "Messenger request failed"))
     return body
+
+
+def valid_signature(header: str, raw: bytes, secret: str) -> bool:
+    """X-Hub-Signature-256 is 'sha256=' and the HMAC-SHA256 of the raw body, keyed by the app secret."""
+    expected = "sha256=" + hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+    return bool(secret) and hmac.compare_digest(expected, header or "")
 
 
 _pics: dict[str, tuple[float, str | None]] = {}

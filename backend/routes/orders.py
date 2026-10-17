@@ -84,6 +84,13 @@ def chat_of(order_id: str) -> tuple:
     return ref, order, order["source"]["conversation_id"]
 
 
+def sent_to(updates: dict, kind: str, sent: dict) -> dict:
+    """Keep the PSID the button went to: Messenger's webhook counts a tap only from that customer."""
+    if sent.get("psid") and updates.get("asked"):
+        updates["asked"][kind]["psid"] = sent["psid"]
+    return updates
+
+
 def checked(rule, order: dict) -> dict:
     try:
         return rule(order)
@@ -98,8 +105,8 @@ def ask_confirmation(order_id: str, user: dict = Depends(auth.current_user)):
     now, token = datetime.now(UTC), secrets.token_urlsafe(32)
     rule = lambda o: (u := rules.send(o, token)) | rules.ask({**o, **u}, "confirm", order_id, now)
     ask = checked(rule, order)["asked"]["confirm"]
-    chats.send(cid, rules.summary(order), user, order_id, ask["text"])
-    return db.change(ref, rule)
+    sent = chats.send(cid, rules.summary(order), user, order_id, ask["text"], f"confirm:{order_id}:{ask['version']}")
+    return db.change(ref, lambda o: sent_to(rule(o), "confirm", sent))
 
 
 @router.post("/api/orders/{order_id}/payment-link")
@@ -127,5 +134,5 @@ def ask_received(order_id: str, user: dict = Depends(auth.current_user)):
         "Your order is on its way! Before you open the parcel, start a video showing its label, and keep filming as you open it. "
         "Once it's in your hands, tap Received below. If anything is wrong, tell us here and send the video."
     )
-    chats.send(cid, text, user, order_id, ask["text"])
-    return db.change(ref, rule)
+    sent = chats.send(cid, text, user, order_id, ask["text"], f"received:{order_id}")
+    return db.change(ref, lambda o: sent_to(rule(o), "received", sent))
