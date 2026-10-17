@@ -855,6 +855,10 @@ mark.status.confirmed {
   overflow-wrap: anywhere;
 }
 
+.receipt td:first-child {
+  overflow-wrap: break-word; /* check names stay whole words; only the long values break anywhere */
+}
+
 /* Narrow screens: panes stack and the page scrolls. */
 @media (max-width: 900px) {
   .app {
@@ -1240,6 +1244,11 @@ mark.source.provider {
 
 .verify .choices > div {
   flex-basis: 100%;
+  min-width: 0; /* the receipt table inside wraps to the pane instead of widening it */
+}
+
+.verify input[type='file'] {
+  max-width: 100%;
 }
 
 /* An explanation kept in a tooltip, beside a heading. It opens at once on hover or keyboard focus, below the heading and as

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { load } from '../lib/firebase'
 
 type Signal = {
@@ -28,7 +28,7 @@ type Props = {
   conversationId: string
   /** Messages to quote from, by id. */
   messages: { id: string; text: string }[]
-  /** Changes when a new message arrives, so the checks are refreshed. */
+  /** Changes when a new message arrives or a payment may settle a check, so the checks are refreshed. */
   latest?: string
   /** Told how many checks are open, so the pane can say so at the top. */
   onOpenCount?: (n: number) => void
@@ -44,12 +44,21 @@ export default function Signals({ conversationId, messages, latest, onOpenCount 
   const [error, setError] = useState('')
   const [tries, setTries] = useState(0) // Try again: checks that could not be read are never kept, so asking again retries
 
+  // One request at a time per chat: a refresh asked for while one is running waits for it, and by then the analysis is
+  // cached, so overlapping refreshes never start a second Gemini call. A refresh superseded while waiting is skipped.
+  const running = useRef<{ id: string; done: Promise<unknown> }>(undefined)
   useEffect(() => {
     let live = true
-    load<Signal[]>(`/conversations/${conversationId}/signals`).then(
-      (s) => live && (setLoaded({ id: conversationId, s }), setError('')),
-      (e) => live && setError(e.message),
+    const before = running.current?.id === conversationId ? running.current.done : Promise.resolve()
+    const done = before.then(
+      () =>
+        live &&
+        load<Signal[]>(`/conversations/${conversationId}/signals`).then(
+          (s) => live && (setLoaded({ id: conversationId, s }), setError('')),
+          (e) => live && setError(e.message),
+        ),
     )
+    running.current = { id: conversationId, done }
     return () => {
       live = false
     }

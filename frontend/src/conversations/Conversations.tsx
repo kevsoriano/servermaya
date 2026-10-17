@@ -529,7 +529,16 @@ export default function Conversations({ replyHours, onOpenOrder }: { replyHours:
             </details>
           )}
           {messages.length > 0 && (
-            <Signals conversationId={openId} messages={messages} latest={messages.at(-1)?.id} onOpenCount={setOpenChecks} />
+            <Signals
+              conversationId={openId}
+              messages={messages}
+              // A new message, or a payment or order state that can settle a check (no Gemini call: only the settling reruns).
+              latest={[
+                messages.at(-1)?.id,
+                ...(orders ?? []).map((o) => [o.id, o.status, o.payment?.status, o.manual_payment?.status, o.receipt?.status].join(':')),
+              ].join()}
+              onOpenCount={setOpenChecks}
+            />
           )}
         </aside>
       )}
