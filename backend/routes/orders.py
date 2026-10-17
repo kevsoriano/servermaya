@@ -6,7 +6,7 @@ from google.cloud import firestore
 
 from core import auth, config, db
 from domain import orders as rules
-from services import chats, payments
+from services import chats, deliveries, payments
 
 router = APIRouter()
 
@@ -31,6 +31,8 @@ def get_order(order_id: str, user: dict = Depends(auth.current_user)):
     order = snap.to_dict()
     if rules.waiting_for(order):  # the customer may have tapped Confirm or Received in the chat since
         chats.apply_answers(order["source"]["conversation_id"])
+        snap = snap.reference.get()
+    if deliveries.advance_sandbox(order_id, snap.to_dict()):  # a sandbox booking's simulated steps now due
         snap = snap.reference.get()
     return db.present(snap)
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { load } from '../lib/firebase'
 import { fromChat, peso } from '../lib/format'
 import { parsePin, pinText } from '../lib/maps'
@@ -94,6 +94,25 @@ export default function Dispatch({
     )
   }, [order.id, choosing])
 
+  // A Lalamove sandbox booking moves on by itself, one simulated step a second (the backend applies them when the order
+  // loads), so reload it until it is delivered.
+  const sandboxMoving =
+    f?.courier === 'lalamove' && f.quotation?.livemode === false && ['booked', 'driver_assigned', 'picked_up'].includes(f.status)
+  const changed = useRef(onChange)
+  changed.current = onChange
+  useEffect(() => {
+    if (!sandboxMoving) return
+    const timer = setInterval(
+      () =>
+        load<Order>(`/orders/${order.id}`).then(
+          (o) => changed.current(o),
+          () => {},
+        ),
+      1000,
+    )
+    return () => clearInterval(timer)
+  }, [sandboxMoving, order.id])
+
   // What is at the pin, checked against the address, once the pin has stopped moving for a moment.
   const pinned = choosing ? parsePin(pin) : null
   useEffect(() => {
@@ -158,6 +177,14 @@ export default function Dispatch({
         {f?.courier === 'lalamove' && f.quotation && !f.quotation.livemode && <mark> LALAMOVE SANDBOX</mark>}
       </h3>
       {order.replacement && <p>Replacement for a customer claim. The original shipment stays on record.</p>}
+      {f?.courier === 'lalamove' && f.quotation?.livemode === false && f.status !== 'quoted' && f.status !== 'booking' && (
+        <p>
+          <small>
+            Lalamove sandbox: the quote and booking are real sandbox calls, but the sandbox assigns no driver, so the delivery steps are
+            simulated for the demo, one a second, and labelled Simulated.
+          </small>
+        </p>
+      )}
 
       {(!f || f.status === 'quoted') && (
         <>

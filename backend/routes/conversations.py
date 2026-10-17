@@ -15,7 +15,7 @@ from domain import packing as pack
 from domain import signals as risk
 from integrations import messenger
 from seed import demo
-from services import catalog, chats, seeding
+from services import catalog, chats, deliveries, seeding
 
 router = APIRouter()
 
@@ -275,6 +275,8 @@ def list_chat_orders(conversation_id: str, user: dict = Depends(auth.current_use
     Confirm or Received in the chat are applied first."""
     if demo.is_demo(conversation_id) or re.fullmatch(r"t_\d+", conversation_id):
         chats.apply_answers(conversation_id)
+        for oid, o in db.chat_orders(conversation_id):
+            deliveries.advance_sandbox(oid, o)
     snaps = [
         d
         for d in db.orders().where(filter=firestore.FieldFilter("source.conversation_id", "==", conversation_id)).stream()

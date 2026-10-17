@@ -1,7 +1,16 @@
 from datetime import UTC, datetime
 
+from core import config, db
 from domain import delivery
 from integrations import lalamove
+
+
+def advance_sandbox(order_id: str, order: dict) -> bool:
+    """Apply the simulated sandbox steps now due, if any. Read paths call this, so nothing runs in the background."""
+    if not config.SANDBOX_AUTO_DELIVERY or not delivery.sandbox_progress(order, datetime.now(UTC)):
+        return False
+    db.change(db.orders().document(order_id), lambda o: delivery.sandbox_progress(o, datetime.now(UTC)))
+    return True
 
 
 def lalamove_rule(provider_order_id: str, raw_status: str | None, eid: str, at: datetime, order_data: dict):

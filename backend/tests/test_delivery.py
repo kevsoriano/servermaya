@@ -104,3 +104,31 @@ def test_lalamove_webhook_verifies_and_links_by_quotation(monkeypatch):
     assert client.post("/api/webhooks/lalamove", content=signed(data)).status_code == 200 and applied == ["ref"]
     client.post("/api/webhooks/lalamove", content=signed(data))
     assert applied == ["ref"]  # the same event again changes nothing
+
+
+def test_a_sandbox_booking_moves_on_by_itself_one_simulated_step_a_second():
+    from datetime import UTC, datetime, timedelta
+
+    from domain import delivery
+
+    t0 = datetime(2026, 10, 17, 9, 0, tzinfo=UTC)
+    booked = delivery.event("lalamove:L1:created", "provider", "ORDER_CREATED", "booked", t0, t0)
+    shipment = {"id": "f1", "courier": "lalamove", "status": "booked", "quotation": {"livemode": False}, "events": [booked], "driver_id": None}
+    order = {"fulfillment": shipment}
+    at = lambda s: t0 + timedelta(seconds=s)
+    status = lambda o: (o.get("fulfillment") or order["fulfillment"])["status"]
+
+    assert delivery.sandbox_progress(order, at(0.5)) == {}  # nothing due yet
+    two = delivery.sandbox_progress(order, at(2))
+    assert status(two) == "picked_up" and [e["source"] for e in two["fulfillment"]["events"][1:]] == ["demo", "demo"]
+    done = {**order, **delivery.sandbox_progress(order, at(10))}
+    assert status(done) == "delivered" and len(done["fulfillment"]["events"]) == 4
+    assert delivery.sandbox_progress(done, at(20)) == {}  # applying again adds nothing
+    assert done["fulfillment"]["events"][-1]["note"] == delivery.SANDBOX_NOTE  # labelled as simulated
+
+    # never a live booking; and a real update further along is not moved back
+    assert delivery.sandbox_progress({"fulfillment": {**shipment, "quotation": {"livemode": True}}}, at(10)) == {}
+    real = delivery.event("lalamove:L1:poll:PICKED_UP", "provider", "PICKED_UP", "picked_up", at(0.2), at(0.2))
+    ahead = {"fulfillment": {**shipment, "status": "picked_up", "events": [booked, real]}}
+    after = delivery.sandbox_progress(ahead, at(1.5))  # driver_assigned is due, but the shipment is already picked up
+    assert after["fulfillment"]["status"] == "picked_up"

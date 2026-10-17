@@ -7,7 +7,7 @@ are separate records, and neither proves the parcel held the right items.
 """
 
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from .orders import Refused
 from .packing import paid_by
@@ -153,6 +153,33 @@ def apply_event(order: dict, ev: dict, driver_id: str | None = None, share_link:
     if pod:
         updated["pod"] = pod
     return {"fulfillment": updated}
+
+
+# Lalamove's sandbox takes a booking but assigns no driver, and its API cannot move an order on. For the demo, a sandbox
+# booking moves on by itself, one stage a second, each step labelled as simulated. Never for a live booking.
+SANDBOX_STEP = timedelta(seconds=1)
+SANDBOX_NOTE = "Lalamove's sandbox assigns no driver: this step is simulated for the demo"
+
+
+def sandbox_progress(order: dict, now: datetime) -> dict:
+    """The simulated steps now due on a Lalamove sandbox booking: driver assigned, picked up and delivered, one second
+    apart from the booking. Each step has a fixed ID, so applying this again adds nothing, and a real Lalamove update that
+    is further along is never moved back."""
+    f = order.get("fulfillment") or {}
+    if f.get("courier") != "lalamove" or (f.get("quotation") or {}).get("livemode") is not False or f.get("status") in ENDED:
+        return {}
+    booked_at = next((e["at"] for e in f.get("events", []) if e["status"] == "booked"), None)
+    if not booked_at:
+        return {}
+    updates, current = {}, order
+    for n, status in enumerate(SIMULATED_STEPS, 1):
+        at = booked_at + n * SANDBOX_STEP
+        if at > now:
+            break
+        ev = event(f"{f['id']}:sandbox:{status}", "demo", status, status, at, now, by="Lalamove sandbox", note=SANDBOX_NOTE)
+        if done := apply_event(current, ev):
+            updates, current = done, {**current, **done}
+    return updates
 
 
 def step(order: dict, status: str, source: str, by: str, now: datetime, note: str = "") -> dict:

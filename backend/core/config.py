@@ -67,6 +67,11 @@ EVIDENCE_BUCKET = os.environ.get("EVIDENCE_BUCKET", "servermaya-ai-builder-cup-e
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "https://servermaya-ai-builder-cup.web.app")
 
 
+# A Lalamove sandbox booking moves on by itself, one simulated step a second, so the demo never waits on a driver the sandbox
+# will not assign. Set to 0 when real sellers use the app; it never applies to live bookings either way.
+SANDBOX_AUTO_DELIVERY = os.environ.get("SANDBOX_AUTO_DELIVERY", "1") == "1"
+
+
 # Fictional, so a demo visitor never sees the seller's real GCash account or pickup address. Demo orders always use these.
 DEMO_GCASH = {"name": "Juan Dela Cruz", "mobile": "639171234567", "qr": None, "demo": True}
 

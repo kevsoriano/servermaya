@@ -519,3 +519,18 @@ def test_dropoff_pin_is_suggested_once_per_address_and_read_from_a_pasted_link(m
     pin = lambda text: client.post("/api/orders/o1/dispatch/pin", json={"text": text}, headers=SELLER)
     assert pin("https://www.google.com/maps/@14.6191,121.0510,18z").json() == {"lat": 14.6191, "lng": 121.051}
     assert pin("not a pin at all").status_code == 422
+
+
+def test_loading_an_order_moves_a_sandbox_booking_on_unless_switched_off(monkeypatch, seller):
+    from domain import delivery
+
+    store, _ = fake_google(monkeypatch)
+    past = datetime.now(UTC) - timedelta(seconds=5)
+    booked = delivery.event("lalamove:L1:created", "provider", "ORDER_CREATED", "booked", past, past)
+    shipment = {"id": "f1", "courier": "lalamove", "status": "booked", "quotation": {"livemode": False}, "events": [booked], "driver_id": None}
+    put_order(store, fulfillment=shipment)
+    monkeypatch.setattr(config, "SANDBOX_AUTO_DELIVERY", False)
+    assert client.get("/api/orders/o1", headers=SELLER).json()["fulfillment"]["status"] == "booked"
+    monkeypatch.setattr(config, "SANDBOX_AUTO_DELIVERY", True)
+    f = client.get("/api/orders/o1", headers=SELLER).json()["fulfillment"]
+    assert f["status"] == "delivered" and [e["source"] for e in f["events"]] == ["provider", "demo", "demo", "demo"]
