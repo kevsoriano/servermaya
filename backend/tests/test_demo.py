@@ -125,12 +125,15 @@ def test_damaged_and_to_pack_seeds():
 
     now = datetime.now(UTC)
     pay_to = {"name": "Juan Dela Cruz", "mobile": "639171234567", "qr": None, "demo": True}
-    photo, sent, claim_photo = {"id": "p1"}, {"kind": "image", "url": "/d"}, {"id": "c1"}
-    chat, bea = demo.damaged("u1", "demo_cccccccccccc", "o1", now, photo, sent, "k1", claim_photo, pay_to, "1012345678901")
+    photo, film = {"id": "p1"}, {"id": "v1", "content_type": "video/mp4"}
+    sent = {"kind": "image", "url": "/d"}, {"kind": "video", "url": "/v"}
+    claim_photo, claim_video = {"id": "c1"}, {"id": "c2", "content_type": "video/mp4"}
+    chat, bea = demo.damaged("u1", "demo_cccccccccccc", "o1", now, (photo, film), sent, "k1", [claim_photo, claim_video], pay_to, "1012345678901")
     # Delivered but not yet received, so her report after delivery is still about this order, and it waits for review.
     assert bea["fulfillment"]["status"] == "delivered" and "receipt" not in bea and not rules.done(bea)
     assert (bea["claims"][0]["status"], bea["claims"][0]["photos"], bea["claims"][0]["review"]) == ("open", [claim_photo], None)
-    assert bea["draft"]["total"] == 18000 and chat["messages"][6]["attachments"] == [sent]
+    assert bea["claims"][0]["videos"] == [claim_video] and bea["packing"]["videos"] == [film]  # her unboxing video; the seller's packing video
+    assert bea["draft"]["total"] == 18000 and [m["attachments"] for m in chat["messages"][6:8]] == [[sent[0]], [sent[1]]]
     assert max(m["created_time"] for m in chat["messages"]) < (now - timedelta(hours=2 * len(demo.SEED) + 2)).isoformat()  # listed after Rico
 
     chat, nico = demo.to_pack("u1", "demo_dddddddddddd", now, photo, pay_to, "1012345678902")

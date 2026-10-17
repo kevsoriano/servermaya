@@ -25,13 +25,15 @@ def ready(order: dict) -> dict:
 
 @router.post("/api/orders/{order_id}/packing/photos")
 async def upload_packing_photo(order_id: str, request: Request, user: dict = Depends(auth.current_user)):
-    """The body is the image itself. X-Claimed-Captured-At is what the device says; it proves nothing and is stored apart from upload time."""
+    """The body is the photo or video itself. X-Claimed-Captured-At is what the device says; it proves nothing and is stored apart
+    from upload time. A video is kept as evidence of what was packed and sealed, for a later claim."""
     content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
-    if content_type not in pack.IMAGE_TYPES:
-        raise HTTPException(415, "Upload a JPEG, PNG, WebP or HEIC photo")
+    video = content_type in pack.VIDEO_TYPES
+    if content_type not in pack.IMAGE_TYPES and not video:
+        raise HTTPException(415, "Upload a JPEG, PNG, WebP or HEIC photo, or an MP4, MOV or WebM video")
     data = await request.body()
-    if not data or len(data) > pack.MAX_PHOTO_BYTES:
-        raise HTTPException(413, "Photos must be under 10 MB")
+    if not data or len(data) > (pack.MAX_VIDEO_BYTES if video else pack.MAX_PHOTO_BYTES):
+        raise HTTPException(413, "Videos must be under 30 MB" if video else "Photos must be under 10 MB")
     ref, order = await run_in_threadpool(db.loaded, order_id)
     ready(order)
     photo_id = secrets.token_hex(8)
@@ -49,14 +51,14 @@ async def upload_packing_photo(order_id: str, request: Request, user: dict = Dep
         "uploaded_by": user["email"],
         "claimed_captured_at": request.headers.get("x-claimed-captured-at", "")[:40] or None,
     }
-    return await run_in_threadpool(db.change, ref, lambda o: pack.add_photo(o, photo))
+    return await run_in_threadpool(db.change, ref, lambda o: (pack.add_video if video else pack.add_photo)(o, photo))
 
 
 @router.get("/api/orders/{order_id}/packing/photos/{photo_id}")
 def packing_photo(order_id: str, photo_id: str, user: dict = Depends(auth.current_user)):
     _, order = db.loaded(order_id)
     sessions = [order.get("packing") or {}] + order.get("packing_history", [])
-    photo = next((p for s in sessions for p in s.get("photos", []) if p["id"] == photo_id), None)
+    photo = next((p for s in sessions for p in s.get("photos", []) + s.get("videos", []) if p["id"] == photo_id), None)
     if not photo:
         raise HTTPException(404, "Photo not found")
     return Response(

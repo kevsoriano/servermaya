@@ -23,6 +23,8 @@ export type Claim = {
   created_at: string
   status: 'open' | 'awaiting_evidence' | 'under_review' | 'resolution_approved' | 'executing' | 'resolved' | 'escalated'
   photos: { id: string; source: string }[]
+  /** Such as the customer's unboxing video. The review watches each one and checks it is one continuous shot. */
+  videos?: { id: string; source: string }[]
   review: {
     findings: Finding[]
     recommendation: { action: Action; amount_php: number | null; explanation: string; evidence: string[] }
@@ -275,7 +277,7 @@ function ClaimCard({ order, c, onChange, write }: { order: Order; c: Claim; onCh
         , {new Date(c.created_at).toLocaleString()}
       </p>
       <blockquote>{c.narrative}</blockquote>
-      {c.photos.length > 0 && (
+      {(c.photos.length > 0 || !!c.videos?.length) && (
         <div className="photos">
           {c.photos.map((p, n) => (
             <Photo
@@ -285,14 +287,23 @@ function ClaimCard({ order, c, onChange, write }: { order: Order; c: Claim; onCh
               caption={`CP${n + 1} · ${p.source}`}
             />
           ))}
+          {c.videos?.map((v, n) => (
+            <Photo
+              key={v.id}
+              video
+              path={`/orders/${order.id}/claims/${c.id}/photos/${v.id}`}
+              alt={`Claim video ${n + 1}`}
+              caption={`CV${n + 1} · ${v.source}`}
+            />
+          ))}
         </div>
       )}
       {open && c.photos.length < 4 && (
         <label className="upload">
-          Add a photo to this report
+          Add a photo or video to this report
           <input
             type="file"
-            accept="image/*"
+            accept="image/*,video/mp4,video/quicktime,video/webm"
             disabled={!!busy}
             onChange={(e) => e.target.files?.[0] && run('Uploading…', '/photos', e.target.files[0])}
           />
@@ -302,7 +313,12 @@ function ClaimCard({ order, c, onChange, write }: { order: Order; c: Claim; onCh
       {c.review && <Review c={c} onDecide={decide} />}
       {open && !c.decision && (
         <p className="actions">
-          <button disabled={!!busy} onClick={() => run('Reviewing the records… about 20 seconds', '/review')}>
+          <button
+            disabled={!!busy}
+            onClick={() =>
+              run(`Reviewing the records… about ${c.videos?.length || order.packing?.videos?.length ? 30 : 20} seconds`, '/review')
+            }
+          >
             {c.review ? 'Review again' : 'Review with AI'}
           </button>
           {['open', 'under_review'].includes(c.status) && (
@@ -526,7 +542,8 @@ export default function Claims({
                     onChange={(e) => setPicked((p) => (e.target.checked ? [...p, m.id] : p.filter((x) => x !== m.id)))}
                   />{' '}
                   {m.text || <em>No text</em>}
-                  {m.attachments.some((a) => a.kind === 'image') && <small> · photo</small>}{' '}
+                  {m.attachments.some((a) => a.kind === 'image') && <small> · photo</small>}
+                  {m.attachments.some((a) => a.kind === 'video') && <small> · video</small>}{' '}
                   <small>({new Date(m.created_time).toLocaleString()})</small>
                 </label>
               ))}

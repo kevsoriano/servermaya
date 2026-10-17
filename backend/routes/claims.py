@@ -24,10 +24,12 @@ MAX_OPEN_CLAIMS = 5
 
 
 def claim_photo(order_id: str, cid: str, data: bytes, content_type: str, source: str) -> dict:
-    if content_type not in pack.IMAGE_TYPES:
-        raise HTTPException(415, "Upload a JPEG, PNG, WebP or HEIC photo")
-    if not data or len(data) > pack.MAX_PHOTO_BYTES:
-        raise HTTPException(413, "Photos must be under 10 MB")
+    """A photo or video for a claim, such as the customer's unboxing video. Stored once, never overwritten, with its hash."""
+    video = content_type in pack.VIDEO_TYPES
+    if content_type not in pack.IMAGE_TYPES and not video:
+        raise HTTPException(415, "Upload a JPEG, PNG, WebP or HEIC photo, or an MP4, MOV or WebM video")
+    if not data or len(data) > (pack.MAX_VIDEO_BYTES if video else pack.MAX_PHOTO_BYTES):
+        raise HTTPException(413, "Videos must be under 30 MB" if video else "Photos must be under 10 MB")
     sha = hashlib.sha256(data).hexdigest()
     path = f"stores/{config.STORE}/orders/{order_id}/claims/{cid}/{sha}"
     try:
@@ -102,11 +104,11 @@ def chat_claim(order_id: str, body: ChatClaimIn, user: dict = Depends(auth.curre
     picked = [m for m in chats.thread_messages(order["source"]["conversation_id"]) if m["id"] in body.message_ids and not m["from_page"]]
     if not picked:
         raise HTTPException(422, "Pick the customer's messages about the problem")
-    images = [a for m in picked for a in m.get("attachments") or [] if a["kind"] == "image" and a.get("name") != "sticker"]
-    if len(images) > cases.MAX_PHOTOS:
-        raise HTTPException(422, f"Up to {cases.MAX_PHOTOS} photos per report: pick fewer messages")
+    media = [a for m in picked for a in m.get("attachments") or [] if a["kind"] in ("image", "video") and a.get("name") != "sticker"]
+    if sum(a["kind"] == "image" for a in media) > cases.MAX_PHOTOS or sum(a["kind"] == "video" for a in media) > cases.MAX_VIDEOS:
+        raise HTTPException(422, f"Up to {cases.MAX_PHOTOS} photos and {cases.MAX_VIDEOS} videos per report: pick fewer messages")
     cid = secrets.token_hex(6)
-    photos = [claim_photo(order_id, cid, *chats.attachment_bytes(a), "customer_chat") for a in images]
+    photos = [claim_photo(order_id, cid, *chats.attachment_bytes(a), "customer_chat") for a in media]
     narrative = "\n".join(m["text"].strip() for m in picked if m.get("text", "").strip())[:2000] or "Sent photos only, no text."
     return new_claim(ref, cases.ClaimIn(type=body.type, narrative=narrative), "customer_chat", user["email"], cid, photos, [m["id"] for m in picked])
 
@@ -140,19 +142,25 @@ def review_claim(order_id: str, cid: str, user: dict = Depends(auth.current_user
     blocks, images = cases.evidence(order, messages, c)
     shown = []
     for label, photo in images:
+        if photo["content_type"].startswith("video/"):  # Gemini reads a video from the bucket, so its size never limits the request
+            shown.append((label, types.Part.from_uri(file_uri=f"gs://{config.EVIDENCE_BUCKET}/{photo['path']}", mime_type=photo["content_type"])))
+            continue
         try:
             data = db.bucket().blob(photo["path"]).download_as_bytes()
             shown.append((label, types.Part.from_bytes(data=data, mime_type=photo["content_type"])))
         except Exception:
             pass  # an image that cannot be loaded cannot be cited
-    auth.ai_budget(user)  # one review; the agent's tool turns make a few Gemini calls, counted as one like any other read
+    videos = sum(label[:2] in ("CV", "KV") for label, _ in shown)
+    auth.ai_budget(user, 1 + videos)  # the review (its tool turns count as one, like any other read) and one check per video
+    expect = (rules.code(order_id), order["draft"]["recipient_name"]["value"])
+    blocks += cases.video_records(db.clients()[0], config.GEMINI_MODEL, shown, expect)
     now = datetime.now(UTC)
     try:
         review = claim_agent.review(
             claim_agent.gemini(config.GEMINI_MODEL, config.PROJECT_ID),
             config.GEMINI_MODEL,
             blocks,
-            shown,
+            cases.photos_only(shown),
             now,
             recall=lambda: memory.recall(order, cases.recall_query(order, c)),
         )
@@ -160,7 +168,7 @@ def review_claim(order_id: str, cid: str, user: dict = Depends(auth.current_user
         raise HTTPException(502, "Could not review this claim. Try again.")
     # The text behind each citation, so the seller can check it without hunting.
     cited = {e for f in review["findings"] for e in f["evidence"]} | set(review["recommendation"]["evidence"])
-    texts = {b[1 : b.index("]")]: b for b in blocks} | {label: f"[{label}] Photo" for label, _ in shown} | review.pop("recalled")
+    texts = {b[1 : b.index("]")]: b for b in blocks} | {label: f"[{label}] {claim_agent.kind(p)}" for label, p in shown} | review.pop("recalled")
     review["sources"] = {k: v for k, v in texts.items() if k in cited}
     return db.change(ref, lambda o: cases.record_review(o, cid, review, user["email"], now))
 

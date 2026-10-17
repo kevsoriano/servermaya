@@ -161,9 +161,14 @@ def confirm(order: dict, kind: str, by: str, now: datetime, token: str | None = 
 SKEW = timedelta(minutes=2)  # Meta's clock against ours
 
 
+def code(order_id: str) -> str:
+    """The short order code the customer sees: on the chat's buttons and on the packing label, where a video check reads it."""
+    return order_id[:5].upper()
+
+
 def button(kind: str, order_id: str, order: dict) -> str:
     """At most 20 characters, Messenger's limit for a quick-reply title."""
-    return f"Confirm #{order_id[:5]} v{order['version']}" if kind == "confirm" else f"Received #{order_id[:5]}"
+    return f"Confirm #{code(order_id)} v{order['version']}" if kind == "confirm" else f"Received #{code(order_id)}"
 
 
 def ask(order: dict, kind: str, order_id: str, now: datetime) -> dict:

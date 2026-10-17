@@ -15,6 +15,8 @@ from domain import receipts as gcash
 from seed import catalog
 
 SHOP = "Demo shop"
+# Bea's order code, printed on the packing label in her sample videos (seed.make_videos): her order ID starts with it
+LABEL_CODE = "BEA7Q"
 MAX_MESSAGES = 200  # keeps a thread document well under Firestore's 1 MB limit
 PREFIX = re.compile(r"^\s*(customer|seller)\s*:\s?(.*)$", re.IGNORECASE)
 
@@ -130,7 +132,7 @@ DAMAGED = (
     ],
     [
         (False, "Hi, the mug arrived today but it's cracked 😞 Here's a photo."),
-        (False, "There's a crack down the side and a chip out of the rim."),
+        (False, "There's a crack down the side and a chip out of the rim. I filmed opening the box too."),
         (True, "So sorry, Bea! I've opened a report and will check our packing records."),
     ],
 )
@@ -189,8 +191,9 @@ HINTS = {
     },
     "Bea Villanueva": {
         "short": "AI claim review with the shop's memory",
-        "steps": "She reported the crack in the chat with a photo, and the claim was opened from those messages. Open her order "
-        "and press Review with AI. The agent reads the order's records and the shop's "
+        "steps": "She reported the crack in the chat with a photo and her unboxing video, and the claim was opened from those "
+        "messages; the seller also filmed packing it. Open her order and press Review with AI. Each video is checked for a cut, "
+        "and the agent reads the order's records and the shop's "
         "past decisions from Memory Bank, and cites each one. Approve an outcome to add it to the shop's memory.",
     },
     "Nico Ramos": {
@@ -338,21 +341,22 @@ def damaged(
     conversation_id: str,
     order_id: str,
     now: datetime,
-    packed: dict,
-    sent: dict,
+    packed: tuple[dict, dict],
+    sent: tuple[dict, dict],
     claim_id: str,
-    claim_photo: dict,
+    claim_media: list[dict],
     pay_to: dict,
     reference: str,
 ) -> tuple[dict, dict]:
     """Her chat and order, two days ago: confirmed by her link, a GCash payment the seller found in their own history, packed
-    with the mug checked by hand, sent by a courier the seller reports and delivered. Today she says in the chat it arrived
-    cracked, with a photo, and the seller opens a claim from those messages. packed: the stored packing photo. sent: her damage photo as a chat attachment. claim_photo: the same photo as
-    stored with the report."""
+    with the mug checked by hand and filmed, sent by a courier the seller reports and delivered. Today she says in the chat it
+    arrived cracked, with a photo and her unboxing video, and the seller opens a claim from those messages.
+    packed: the stored packing photo and packing video. sent: her photo and video as chat attachments. claim_media: the same
+    photo and video as stored with the report."""
     name, earlier, later = DAMAGED
     old = thread(name, earlier, owner, now - timedelta(days=2))
     new = thread(name, later, owner, now - timedelta(hours=2 * len(SEED) + 4))
-    new["messages"][0]["attachments"] = [sent]
+    new["messages"][0]["attachments"], new["messages"][1]["attachments"] = [sent[0]], [sent[1]]
     chat = {**new, "messages": old["messages"] + new["messages"]}
     at = lambda n: datetime.fromisoformat(chat["messages"][n]["created_time"])
     item = extraction.Item(
@@ -364,13 +368,14 @@ def damaged(
     order |= gcash.confirm(
         order, reference, SHOP, "Found ₱180.00 from her name with this reference in our GCash history", at(5) - timedelta(seconds=40), False
     )
-    order |= pack.add_photo(order, packed)
+    order |= pack.add_photo(order, packed[0])
+    order |= pack.add_video(order, packed[1])
     order |= pack.confirm_row(order, 1, SHOP, "Checked by hand: 1 blue mug, no cracks, wrapped in bubble wrap", at(5) - timedelta(seconds=30))
     order |= pack.complete(order, SHOP, at(5) - timedelta(seconds=25))
     order |= delivery.start(order, f"f_{order_id}", "other", SHOP, at(5) + timedelta(seconds=10), tracking="Shop rider")
     order |= delivery.step(order, "picked_up", "seller_reported", SHOP, at(5) + timedelta(hours=1))
     order |= delivery.step(order, "delivered", "seller_reported", SHOP, at(6) - timedelta(minutes=30))
-    # Opened by the seller from her two messages, as Open claim from the chat does: her words, her photo.
+    # Opened by the seller from her two messages, as Open claim from the chat does: her words, her photo and video.
     said = new["messages"][:2]
     narrative = "\n".join(m["text"] for m in said)
     order |= cases.open_claim(
@@ -380,7 +385,7 @@ def damaged(
         "customer_chat",
         SHOP,
         at(8) - timedelta(seconds=30),
-        [claim_photo],
+        claim_media,
         [m["id"] for m in said],
     )
     return chat, order

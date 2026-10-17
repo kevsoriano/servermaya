@@ -10,6 +10,7 @@ from pathlib import Path
 from PIL import Image, ImageFilter
 
 IMAGES = Path(__file__).parent / "images"
+VIDEOS = Path(__file__).parent / "videos"
 
 
 def photo(name: str) -> dict:
@@ -49,6 +50,11 @@ def line(product_id: str, variant: str | None) -> int:
     """The catalog line number (from 1) of a product and variant, as drafting numbers it, for the seeded orders."""
     found = [(p["id"], v["name"]) for p in DEMO for v in p["variants"]]
     return found.index((product_id, variant)) + 1
+
+
+def video(name: str) -> bytes:
+    """A sample video (MP4) made with Veo by seed.make_videos."""
+    return (VIDEOS / f"{name}.mp4").read_bytes()
 
 
 def image(name: str, blur: int = 0) -> bytes:

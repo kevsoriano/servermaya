@@ -41,11 +41,13 @@ def seed_demo(user: dict):
         cid, ref, demo.repeat(uid, cid, ref.id, now, receipt, packing_sample(ref.id, catalog.image("packing-tote-cream")), pay_to, reference), paid_at
     )
 
-    cid, ref, claim_id = demo.new_id(), db.orders().document(), secrets.token_hex(6)
-    cracked = catalog.image("damage-mug-blue")
-    packed, sent = packing_sample(ref.id, catalog.image("packing-mug-blue")), chats.demo_attachment(cracked, "image/jpeg")
-    claim_photo = claim_sample(ref.id, claim_id, cracked)
-    save(cid, ref, demo.damaged(uid, cid, ref.id, now, packed, sent, claim_id, claim_photo, pay_to, samples.new_reference()))
+    # Her ID starts with the code on the packing label in her videos, so the claim review's label check finds her order's code.
+    cid, ref, claim_id = demo.new_id(), db.orders().document(demo.LABEL_CODE.lower() + secrets.token_hex(8)), secrets.token_hex(6)
+    cracked, unboxing = catalog.image("damage-mug-blue"), catalog.video("unboxing-labelled-cracked")
+    packed = packing_sample(ref.id, catalog.image("packing-mug-blue")), packing_sample(ref.id, catalog.video("packing-labelled"), "video/mp4")
+    sent = chats.demo_attachment(cracked, "image/jpeg"), chats.demo_attachment(unboxing, "video/mp4")
+    media = [claim_sample(ref.id, claim_id, cracked), claim_sample(ref.id, claim_id, unboxing, "video/mp4")]
+    save(cid, ref, demo.damaged(uid, cid, ref.id, now, packed, sent, claim_id, media, pay_to, samples.new_reference()))
 
     cid, ref = demo.new_id(), db.orders().document()
     save(cid, ref, demo.to_pack(uid, cid, now, packing_sample(ref.id, catalog.image("packing-tote-cream", blur=8)), pay_to, samples.new_reference()))
@@ -54,16 +56,16 @@ def seed_demo(user: dict):
     batch.commit()
 
 
-def packing_sample(order_id: str, data: bytes) -> dict:
-    """A sample packing photo (JPEG), stored like an uploaded one."""
+def packing_sample(order_id: str, data: bytes, content_type: str = "image/jpeg") -> dict:
+    """A sample packing photo or video, stored like an uploaded one."""
     photo_id = secrets.token_hex(8)
     path = f"stores/{config.STORE}/orders/{order_id}/packing/{photo_id}"
-    db.bucket().blob(path).upload_from_string(data, content_type="image/jpeg", if_generation_match=0)
+    db.bucket().blob(path).upload_from_string(data, content_type=content_type, if_generation_match=0)
     return {
         "id": photo_id,
         "path": path,
         "sha256": hashlib.sha256(data).hexdigest(),
-        "content_type": "image/jpeg",
+        "content_type": content_type,
         "size": len(data),
         "uploaded_at": datetime.now(UTC),
         "uploaded_by": demo.SHOP,
@@ -71,16 +73,16 @@ def packing_sample(order_id: str, data: bytes) -> dict:
     }
 
 
-def claim_sample(order_id: str, claim_id: str, data: bytes) -> dict:
-    """A sample damage photo (JPEG), stored like one copied from the customer's chat into a report."""
+def claim_sample(order_id: str, claim_id: str, data: bytes, content_type: str = "image/jpeg") -> dict:
+    """A sample damage photo or unboxing video, stored like one copied from the customer's chat into a report."""
     sha = hashlib.sha256(data).hexdigest()
     path = f"stores/{config.STORE}/orders/{order_id}/claims/{claim_id}/{sha}"
-    db.bucket().blob(path).upload_from_string(data, content_type="image/jpeg", if_generation_match=0)
+    db.bucket().blob(path).upload_from_string(data, content_type=content_type, if_generation_match=0)
     return {
         "id": sha[:16],
         "path": path,
         "sha256": sha,
-        "content_type": "image/jpeg",
+        "content_type": content_type,
         "size": len(data),
         "source": "customer_chat",
         "uploaded_at": datetime.now(UTC),

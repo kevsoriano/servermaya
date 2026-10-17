@@ -15,6 +15,11 @@ from .orders import Refused
 IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
 MAX_PHOTOS = 12
+# Videos are evidence for a later claim (the claim review watches them); the photo check above counts from photos only.
+VIDEO_TYPES = {"video/mp4", "video/quicktime", "video/webm"}
+# ponytail: under Cloud Run's 32 MB request limit, about 20 s of 1080p; upload through a signed Storage URL for longer videos
+MAX_VIDEO_BYTES = 30 * 1024 * 1024
+MAX_VIDEOS = 2
 OK = ("matched", "seller_confirmed")
 # ponytail: calibrated on generated drawings (sharp 53-252) and AI-generated photos (sharp 126-683; blur of 4 px or more, or
 # near-black, under 5). Sensor noise defeats it: with moderate noise a blurred photo scores about 100, so on real phone photos
@@ -114,6 +119,15 @@ def add_photo(order: dict, photo: dict) -> dict:
     if len(packing["photos"]) >= MAX_PHOTOS:
         raise Refused(f"Up to {MAX_PHOTOS} photos per order")
     return {"packing": {**packing, "photos": packing["photos"] + [photo]}}
+
+
+def add_video(order: dict, video: dict) -> dict:
+    packing = require_ready(order)
+    if packing["completed"]:
+        raise Refused("Packing is already marked complete")
+    if len(packing.get("videos", [])) >= MAX_VIDEOS:
+        raise Refused(f"Up to {MAX_VIDEOS} packing videos per order")
+    return {"packing": {**packing, "videos": packing.get("videos", []) + [video]}}
 
 
 def words(text: str) -> set[str]:

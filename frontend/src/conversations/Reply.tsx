@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { load } from '../lib/firebase'
 
 const IMAGE_TYPES = 'image/jpeg,image/png,image/gif' // what Messenger shows as an image
-const DEMO_IMAGE_TYPES = `${IMAGE_TYPES},image/webp`
+// Demo chats also take a video, such as the customer's unboxing video
+const DEMO_IMAGE_TYPES = `${IMAGE_TYPES},image/webp,video/mp4,video/quicktime,video/webm`
 
 type Props = {
   conversationId: string
@@ -154,7 +155,7 @@ export default function Reply({ conversationId, text, setText, orderId, until, o
             >
               <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
             </svg>
-            <span className="sr-only">Attach image</span>
+            <span className="sr-only">{demo ? 'Attach a photo or video' : 'Attach image'}</span>
             <input
               key={picker}
               type="file"

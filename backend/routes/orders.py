@@ -123,6 +123,9 @@ def ask_received(order_id: str, user: dict = Depends(auth.current_user)):
         return rules.ask(o, "received", order_id, now)
 
     ask = checked(rule, order)["asked"]["received"]
-    text = "Your order is on its way! Once it's in your hands, tap Received below. If anything is wrong, tell us here and send a photo."
+    text = (
+        "Your order is on its way! Before you open the parcel, start a video showing its label, and keep filming as you open it. "
+        "Once it's in your hands, tap Received below. If anything is wrong, tell us here and send the video."
+    )
     chats.send(cid, text, user, order_id, ask["text"])
     return db.change(ref, rule)

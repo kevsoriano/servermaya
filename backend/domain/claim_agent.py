@@ -23,15 +23,31 @@ APP = "claim_review"
 USER = "seller"
 
 # Which tool returns a record, by the letters of its evidence ID. C and CP (the claim and its photos) come with the request.
-SECTIONS = {"V": "order", "PAY": "order", "M": "chat", "K": "packing", "KP": "packing", "D": "delivery", "POD": "delivery", "R": "delivery"}
+SECTIONS = {
+    "V": "order",
+    "PAY": "order",
+    "M": "chat",
+    "K": "packing",
+    "KP": "packing",
+    "KV": "packing",
+    "D": "delivery",
+    "POD": "delivery",
+    "R": "delivery",
+}
 
 TOOLS = """
-You start with the claim [C] and any photos the customer sent with it [CP1, CP2, ...]. The order's records are not in the
+You start with the claim [C], any photos the customer sent with it [CP1, CP2, ...] and the check of each video they sent [CV1C, ...]. The order's records are not in the
 message: fetch them with the tools read_order, read_chat, read_packing and read_delivery. Call every tool whose records could
 support or contradict the claim; when unsure, call it. You can cite only IDs you were given or fetched; any other is dropped.
 read_past_decisions recalls how this shop decided similar claims from other customers [P1, ...]. Use it to suggest an outcome
 consistent with the shop's practice and cite it when you do. Past decisions say nothing about this customer or this order:
 never use them as evidence for or against the claim."""
+
+
+def kind(part: types.Part) -> str:
+    """Photo or Video, as the agent is told what each attached part is."""
+    mime = (part.inline_data or part.file_data).mime_type or ""
+    return "Video" if mime.startswith("video/") else "Photo"
 
 
 def section(label: str) -> str:
@@ -49,7 +65,7 @@ def agent(llm: BaseLlm, records: dict[str, list], read: list[str], recall: Calla
         texts = [r for _, r in got if isinstance(r, str)]
         photos = [(label, r) for label, r in got if not isinstance(r, str)]
         # Images go back as Parts, which ADK hands to Gemini as media; each one's label is in the texts, in the same order.
-        texts += [f"[{label}] Photo {n} attached to this result." for n, (label, _) in enumerate(photos, 1)]
+        texts += [f"[{label}] {kind(p)} {n} attached to this result." for n, (label, p) in enumerate(photos, 1)]
         return {"records": texts or [f"No {name} records."], "images": [p for _, p in photos]}
 
     def read_order() -> dict:
@@ -61,7 +77,8 @@ def agent(llm: BaseLlm, records: dict[str, list], read: list[str], recall: Calla
         return fetch("chat")
 
     def read_packing() -> dict:
-        """The packing record: each line's photo check and the seller's inspection [K1, ...], and the packing photos [KP1, ...]."""
+        """The packing record: each line's photo check and the seller's inspection [K1, ...], the packing photos [KP1, ...] and the
+        check of each packing video [KV1C, ...]."""
         return fetch("packing")
 
     def read_delivery() -> dict:
@@ -129,7 +146,7 @@ def review(
     given = records.pop("claim", [])
     parts = []
     for label, item in given:
-        parts += [types.Part.from_text(text=item)] if isinstance(item, str) else [types.Part.from_text(text=f"Image {label}:"), item]
+        parts += [types.Part.from_text(text=item)] if isinstance(item, str) else [types.Part.from_text(text=f"{kind(item)} {label}:"), item]
     read: list[str] = []
     reviewer = agent(llm, records, read, recall)
 

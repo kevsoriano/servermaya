@@ -228,10 +228,10 @@ def test_chat_confirm_payment_link_received_and_claim_from_chat(monkeypatch, sel
     # The summary goes out with a Confirm button naming the order and version; only a tap with exactly that text confirms.
     assert post("/ask-confirmation").json()["status"] == "awaiting_confirmation"
     message = sent[-1]["message"]
-    assert "Total: ₱500.00" in message["text"] and message["quick_replies"][0]["title"] == "Confirm #o1 v1"
-    chat += [say("m2", "Confirm #o1 v0"), say("m3", "Confirm #o1 v1", page=True)]  # wrong version; the Page's own echo
+    assert "Total: ₱500.00" in message["text"] and message["quick_replies"][0]["title"] == "Confirm #O1 v1"
+    chat += [say("m2", "Confirm #O1 v0"), say("m3", "Confirm #O1 v1", page=True)]  # wrong version; the Page's own echo
     assert get()["status"] == "awaiting_confirmation"
-    chat.append(say("m4", "Confirm #o1 v1"))
+    chat.append(say("m4", "Confirm #O1 v1"))
     order = client.get("/api/conversations/t_1/orders", headers=SELLER).json()[0]
     assert order["status"] == "confirmed" and order["confirmations"][-1] | {"at": None} == {
         "version": 1,
@@ -253,12 +253,12 @@ def test_chat_confirm_payment_link_received_and_claim_from_chat(monkeypatch, sel
     # Received: only once it is on its way, and only a tap after the ask.
     assert post("/ask-received").status_code == 409
     saved(store)["fulfillment"] = {"id": "f1", "status": "picked_up", "courier": "simulator", "events": []}
-    chat.append(say("m5", "Received #o1"))  # before the ask: does not count
+    chat.append(say("m5", "Received #O1"))  # before the ask: does not count
     asked_at = post("/ask-received").json()["asked"]["received"]["at"]
-    assert sent[-1]["message"]["quick_replies"][0]["title"] == "Received #o1"
+    assert sent[-1]["message"]["quick_replies"][0]["title"] == "Received #O1"
     chat[-1]["created_time"] = (datetime.fromisoformat(asked_at) - timedelta(minutes=5)).isoformat()
     assert get().get("receipt") is None
-    chat.append(say("m6", "Received #o1"))
+    chat.append(say("m6", "Received #O1"))
     assert get()["receipt"]["source"] == "customer_chat"
 
     # A complaint in the chat: the seller picks the messages, and the claim takes the customer's words and photo.
@@ -342,7 +342,18 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     report = pack.Report(
         lines=[pack.Seen(line=1, visible=True, counts=[pack.Count(variant="cream", quantity=1)], damage=None, photos=[1], note="")], suggestions=[]
     )
-    gemini = type("G", (), {"models": type("M", (), {"generate_content": lambda self, **k: type("R", (), {"text": report.model_dump_json()})()})()})()
+    watched = []  # the videos sent to the per-video check
+
+    def generate_content(self, model, contents, config):
+        if getattr(config, "system_instruction", None) != cases.VIDEO_CHECK:
+            return type("R", (), {"text": report.model_dump_json()})()
+        watched.append(contents[0].file_data.file_uri)
+        seen = cases.VideoCheck(
+            continuous=True, cut_at=None, sealed_at_start=True, item="cracked", label_code="BEA7Q", label_name="Bea Villanueva", text_on_screen=None
+        )
+        return type("R", (), {"text": seen.model_dump_json()})()
+
+    gemini = type("G", (), {"models": type("M", (), {"generate_content": generate_content})()})()
     store, _ = fake_google(monkeypatch, gemini)
     assert fake_token(monkeypatch, firebase={"sign_in_provider": "anonymous"}).json()["demo"] is True
     monkeypatch.setattr(messenger, "graph", lambda *a, **k: (_ for _ in ()).throw(AssertionError("demo visitors never reach Messenger")))
@@ -363,7 +374,14 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     assert claim["status"] == "under_review" and claim["review"]["findings"][0]["evidence"] == ["C"]
     up_front = [p for c in asked[0].contents for p in c.parts if p.inline_data]
     fetched = [r for c in asked[-1].contents for p in c.parts if p.function_response for r in p.function_response.parts or []]
-    assert len(up_front) == 1 and len(fetched) == 1  # her photo comes with the claim; the packing photo, when the agent reads packing
+    # Her photo comes with the claim, the packing photo when the agent reads packing. Her unboxing video and the packing video
+    # are each checked on their own, as gs:// links to the evidence bucket; the agent gets the checks, whose label code is
+    # compared with her order's in code.
+    assert len(up_front) == 1 and len(fetched) == 1 and not [p for c in asked[0].contents for p in c.parts if p.file_data]
+    assert len(watched) == 2 and all(u.startswith(f"gs://{config.EVIDENCE_BUCKET}/stores/main/orders/{bea['id']}/") for u in watched)
+    assert bea["id"].startswith("bea7q")
+    given = " ".join(p.text for p in asked[0].contents[0].parts if p.text)
+    assert "[CV1C]" in given and "checked in code against this order (#BEA7Q, Bea Villanueva): it matches" in given
     assert claim["review"]["read"] == ["order", "chat", "packing", "delivery"]  # Memory Bank is off here: past decisions unavailable
 
     # Nico: one click checks his packing photo, and code holds it back as too shaky, whatever Gemini read.
@@ -381,8 +399,8 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     store.collection("stores").document(config.STORE).collection("orders").document("ana1").set(order)
     assert client.post("/api/orders/ana1/ask-confirmation", headers=SELLER).json()["status"] == "awaiting_confirmation"
     last = client.get(f"/api/conversations/{ana}", headers=SELLER).json()[-1]
-    assert last["from_page"] and last["quick_replies"] == ["Confirm #ana1 v1"]
-    client.post(f"/api/conversations/{ana}/customer", json={"text": "Confirm #ana1 v1"}, headers=SELLER)
+    assert last["from_page"] and last["quick_replies"] == ["Confirm #ANA1 v1"]
+    client.post(f"/api/conversations/{ana}/customer", json={"text": "Confirm #ANA1 v1"}, headers=SELLER)
     assert client.get("/api/orders/ana1", headers=SELLER).json()["confirmations"][-1]["by"] == "chat"
     # A photo she sends in the demo chat becomes the claim's photo, read from our storage.
     photo = catalog.image("damage-mug-blue")

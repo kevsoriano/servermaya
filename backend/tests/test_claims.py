@@ -227,3 +227,19 @@ def test_decision_memories_hold_the_sellers_decision_not_the_customers_words(mon
 
     monkeypatch.setattr(Memories, "retrieve", lambda self, **k: (_ for _ in ()).throw(RuntimeError("down")))
     assert memory.recall(order, "q") is None
+
+
+def test_video_label_is_matched_to_the_order_in_code():
+    from domain import claims as cases
+
+    seen = lambda code, name=None: cases.VideoCheck(
+        continuous=True, cut_at=None, sealed_at_start=True, item="a mug", label_code=code, label_name=name, text_on_screen=None
+    )
+    order = ("BEA7Q", "Bea Villanueva")
+    assert cases.label_match(seen("BEA7Q", "Bea Villanueva"), order).endswith("it matches.")
+    assert cases.label_match(seen("bea7q", "BEA VILLANUEVA"), order).endswith("it matches.")  # case does not matter
+    # O for 0 and l for 1, as a video frame can make them look, read as the same code
+    assert cases.label_match(seen("BOAlQ", "Bea Villanueva"), ("B0A1Q", "Bea Villanueva")).endswith("it matches.")
+    assert "NOT match" in cases.label_match(seen("ANA01", "Bea Villanueva"), order)  # another order's code
+    assert "NOT match" in cases.label_match(seen("BEA7Q", "Ana Cruz"), order)  # right code, another name
+    assert cases.label_match(seen(None), order) == "Order label: none could be read."

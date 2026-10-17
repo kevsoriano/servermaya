@@ -35,8 +35,9 @@ def demo_post(conversation_id: str, from_page: bool, text: str, attachment: dict
     if len(d["messages"]) >= demo.MAX_MESSAGES:
         raise HTTPException(409, "This demo chat is full. Start a new one.")
     m = demo.message(from_page, d["name"], text, datetime.now(UTC), [attachment] if attachment else None, button)
+    sent = "Sent a video" if (attachment or {}).get("kind") == "video" else "Sent a photo"
     demo_threads().document(conversation_id).update(
-        {"messages": firestore.ArrayUnion([m]), "updated_time": m["created_time"], "snippet": text or "Sent a photo"}
+        {"messages": firestore.ArrayUnion([m]), "updated_time": m["created_time"], "snippet": text or sent}
     )
     return {"message_id": m["id"]}
 
@@ -45,25 +46,34 @@ DEMO_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 
 
 async def demo_image(conversation_id: str, request: Request, from_page: bool) -> dict:
+    """An image, or a video such as an unboxing video, sent in a demo chat."""
     content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
-    if content_type not in DEMO_IMAGE_TYPES:
-        raise HTTPException(415, "Send a JPEG, PNG, GIF or WebP image")
+    video = content_type in pack.VIDEO_TYPES
+    if content_type not in DEMO_IMAGE_TYPES and not video:
+        raise HTTPException(415, "Send a JPEG, PNG, GIF or WebP image, or an MP4, MOV or WebM video")
     data = await request.body()
-    if not data or len(data) > pack.MAX_PHOTO_BYTES:
-        raise HTTPException(413, "Images must be under 10 MB")
+    if not data or len(data) > (pack.MAX_VIDEO_BYTES if video else pack.MAX_PHOTO_BYTES):
+        raise HTTPException(413, "Videos must be under 30 MB" if video else "Images must be under 10 MB")
     attachment = await run_in_threadpool(demo_attachment, data, content_type)
     return await run_in_threadpool(demo_post, conversation_id, from_page, "", attachment)
 
 
 def demo_attachment(data: bytes, content_type: str) -> dict:
-    """Store an image for a demo chat and describe it like a Messenger attachment."""
+    """Store an image or video for a demo chat and describe it like a Messenger attachment."""
     sha = hashlib.sha256(data).hexdigest()
     path = f"stores/{config.STORE}/demo/{sha}"
     try:
         db.bucket().blob(path).upload_from_string(data, content_type=content_type, if_generation_match=0)
     except PreconditionFailed:
         pass  # the same image was sent before
-    return {"kind": "image", "mime_type": content_type, "name": None, "url": f"/api/public/demo/images/{sha}", "preview_url": None, "path": path}
+    return {
+        "kind": content_type.split("/")[0],
+        "mime_type": content_type,
+        "name": None,
+        "url": f"/api/public/demo/images/{sha}",
+        "preview_url": None,
+        "path": path,
+    }
 
 
 def thread_messages(conversation_id: str) -> list[dict]:
@@ -153,7 +163,7 @@ ATTACHMENT_HOSTS = (".fbcdn.net", ".fbsbx.com", ".facebook.com")
 
 
 def attachment_bytes(a: dict) -> tuple[bytes, str]:
-    """A chat image's bytes and type: a demo one from our storage, a Messenger one from Meta's CDN (only Meta's hosts)."""
+    """A chat image's or video's bytes and type: a demo one from our storage, a Messenger one from Meta's CDN (only Meta's hosts)."""
     if a.get("path"):
         blob = db.bucket().blob(a["path"])
         return blob.download_as_bytes(), a.get("mime_type") or "image/jpeg"

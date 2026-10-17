@@ -10,3 +10,4 @@ dist
 
 # GCash history exports and other private statements
 docs/*.pdf
+backend/seed/videos/raw-*.mp4

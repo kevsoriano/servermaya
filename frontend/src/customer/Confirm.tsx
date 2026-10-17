@@ -83,10 +83,10 @@ function AfterPayment({ token, order, setOrder }: { token: string; order: Summar
       ))}
       {latest && latest.status !== 'resolved' && latest.photos < 4 && (
         <label className="upload">
-          Add a photo to your report
+          Add a photo or your unboxing video to your report
           <input
             type="file"
-            accept="image/*"
+            accept="image/*,video/mp4,video/quicktime,video/webm"
             disabled={!!busy}
             onChange={(e) => {
               const file = e.target.files?.[0]

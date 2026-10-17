@@ -698,6 +698,19 @@ mark.status.confirmed {
   margin: 0;
 }
 
+/* A video needs room to see a crack or a cut: it takes the whole row */
+.packing figure:has(video) {
+  grid-column: 1 / -1;
+}
+
+.packing video {
+  display: block;
+  width: 100%;
+  max-height: 24rem;
+  border-radius: 6px;
+  background: #000;
+}
+
 .packing img,
 .packing .placeholder {
   width: 100%;

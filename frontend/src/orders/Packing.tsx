@@ -14,6 +14,8 @@ export type PackingState = {
   version: number
   rows: Row[]
   photos: { id: string; sha256: string; uploaded_at: string; claimed_captured_at: string | null }[]
+  /** Evidence of what was packed and sealed, for a later claim. The photo check counts from photos only. */
+  videos?: { id: string; uploaded_at: string }[]
   suggestions: string[]
   checked_at?: string
   completed: { by: string; at: string } | null
@@ -26,7 +28,7 @@ const RESULT = {
 }
 
 /** Photos are only served to signed-in sellers, so they are fetched with the token and shown from memory. */
-export function Photo({ path, alt, caption }: { path: string; alt: string; caption: string }) {
+export function Photo({ path, alt, caption, video }: { path: string; alt: string; caption: string; video?: boolean }) {
   const [src, setSrc] = useState<string>()
   useEffect(() => {
     let url: string | undefined
@@ -42,10 +44,37 @@ export function Photo({ path, alt, caption }: { path: string; alt: string; capti
   }, [path])
   return (
     <figure>
-      {src ? <img src={src} alt={alt} /> : <div className="placeholder">Loading…</div>}
+      {!src ? (
+        <div className="placeholder">Loading…</div>
+      ) : video ? (
+        <video src={src} controls preload="metadata" aria-label={alt} />
+      ) : (
+        <img src={src} alt={alt} />
+      )}
       <figcaption>{caption}</figcaption>
     </figure>
   )
+}
+
+/** The order code the customer sees on the chat's buttons; the claim review reads it off this label in a video. */
+const orderCode = (id: string) => id.slice(0, 5).toUpperCase()
+
+const esc = (s: string | null) => (s ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
+
+/** A printable packing label. Names and addresses come from the customer's chat, so every value is escaped. */
+function printLabel(order: Order) {
+  const w = window.open('', '_blank', 'width=480,height=640')
+  if (!w) return
+  const d = order.draft
+  const items = d.items.map((i) => `${i.quantity} × ${esc(i.name)}${i.variant ? ` (${esc(i.variant)})` : ''}`).join('<br>')
+  w.document.write(`<!doctype html><meta charset="utf-8"><title>Label #${orderCode(order.id)}</title>
+<style>body{font:16px system-ui,sans-serif;margin:24px;color:#000}.l{border:2px solid #000;padding:20px;max-width:360px}
+small{letter-spacing:.1em}h1{font-size:56px;margin:0 0 12px;letter-spacing:.04em}p{margin:8px 0}</style>
+<div class="l"><small>ORDER</small><h1>#${orderCode(order.id)}</h1>
+<p><b>To: ${esc(d.recipient_name.value)}</b><br>${esc(d.phone.value)}<br>${esc(d.address.value)}</p><p>${items}</p></div>`)
+  w.document.close()
+  w.focus()
+  w.print()
 }
 
 export default function Packing({ order, onChange }: { order: Order; onChange: (o: Order) => void }) {
@@ -103,10 +132,19 @@ export default function Packing({ order, onChange }: { order: Order; onChange: (
         </p>
       )}
       {!done && (
-        <p>Lay all items out so they can be counted, then take one overview photo. Add close-ups for anything the check cannot see.</p>
+        <>
+          <p>Lay all items out so they can be counted, then take one overview photo. Add close-ups for anything the check cannot see.</p>
+          <p>
+            Stick the packing label on the box. If you film packing and sealing, end the video on the label: a claim's unboxing video is
+            checked against it.{' '}
+            <button type="button" onClick={() => printLabel(order)}>
+              Print packing label #{orderCode(order.id)}
+            </button>
+          </p>
+        </>
       )}
 
-      {packing.photos.length > 0 && (
+      {(packing.photos.length > 0 || !!packing.videos?.length) && (
         <div className="photos">
           {packing.photos.map((p, n) => (
             <Photo
@@ -116,14 +154,23 @@ export default function Packing({ order, onChange }: { order: Order; onChange: (
               caption={`Photo ${n + 1}`}
             />
           ))}
+          {packing.videos?.map((v, n) => (
+            <Photo
+              key={v.id}
+              video
+              path={`/orders/${order.id}/packing/photos/${v.id}`}
+              alt={`Packing video ${n + 1}`}
+              caption={`Packing video ${n + 1}`}
+            />
+          ))}
         </div>
       )}
       {!done && (
         <label className="upload">
-          Add packing photos
+          Add packing photos, or a video of packing and sealing it
           <input
             type="file"
-            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+            accept="image/jpeg,image/png,image/webp,image/heic,image/heif,video/mp4,video/quicktime,video/webm"
             capture="environment"
             multiple
             disabled={!!busy}
