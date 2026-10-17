@@ -1,7 +1,18 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { load } from '../lib/firebase'
 import { fromChat, peso } from '../lib/format'
-import type { Order } from './OrderView'
+import { parsePin, pinText } from '../lib/maps'
+import type { ChatMessage, Order } from './OrderView'
+import PinMap from './PinMap'
+
+/** A drop-off pin Google suggested from the order's address: how precise it is, and whether it is in the city the address names. */
+type Suggestion = { lat: number; lng: number; formatted?: string; precision_text?: string; warning: string | null; not_found?: boolean }
+/** What is at the chosen pin, checked against the order's address (Lalamove never compares them). */
+type Where = { formatted: string; warning: string | null }
+
+// A Google Maps link, or a pin as numbers, in a customer's message
+const SHARED_PIN =
+  /(https?:\/\/(maps\.app\.goo\.gl|goo\.gl\/maps|(www\.)?google\.[a-z.]+\/maps)\S*|-?\d{1,2}\.\d{3,}\s*,\s*-?\d{2,3}\.\d{3,})/
 
 type Event = {
   id: string
@@ -15,7 +26,7 @@ export type Fulfillment = {
   id: string
   courier: 'lalamove' | 'simulator' | 'other'
   status: 'quoted' | 'booking' | 'booked' | 'driver_assigned' | 'picked_up' | 'delivered' | 'cancelled' | 'failed'
-  quotation: { id: string; service: string; price: number; expires_at: string; livemode: boolean } | null
+  quotation: { id: string; service: string; price: number; expires_at: string; livemode: boolean; dropoff?: [number, number] } | null
   provider_order_id: string | null
   share_link: string | null
   tracking: string | null
@@ -45,14 +56,60 @@ const NEXT: Record<string, string[]> = {
 }
 
 /** Dispatch is only offered once this version is confirmed, paid and packed. Booking needs the seller to approve a quote. */
-export default function Dispatch({ order, onChange, onSent }: { order: Order; onChange: (o: Order) => void; onSent?: () => void }) {
+export default function Dispatch({
+  order,
+  onChange,
+  onSent,
+  chat,
+}: {
+  order: Order
+  onChange: (o: Order) => void
+  onSent?: () => void
+  chat?: ChatMessage[]
+}) {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
-  const [pin, setPin] = useState('')
+  const f = order.fulfillment
+  const quoted = f?.quotation?.dropoff
+  const [pin, setPin] = useState(quoted ? pinText(quoted[0], quoted[1]) : '')
+  const [pinFrom, setPinFrom] = useState(quoted ? 'the last quote' : '')
+  const [suggestion, setSuggestion] = useState<Suggestion | null>()
+  const [where, setWhere] = useState<Where | null>()
   const [service, setService] = useState('MOTORCYCLE')
   const [tracking, setTracking] = useState('')
   const [openedAt] = useState(() => Date.now())
-  const f = order.fulfillment
+  const choosing = order.status === 'confirmed' && (!f || f.status === 'quoted') && !(!f && order.dispatch_blocked)
+
+  // Suggest a pin from the order's address once the panel can quote. Kept on the order, so this is one lookup per address.
+  useEffect(() => {
+    if (!choosing) return
+    load<Suggestion | null>(`/orders/${order.id}/dispatch/suggest`).then(
+      (s) => {
+        setSuggestion(s)
+        if (!s || s.not_found) return // not found: the map opens around the pickup, and the seller clicks the spot
+        setPin((p) => p || pinText(s.lat, s.lng))
+        setPinFrom((w) => w || "the order's address")
+      },
+      () => setSuggestion(null),
+    )
+  }, [order.id, choosing])
+
+  // What is at the pin, checked against the address, once the pin has stopped moving for a moment.
+  const pinned = choosing ? parsePin(pin) : null
+  useEffect(() => {
+    if (!pinned) return setWhere(undefined)
+    const timer = setTimeout(
+      () =>
+        load<Where | null>(`/orders/${order.id}/dispatch/where`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(pinned),
+        }).then(setWhere, () => setWhere(null)),
+      700,
+    )
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [order.id, pinned?.lat, pinned?.lng])
 
   if (order.status !== 'confirmed') return null
   if (!f && order.dispatch_blocked)
@@ -68,6 +125,25 @@ export default function Dispatch({ order, onChange, onSent }: { order: Order; on
       .then(onChange, (e) => setError(e.message))
       .finally(() => setBusy(''))
   }
+
+  // The pin in a pasted link or the customer's message, read by the backend (it follows short links, only to Google).
+  const readPin = (text: string, from: string) => {
+    setBusy('Reading the pin…')
+    setError('')
+    return load<{ lat: number; lng: number }>(`/orders/${order.id}/dispatch/pin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    })
+      .then(
+        (p) => (setPin(pinText(p.lat, p.lng)), setPinFrom(from)),
+        (e) => setError(e.message),
+      )
+      .finally(() => setBusy(''))
+  }
+  const shared = [...(chat ?? [])].reverse().find((m) => !m.from_page && SHARED_PIN.test(m.text))
+  const here = parsePin(pin)
+  const center = here ?? (suggestion?.not_found ? suggestion : null)
 
   const expired = f?.quotation && Date.parse(f.quotation.expires_at) < openedAt // the backend re-checks when booking
   const live = f && !['cancelled', 'failed'].includes(f.status)
@@ -91,10 +167,66 @@ export default function Dispatch({ order, onChange, onSent }: { order: Order; on
               run('Getting a Lalamove quote…', '/quote', { pin, service })
             }}
           >
+            <p>
+              Drop-off for <strong>{order.draft.address.value}</strong>
+            </p>
+            {suggestion?.not_found && !here && (
+              <p className="claim">
+                <small>
+                  <strong>{suggestion.warning}</strong>
+                </small>
+              </p>
+            )}
+            {suggestion && !suggestion.not_found && pinFrom === "the order's address" && (
+              <p className={suggestion.warning ? 'claim' : undefined}>
+                <small>
+                  Google Maps found: {suggestion.formatted} ({suggestion.precision_text}).{' '}
+                  {suggestion.warning && <strong>{suggestion.warning}</strong>}
+                </small>
+              </p>
+            )}
+            {center && (
+              <PinMap
+                lat={center.lat}
+                lng={center.lng}
+                placed={!!here}
+                label="Drop-off pin: drag it, or click the map"
+                onMove={(lat, lng) => (setPin(pinText(lat, lng)), setPinFrom('the map'))}
+              />
+            )}
+            {here && where && (
+              <p className={where.warning ? 'claim' : undefined}>
+                <small>
+                  The rider will be sent to this pin: {where.formatted}. Lalamove does not check it against the address.{' '}
+                  {where.warning && <strong>{where.warning}</strong>}
+                </small>
+              </p>
+            )}
+            {shared && pinFrom !== 'the customer' && (
+              <p>
+                <small>The customer sent a pin in the chat ({new Date(shared.created_time).toLocaleString()}).</small>{' '}
+                <button type="button" disabled={!!busy} onClick={() => readPin(shared.text, 'the customer')}>
+                  Use the customer's pin
+                </button>
+              </p>
+            )}
             <label>
-              Drop-off pin for {order.draft.address.value}: paste it from Google Maps, or the pin the customer sent
-              <input required placeholder="14.6091, 121.0223" value={pin} onChange={(e) => setPin(e.target.value)} />
+              Pin{pinFrom && <small> (from {pinFrom})</small>}: or paste numbers or a Google Maps link, such as one the customer sent
+              <input
+                required
+                placeholder="14.6091, 121.0223"
+                value={pin}
+                onChange={(e) => (setPin(e.target.value), setPinFrom(''))}
+                onBlur={(e) => !parsePin(e.target.value) && e.target.value.trim() && readPin(e.target.value, 'the pasted link')}
+              />
             </label>
+            {fromChat(order) && (
+              <p>
+                <button type="button" disabled={!!busy} onClick={() => run('Sending…', '/ask-pin').then(onSent)}>
+                  Ask the customer for their map pin
+                </button>
+              </p>
+            )}
             <label>
               Vehicle
               <select value={service} onChange={(e) => setService(e.target.value)}>

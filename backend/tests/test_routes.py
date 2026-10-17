@@ -495,3 +495,27 @@ def test_messenger_webhook_applies_a_tap_from_the_customer_it_was_sent_to(monkey
     assert saved(store)["status"] == "awaiting_confirmation"
     assert post("psid7", "confirm:o1:1").json() == {"received": True}
     assert saved(store)["status"] == "confirmed" and saved(store)["confirmations"][-1]["message_id"] == "m_9"
+
+
+def test_dropoff_pin_is_suggested_once_per_address_and_read_from_a_pasted_link(monkeypatch, seller):
+    from integrations import maps
+
+    store, _ = fake_google(monkeypatch)
+    put_order(store)
+    looked_up = []
+    monkeypatch.setattr(maps, "geocode", lambda address: looked_up.append(address) or {"address": address, "lat": 14.62, "lng": 121.05})
+    get = lambda: client.get("/api/orders/o1/dispatch/suggest", headers=SELLER).json()
+    assert get()["lat"] == 14.62 and get()["lat"] == 14.62 and looked_up == ["Cubao"]  # kept on the order: one lookup
+    saved(store)["draft"]["address"]["value"] = "Cubao, Quezon City"
+    assert get()["address"] == "Cubao, Quezon City" and len(looked_up) == 2  # a changed address is looked up again
+
+    # Not found: no pin, a map around the pickup to click on, and a plain warning
+    monkeypatch.setattr(maps, "geocode", lambda address: None)
+    monkeypatch.setattr(config, "MAPS_SERVER_KEY", "k")
+    store.collection("stores").document(config.STORE).set({"dispatch": {"lat": 14.55, "lng": 121.02}})
+    saved(store)["draft"]["address"]["value"] = "Somewhere unknown"
+    assert get() | {"warning": ""} == {"address": "Somewhere unknown", "not_found": True, "lat": 14.55, "lng": 121.02, "warning": ""}
+
+    pin = lambda text: client.post("/api/orders/o1/dispatch/pin", json={"text": text}, headers=SELLER)
+    assert pin("https://www.google.com/maps/@14.6191,121.0510,18z").json() == {"lat": 14.6191, "lng": 121.051}
+    assert pin("not a pin at all").status_code == 422

@@ -476,7 +476,7 @@ export default function OrderView({
           )}
           <GcashPayment order={order} onChange={onChange} write={setMessage} />
           <Packing order={order} onChange={onChange} />
-          <Dispatch order={order} onChange={onChange} onSent={onSent} />
+          <Dispatch order={order} onChange={onChange} onSent={onSent} chat={chat} />
           <Claims order={order} onChange={onChange} write={setMessage} chat={chat} />
           {link && fromChat(order) && (
             <details>

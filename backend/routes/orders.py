@@ -118,6 +118,18 @@ def send_payment_link(order_id: str, user: dict = Depends(auth.current_user)):
     return db.present(ref.get())
 
 
+@router.post("/api/orders/{order_id}/ask-pin")
+def ask_pin(order_id: str, user: dict = Depends(auth.current_user)):
+    """Ask the customer for their exact drop-off spot, as a Google Maps link the delivery panel can read."""
+    ref, order, cid = chat_of(order_id)
+    text = (
+        "To make sure the rider finds you: open Google Maps, press and hold on your exact drop-off spot (your gate or building), "
+        "tap Share, and paste the link here."
+    )
+    chats.send(cid, text, user, order_id)
+    return db.present(ref.get())
+
+
 @router.post("/api/orders/{order_id}/ask-received")
 def ask_received(order_id: str, user: dict = Depends(auth.current_user)):
     """Send a Received button once the order is on its way. The courier's "delivered" never stands in for it."""

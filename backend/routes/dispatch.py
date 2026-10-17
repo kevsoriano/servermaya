@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from core import auth, config, db
 from domain import delivery
 from domain import orders as rules
-from integrations import lalamove
+from integrations import lalamove, maps
 from services import deliveries
 
 router = APIRouter()
@@ -31,9 +31,9 @@ def get_dispatch_settings(user: dict = Depends(auth.current_user)):
 
 @router.put("/api/settings/dispatch")
 def put_dispatch_settings(body: DispatchSettings, user: dict = Depends(auth.current_user)):
-    """Where couriers pick up from. Lalamove needs a map pin; the seller pastes it from Google Maps."""
+    """Where couriers pick up from. Lalamove needs a map pin: from the map, or pasted from Google Maps."""
     try:
-        lat, lng = delivery.parse_pin(body.pin)
+        lat, lng = maps.pin(body.pin)
         phone = delivery.e164(body.phone)
     except rules.Refused as e:
         raise HTTPException(422, str(e))
@@ -48,6 +48,63 @@ def put_dispatch_settings(body: DispatchSettings, user: dict = Depends(auth.curr
     }
     db.store_doc().set({"dispatch": saved}, merge=True)
     return saved
+
+
+class PinIn(BaseModel):
+    text: str = Field(min_length=3, max_length=500)
+
+
+@router.post("/api/settings/dispatch/locate")
+def locate_pickup(body: PinIn, user: dict = Depends(auth.current_user)):
+    """A suggested pickup pin from the address the seller typed, to check and drag on the map before saving."""
+    found = maps.geocode(body.text)
+    if not found:
+        raise HTTPException(404, "Google Maps could not find that address. Paste the pin instead.")
+    return found
+
+
+@router.get("/api/orders/{order_id}/dispatch/suggest")
+def suggest_dropoff(order_id: str, user: dict = Depends(auth.current_user)):
+    """A drop-off pin suggested from the order's address, kept on the order until the address changes, so reopening the
+    panel does not geocode again. None when Maps is not set up or finds nothing."""
+    ref, order = db.loaded(order_id)
+    address = order["draft"]["address"]["value"] or ""
+    kept = order.get("dropoff_suggestion") or {}
+    if kept.get("address") == address:
+        return kept
+    found = maps.geocode(address)
+    if found:
+        ref.update({"dropoff_suggestion": found})
+        return found
+    # Not found: a map around the shop's pickup to click the spot on. No pin is set, so nothing can be quoted by accident.
+    pickup = config.DEMO_PICKUP if (order.get("source") or {}).get("type") == "demo" else get_dispatch_settings(user)
+    if not (config.MAPS_SERVER_KEY and pickup):
+        return None
+    warning = "Google Maps could not find this address. Click the drop-off spot on the map, or ask the customer for their pin."
+    return {"address": address, "not_found": True, "lat": pickup["lat"], "lng": pickup["lng"], "warning": warning}
+
+
+@router.post("/api/orders/{order_id}/dispatch/pin")
+def read_pin(order_id: str, body: PinIn, user: dict = Depends(auth.current_user)):
+    """The pin in what was pasted: numbers, a Google Maps link, or the short link the customer shared in the chat."""
+    db.loaded(order_id)  # a real order, and (for a demo visitor) their own
+    try:
+        lat, lng = maps.pin(body.text)
+    except rules.Refused as e:
+        raise HTTPException(422, str(e))
+    return {"lat": lat, "lng": lng}
+
+
+class WhereIn(BaseModel):
+    lat: float = Field(ge=4, le=22)  # the Philippines, as delivery.parse_pin allows
+    lng: float = Field(ge=116, le=127)
+
+
+@router.post("/api/orders/{order_id}/dispatch/where")
+def where_is_pin(order_id: str, body: WhereIn, user: dict = Depends(auth.current_user)):
+    """What is at the chosen pin, checked against the order's address: Lalamove itself never compares the two."""
+    _, order = db.loaded(order_id)
+    return maps.reverse(body.lat, body.lng, order["draft"]["address"]["value"] or "")
 
 
 class QuoteIn(BaseModel):
@@ -68,7 +125,7 @@ def quote_delivery(order_id: str, body: QuoteIn, user: dict = Depends(auth.curre
     ref, order = db.loaded(order_id)
     try:
         delivery.can_dispatch(order)
-        lat, lng = delivery.parse_pin(body.pin)
+        lat, lng = maps.pin(body.pin)
     except rules.Refused as e:
         raise HTTPException(409, str(e))
     stops = [

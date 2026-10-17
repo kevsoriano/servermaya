@@ -1,5 +1,6 @@
 import { GoogleAuthProvider, onAuthStateChanged, signInAnonymously, signInWithPopup, signOut, type User } from 'firebase/auth'
 import { useEffect, useState } from 'react'
+import { setMapsConfig } from './lib/maps'
 import Conversations from './conversations/Conversations'
 import Orders from './orders/Orders'
 import Patterns from './patterns/Patterns'
@@ -9,7 +10,14 @@ import GcashSettings from './settings/GcashSettings'
 import { api, auth } from './lib/firebase'
 
 /** reply_hours: how long after the customer's last message Messenger lets a seller reply (24, or 168 with the Human Agent tag). */
-type Me = { uid: string; email: string; name: string | null; demo: boolean; reply_hours?: number }
+type Me = {
+  uid: string
+  email: string
+  name: string | null
+  demo: boolean
+  reply_hours?: number
+  maps?: { key: string; map_id: string } | null
+}
 
 export default function App() {
   // undefined = still loading, null = signed out
@@ -27,8 +35,11 @@ export default function App() {
         if (!u) return
         try {
           const r = await api('/me', { signal: AbortSignal.timeout(20_000) })
-          if (r.ok) setMe(await r.json())
-          else setError(r.status === 403 ? `${u.email} is not on the allowlist.` : `Backend returned ${r.status}.`)
+          if (r.ok) {
+            const m: Me = await r.json()
+            setMapsConfig(m.maps) // Google Maps for delivery pins, when the backend has a key
+            setMe(m)
+          } else setError(r.status === 403 ? `${u.email} is not on the allowlist.` : `Backend returned ${r.status}.`)
         } catch {
           setError('Could not reach the backend.')
         }
@@ -109,7 +120,7 @@ export default function App() {
           )}
           <Catalog readOnly={!!me.demo} />
           <GcashSettings />
-          <DispatchSettings />
+          <DispatchSettings readOnly={!!me.demo} />
         </div>
       )}
     </div>

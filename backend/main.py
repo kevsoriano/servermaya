@@ -17,7 +17,8 @@ def healthz():
 @app.get("/api/me")
 def me(user: dict = Depends(auth.current_user)):
     # How long after the customer's last message Messenger lets a seller reply: 24 hours, or 7 days with the Human Agent tag
-    return {**user, "reply_hours": 168 if config.HUMAN_AGENT else 24}
+    maps = {"key": config.MAPS_BROWSER_KEY, "map_id": config.MAPS_MAP_ID} if config.MAPS_BROWSER_KEY else None
+    return {**user, "reply_hours": 168 if config.HUMAN_AGENT else 24, "maps": maps}
 
 
 # FastAPI matches routes in the order they were added: these keep the order main.py had before it was split.

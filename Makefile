@@ -5,8 +5,8 @@ RUN_SA  := 628763008062-compute@developer.gserviceaccount.com
 MIN_INSTANCES ?= 1
 # read from backend/.env, but sent to Cloud Run through Secret Manager instead of as plain env vars
 SECRETS := MESSENGER_PAGE_TOKEN PAYMONGO_SECRET_KEY PAYMONGO_WEBHOOK_SECRET LALAMOVE_API_KEY LALAMOVE_API_SECRET
-# sent the same way when set; while empty, the Messenger webhook stays off
-OPTIONAL_SECRETS := MESSENGER_APP_SECRET MESSENGER_VERIFY_TOKEN
+# sent the same way when set; while empty, the Messenger webhook (or the Maps address lookup) stays off
+OPTIONAL_SECRETS := MESSENGER_APP_SECRET MESSENGER_VERIFY_TOKEN MAPS_SERVER_KEY
 
 comma := ,
 empty :=

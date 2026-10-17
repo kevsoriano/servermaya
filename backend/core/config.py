@@ -24,6 +24,14 @@ MESSENGER_VERIFY_TOKEN = os.environ.get("MESSENGER_VERIFY_TOKEN", "")
 HUMAN_AGENT = os.environ.get("MESSENGER_HUMAN_AGENT", "") == "1"
 
 
+# Google Maps Platform. The server key may only call the Geocoding API (address to pin); the browser key may only load the
+# Maps JavaScript API, and only on this app's addresses, so it is public. Empty: no map, and pins are pasted as before.
+MAPS_SERVER_KEY = os.environ.get("MAPS_SERVER_KEY", "")
+MAPS_BROWSER_KEY = os.environ.get("MAPS_BROWSER_KEY", "")
+# The map style for draggable pins; Google's DEMO_MAP_ID works for development
+MAPS_MAP_ID = os.environ.get("MAPS_MAP_ID", "DEMO_MAP_ID")
+
+
 GRAPH = "https://graph.facebook.com"
 
 
