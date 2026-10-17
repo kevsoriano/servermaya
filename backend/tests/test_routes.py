@@ -415,8 +415,10 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     assert client.get("/api/orders/ana1", headers=SELLER).json()["confirmations"][-1]["by"] == "chat"
     # Ask for GCash payment sends the instructions in the chat itself, with the demo shop's account and the total
     assert client.post("/api/orders/ana1/gcash/request", headers=SELLER).json()["manual_payment"]["status"] == "requested"
-    told = client.get(f"/api/conversations/{ana}", headers=SELLER).json()[-1]
+    told, qr = client.get(f"/api/conversations/{ana}", headers=SELLER).json()[-2:]
     assert told["from_page"] and told["text"].startswith("To pay by GCash, send ₱500.00 to Juan Dela Cruz, 0917 123 4567")
+    # then the demo shop's sample QR: stamped as a sample, never a real account
+    assert qr["from_page"] and qr["attachments"][0]["kind"] == "image"
     # A photo she sends in the demo chat becomes the claim's photo, read from our storage.
     photo = catalog.image("damage-mug-blue")
     client.post(f"/api/conversations/{ana}/customer/image", content=photo, headers={**SELLER, "Content-Type": "image/jpeg"})
@@ -538,3 +540,30 @@ def test_loading_an_order_moves_a_sandbox_booking_on_unless_switched_off(monkeyp
     monkeypatch.setattr(config, "SANDBOX_AUTO_DELIVERY", True)
     f = client.get("/api/orders/o1", headers=SELLER).json()["fulfillment"]
     assert f["status"] == "delivered" and [e["source"] for e in f["events"]] == ["provider", "demo", "demo", "demo"]
+
+
+def test_the_sellers_own_qr_is_saved_and_sent_after_the_gcash_instructions(monkeypatch, seller):
+    store, _ = fake_google(monkeypatch)
+    store.collection("stores").document(config.STORE).set({"gcash": {"name": "Ana Seller", "mobile": "639171112222", "qr": None}})
+    put_order(store, payment=None, packing=None, source={"type": "messenger", "conversation_id": "t_1"})
+    qr = catalog.image("gcash-qr-sample")  # any JPEG stands in for the seller's screenshot
+    assert client.post("/api/settings/gcash/qr", content=b"x", headers={**SELLER, "Content-Type": "image/gif"}).status_code == 415
+    assert client.post("/api/settings/gcash/qr", content=qr, headers={**SELLER, "Content-Type": "image/jpeg"}).json() == {"qr_image": True}
+    assert client.get("/api/settings/gcash/qr", headers=SELLER).content == qr
+    assert client.get("/api/settings/gcash", headers=SELLER).json()["qr_image"] is True
+
+    monkeypatch.setattr(config, "PAGE_ID", "99")
+    now = datetime.now(UTC).isoformat()
+    monkeypatch.setattr(messenger, "fetch_messages", lambda cid: [{"id": "m1", "text": "hi", "from_page": False, "created_time": now}])
+    sent = []
+    monkeypatch.setattr(
+        messenger,
+        "graph",
+        lambda path, send=None, files=None, **k: (
+            {"participants": {"data": [{"id": "99"}, {"id": "psid7"}]}} if "fields" in k else sent.append((send, files)) or {"message_id": "mid"}
+        ),
+    )
+    assert client.post("/api/orders/o1/gcash/request", headers=SELLER).json()["manual_payment"]["status"] == "requested"
+    (text, _), (image, files) = sent
+    assert text["message"]["text"].startswith("To pay by GCash, send ₱500.00 to Ana Seller, 0917 111 2222")
+    assert image["message"]["attachment"]["type"] == "image" and files["filedata"][1] == qr  # the very screenshot the seller saved

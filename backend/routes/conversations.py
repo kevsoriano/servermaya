@@ -1,10 +1,9 @@
-import hashlib
 import re
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from google.api_core.exceptions import AlreadyExists, PreconditionFailed
+from google.api_core.exceptions import AlreadyExists
 from google.cloud import firestore
 from pydantic import BaseModel, Field
 
@@ -248,25 +247,7 @@ async def reply_image(conversation_id: str, request: Request, order_id: str | No
         raise HTTPException(413, "Images must be under 10 MB")
     if order_id and not re.fullmatch(r"\w{1,64}", order_id):
         raise HTTPException(400, "Invalid order id")
-    customer, tag = await run_in_threadpool(chats.customer_to_reply, conversation_id)
-    sha = hashlib.sha256(data).hexdigest()
-    path = f"stores/{config.STORE}/sent/{sha}"
-    try:
-        await run_in_threadpool(lambda: db.bucket().blob(path).upload_from_string(data, content_type=content_type, if_generation_match=0))
-    except PreconditionFailed:
-        pass  # the same image was sent before
-    sent = await run_in_threadpool(
-        messenger.graph,
-        f"{config.PAGE_ID}/messages",
-        {
-            "recipient": {"id": customer},
-            **chats.messaging(tag),
-            "message": {"attachment": {"type": "image", "payload": {"is_reusable": False}}},
-        },
-        {"filedata": (f"image.{content_type.split('/')[1]}", data, content_type)},
-    )
-    image = {"path": path, "sha256": sha, "content_type": content_type, "size": len(data)}
-    return await run_in_threadpool(chats.record_sent, conversation_id, order_id, sent, user, image=image)
+    return await run_in_threadpool(chats.send_image, conversation_id, data, content_type, user, order_id)
 
 
 @router.get("/api/conversations/{conversation_id}/orders")

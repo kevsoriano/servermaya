@@ -2,17 +2,21 @@ import jsQR from 'jsqr'
 import { useEffect, useState } from 'react'
 import { api, load } from '../lib/firebase'
 import { localMobile } from '../lib/format'
+import { Photo } from '../orders/Packing'
 
 type Saved = {
   name: string
   mobile: string
   qr: { masked_name: string; user_id: string | null; payload: string } | null
   demo?: boolean
+  /** A QR image is saved: sent to customers after the GCash instructions (the demo shop's is a stamped sample) */
+  qr_image?: boolean
   updated_by: string
   updated_at: string
 } | null
 
-/** Read the QR code in a screenshot, in the browser. Only the decoded text is sent to the backend. */
+/** Read the QR code in a screenshot, in the browser. The decoded text is checked against the name; the screenshot itself is
+ * saved only after that check passes, to send to customers. */
 async function decode(file: File): Promise<string | null> {
   const bitmap = await createImageBitmap(file)
   const canvas = document.createElement('canvas')
@@ -151,6 +155,7 @@ export default function GcashSettings() {
   const [name, setName] = useState('')
   const [mobile, setMobile] = useState('')
   const [qr, setQr] = useState<string | null>(null)
+  const [qrFile, setQrFile] = useState<File>()
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -169,8 +174,10 @@ export default function GcashSettings() {
     if (!file) return
     setError('')
     const text = await decode(file).catch(() => null)
-    if (text) setQr(text)
-    else setError('No QR code found in that image. Upload a clear screenshot of your GCash QR.')
+    if (text) {
+      setQr(text)
+      setQrFile(file)
+    } else setError('No QR code found in that image. Upload a clear screenshot of your GCash QR.')
   }
 
   const save = (e: React.FormEvent) => {
@@ -182,7 +189,16 @@ export default function GcashSettings() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, mobile, qr }),
     })
-      .then(show, (e) => setError(e.message))
+      .then(async (s) => {
+        // The name check passed: keep the screenshot too, to send to customers with the GCash instructions.
+        if (qrFile && s?.qr) {
+          await load('/settings/gcash/qr', { method: 'POST', headers: { 'Content-Type': qrFile.type }, body: qrFile })
+          s = { ...s, qr_image: true }
+          setQrFile(undefined)
+        }
+        show(s)
+      })
+      .catch((e) => setError(e.message))
       .finally(() => setBusy(false))
   }
 
@@ -214,7 +230,7 @@ export default function GcashSettings() {
           </label>
           <label>
             GCash QR (optional): a screenshot from GCash → Receive → Receive via QR
-            <input type="file" accept="image/*" onChange={(e) => pick(e.target.files?.[0])} />
+            <input type="file" accept="image/png,image/jpeg" onChange={(e) => pick(e.target.files?.[0])} />
           </label>
           <p>
             <small>
@@ -227,6 +243,20 @@ export default function GcashSettings() {
           </p>
           <button disabled={busy}>Save</button>
         </form>
+        {saved?.qr_image && (
+          <div className="packing">
+            <Photo
+              key={saved.updated_at}
+              path="/settings/gcash/qr"
+              alt="The GCash QR sent to customers"
+              caption={
+                saved.demo
+                  ? "The demo shop's sample QR: stamped, and not a real account. Sent after the GCash instructions."
+                  : 'Sent to customers after the GCash instructions in the chat.'
+              }
+            />
+          </div>
+        )}
         {saved?.updated_at && (
           <p>
             <small>

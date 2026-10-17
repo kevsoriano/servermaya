@@ -151,6 +151,27 @@ def send(conversation_id: str, text: str, user: dict, order_id: str | None = Non
     return record_sent(conversation_id, order_id, sent, user, text=text, **extra) | {"psid": customer}
 
 
+def send_image(conversation_id: str, data: bytes, content_type: str, user: dict, order_id: str | None = None) -> dict:
+    """Send one image as the Page, such as the shop's GCash QR, and keep a copy as evidence of what was sent. In a demo
+    chat it is added to the chat instead."""
+    if demo.is_demo(conversation_id):
+        return demo_post(conversation_id, True, "", demo_attachment(data, content_type))
+    customer, tag = customer_to_reply(conversation_id)
+    sha = hashlib.sha256(data).hexdigest()
+    path = f"stores/{config.STORE}/sent/{sha}"
+    try:
+        db.bucket().blob(path).upload_from_string(data, content_type=content_type, if_generation_match=0)
+    except PreconditionFailed:
+        pass  # the same image was sent before
+    sent = messenger.graph(
+        f"{config.PAGE_ID}/messages",
+        {"recipient": {"id": customer}, **messaging(tag), "message": {"attachment": {"type": "image", "payload": {"is_reusable": False}}}},
+        {"filedata": (f"image.{content_type.split('/')[1]}", data, content_type)},
+    )
+    image = {"path": path, "sha256": sha, "content_type": content_type, "size": len(data)}
+    return record_sent(conversation_id, order_id, sent, user, image=image)
+
+
 def apply_tap(event: dict) -> None:
     """One messaging event from Messenger's webhook. A tap on Confirm or Received carries the payload the seller's message
     set ("confirm:<order>:<version>" or "received:<order>"). It counts only from the customer the button was sent to, and

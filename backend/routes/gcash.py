@@ -25,8 +25,55 @@ router = APIRouter()
 @router.get("/api/settings/gcash")
 def get_gcash(user: dict = Depends(auth.current_user)):
     if user.get("demo"):
-        return config.DEMO_GCASH
-    return (db.store_doc().get().to_dict() or {}).get("gcash")
+        return {**config.DEMO_GCASH, "qr_image": True}  # the sample QR, stamped as one
+    store = db.store_doc().get().to_dict() or {}
+    return store.get("gcash") and {**store["gcash"], "qr_image": bool(store.get("gcash_qr_image"))}
+
+
+QR_TYPES = {"image/jpeg", "image/png"}  # what Messenger shows as an image, and what GCash saves
+
+
+def qr_image(user: dict) -> tuple[bytes, str] | None:
+    """The QR image customers are sent: the demo shop's sample, or the seller's own screenshot if saved."""
+    if user.get("demo"):
+        return samples_qr(), "image/jpeg"
+    saved = (db.store_doc().get().to_dict() or {}).get("gcash_qr_image")
+    return (db.bucket().blob(saved["path"]).download_as_bytes(), saved["content_type"]) if saved else None
+
+
+def samples_qr() -> bytes:
+    from seed import catalog
+
+    return catalog.image("gcash-qr-sample")
+
+
+@router.post("/api/settings/gcash/qr")
+async def put_gcash_qr(request: Request, user: dict = Depends(auth.current_user)):
+    """The seller's own GCash QR screenshot, sent to customers with the GCash instructions. The browser reads the QR and
+    the settings check it against the registered name first; this keeps the picture."""
+    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if content_type not in QR_TYPES:
+        raise HTTPException(415, "Upload the QR as a PNG or JPEG screenshot")
+    data = await request.body()
+    if not data or len(data) > 5 * 1024 * 1024:
+        raise HTTPException(413, "The QR image must be under 5 MB")
+    sha = hashlib.sha256(data).hexdigest()
+    path = f"stores/{config.STORE}/gcash/qr/{sha}"
+    try:
+        await run_in_threadpool(lambda: db.bucket().blob(path).upload_from_string(data, content_type=content_type, if_generation_match=0))
+    except PreconditionFailed:
+        pass  # the same screenshot again
+    saved = {"path": path, "sha256": sha, "content_type": content_type, "size": len(data), "by": user["email"], "at": datetime.now(UTC)}
+    await run_in_threadpool(lambda: db.store_doc().set({"gcash_qr_image": saved}, merge=True))
+    return {"qr_image": True}
+
+
+@router.get("/api/settings/gcash/qr")
+def gcash_qr(user: dict = Depends(auth.current_user)):
+    found = qr_image(user)
+    if not found:
+        raise HTTPException(404, "No QR saved")
+    return Response(found[0], media_type=found[1], headers={"Cache-Control": "private, max-age=300"})
 
 
 @router.put("/api/settings/gcash")
@@ -63,6 +110,10 @@ def request_gcash(order_id: str, body: GcashRequest | None = None, user: dict = 
         except rules.Refused as e:
             raise HTTPException(409, str(e))
         chats.send(source["conversation_id"], gcash_message(order, pay_to, says_paid), user, order_id)
+        # the QR follows the instructions; the demo's is the stamped sample, never a real account
+        qr = None if says_paid else qr_image({"demo": source["type"] == "demo"})
+        if qr:
+            chats.send_image(source["conversation_id"], *qr, user, order_id)
     return db.change(ref, rule)
 
 
@@ -72,7 +123,8 @@ def gcash_message(order: dict, pay_to: dict, says_paid: bool) -> str:
     m = re.sub(r"\D", "", pay_to["mobile"])
     local = f"0{m[2:5]} {m[5:8]} {m[8:]}" if m.startswith("63") and len(m) == 12 else pay_to["mobile"]
     return (
-        f"To pay by GCash, send {rules.peso(order['draft']['total'])} to {pay_to['name']}, {local} (GCash > Send Money). "
+        f"To pay by GCash, send {rules.peso(order['draft']['total'])} to {pay_to['name']}, {local} (GCash > Send Money), "
+        "or scan the QR below. "
         "Then send a screenshot of your receipt here, and we'll confirm once we find the payment in our GCash history."
     )
 

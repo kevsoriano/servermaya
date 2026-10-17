@@ -67,7 +67,9 @@ def test_demo_visitors_only_reach_their_own_demo_chats_and_orders(monkeypatch):
     assert client.put("/api/settings/gcash", headers=h, json={"name": "X", "mobile": "09171234567"}).status_code == 403
     assert client.put("/api/settings/dispatch", headers=h, json={}).status_code == 403
     assert client.post("/api/patterns/review", headers=h, json={}).status_code == 403
-    assert client.get("/api/settings/gcash", headers=h).json() == config.DEMO_GCASH
+    assert client.get("/api/settings/gcash", headers=h).json() == {**config.DEMO_GCASH, "qr_image": True}
+    qr = client.get("/api/settings/gcash/qr", headers=h)  # the demo shop's sample QR, stamped as one
+    assert qr.status_code == 200 and qr.headers["content-type"] == "image/jpeg"
     assert client.get("/api/settings/dispatch", headers=h).json() == config.DEMO_PICKUP
 
     me, seller = {"uid": "u1", "demo": True}, {"uid": "s1", "demo": False}

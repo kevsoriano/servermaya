@@ -49,6 +49,7 @@ DEMO_ROUTES = {
     ("POST", "/api/demo/reset"),
     ("GET", "/api/orders"),
     ("GET", "/api/settings/gcash"),
+    ("GET", "/api/settings/gcash/qr"),  # the demo shop's sample QR
     ("GET", "/api/settings/dispatch"),
     ("GET", "/api/patterns"),
     ("POST", "/api/gcash/statements"),
