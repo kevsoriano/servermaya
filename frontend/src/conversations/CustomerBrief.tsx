@@ -1,14 +1,17 @@
 import { type ReactNode, useEffect, useState } from 'react'
 import { load } from '../lib/firebase'
 
-type Brief = { summary: string | null; problem?: string }
+type Brief = { summary: string | null; problem?: string; first?: boolean }
 
 const ABOUT =
-  "AI summary of this customer's chat and their orders with your shop, from your records. It describes what happened; it is never a judgement of the customer and never blocks an order."
+  "AI summary of this customer's earlier orders with your shop and the messages about them, from your records. The conversation going on now is in the checks below. It describes what happened; it is never a judgement of the customer and never blocks an order."
 
-/** Who this customer is to the shop, above the checks: a short AI-written brief from their chat and orders.
+/** Who this customer is to the shop: a short AI-written brief of their history (finished orders), or a first-order line.
  * changed: anything that should refresh it, such as the newest message and the orders' states; undefined until the orders
  * have loaded, so the brief is asked for once. */
+const FIRST_ABOUT =
+  'From your records: this customer has no finished order with your shop yet. The conversation going on now is in the checks below.'
+
 export default function CustomerBrief({
   conversationId,
   name,
@@ -38,7 +41,13 @@ export default function CustomerBrief({
       {avatar}
       <h3>
         {name}{' '}
-        <span className="info" tabIndex={0} role="img" aria-label={ABOUT} data-tip={ABOUT}>
+        <span
+          className="info"
+          tabIndex={0}
+          role="img"
+          aria-label={b?.first ? FIRST_ABOUT : ABOUT}
+          data-tip={b?.first ? FIRST_ABOUT : ABOUT}
+        >
           ⓘ
         </span>
       </h3>

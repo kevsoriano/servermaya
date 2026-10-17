@@ -464,8 +464,20 @@ export default function Conversations({ replyHours, onOpenOrder }: { replyHours:
             name={name}
             avatar={<Avatar name={name} src={customer?.picture} />}
             changed={
+              // The brief is about finished orders only, so it is asked for again only when one finishes or its claim changes.
               orders &&
-              `${messages.at(-1)?.id}|${orders.map((o) => [o.id, o.status, o.version, o.payment?.status, o.manual_payment?.status, o.fulfillment?.status, o.receipt?.status, (o.claims ?? []).map((c) => c.status).join()].join(':')).join()}`
+              orders
+                .filter(done)
+                .map((o) =>
+                  [
+                    o.id,
+                    o.status,
+                    o.receipt?.status,
+                    (o.claims ?? []).map((c) => `${c.status}/${c.decision?.cause ?? ''}`).join(),
+                    o.returns?.length,
+                  ].join(':'),
+                )
+                .join()
             }
           />
           {order && <VerifyPanel order={order} onChange={orderChanged} onSent={reloadMessages} onOpen={onOpenOrder} chat={messages} />}

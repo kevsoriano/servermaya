@@ -625,7 +625,7 @@ def test_a_return_the_customer_sends_holds_the_refund_until_the_item_is_received
     assert done["claims"][0]["custody"]["steps"][-1]["status"] == "ok"
 
 
-def test_the_customer_brief_is_kept_until_something_changes_and_retried_when_gemini_fails(monkeypatch, seller):
+def test_the_customer_brief_reads_history_only_and_is_shared_by_chats_with_the_same_history(monkeypatch, seller):
     from domain import brief
 
     asked, failing = [], []
@@ -639,28 +639,37 @@ def test_the_customer_brief_is_kept_until_something_changes_and_retried_when_gem
 
     gemini = type("G", (), {"models": type("M", (), {"generate_content": generate_content})()})()
     store, _ = fake_google(monkeypatch, gemini)
-    chat = [{"id": "m1", "from_page": False, "created_time": "2026-10-18T01:00:00+00:00", "text": "Hi! 1 mug please"}]
-    monkeypatch.setattr(messenger, "fetch_messages", lambda conversation_id: chat)
-    get = lambda: client.get("/api/conversations/t_1/brief", headers=SELLER).json()
+    old = {"id": "m0", "from_page": False, "created_time": "2026-10-01T01:00:00+00:00", "text": "2 mugs please"}
+    chats = {"t_1": [old], "t_2": [dict(old)]}
+    monkeypatch.setattr(messenger, "fetch_messages", lambda conversation_id: chats[conversation_id])
+    get = lambda cid="t_1": client.get(f"/api/conversations/{cid}/brief", headers=SELLER).json()
 
-    # No orders yet: Gemini is told so, and the brief is written once, then kept while nothing changes.
-    assert get() == {"summary": "Summary 1."} and get() == {"summary": "Summary 1."} and len(asked) == 1
-    assert "No orders yet" in asked[0] and "Customer: Hi! 1 mug please" in asked[0] and "check their Facebook profile" in brief.SYSTEM
+    # No finished order: a fixed first-order line, no Gemini call.
+    assert get() == {"summary": brief.FIRST, "first": True} and asked == []
 
-    # A received order from before: written again from the new records.
-    put_order(
-        store,
-        receipt={"status": "customer_confirmed", "fulfillment_id": "f1", "at": "2026-10-10"},
-        source={"type": "messenger", "conversation_id": "t_1"},
+    # A received order is history: the brief is written from it and the messages about it.
+    received = {"status": "customer_confirmed", "fulfillment_id": "f1", "at": datetime(2026, 10, 2, tzinfo=UTC)}
+    put_order(store, receipt=received, messages=[old], source={"type": "messenger", "conversation_id": "t_1"})
+    assert get() == {"summary": "Summary 1."} and "received by the customer" in asked[0] and "2 mugs please" in asked[0]
+
+    # Today's messages are not history: the brief stays, with no new call.
+    chats["t_1"].append({"id": "m1", "from_page": False, "created_time": "2026-10-18T01:00:00+00:00", "text": "Already paid, ship today!"})
+    assert get() == {"summary": "Summary 1."} and len(asked) == 1
+
+    # Another chat with the same history shares the brief: no call.
+    order = store.docs[f"stores/{config.STORE}/orders/o1"]
+    store.collection("stores").document(config.STORE).collection("orders").document("o2").set(
+        {**order, "source": {"type": "messenger", "conversation_id": "t_2"}}
     )
-    assert get() == {"summary": "Summary 2."} and "received by the customer" in asked[1]
+    assert get("t_2") == {"summary": "Summary 1."} and len(asked) == 1
 
-    # A new message, and one failed call: retried at once, quietly.
-    chat.append({"id": "m2", "from_page": False, "created_time": "2026-10-18T02:00:00+00:00", "text": "Thanks"})
+    # A finished order's claim changes the history: written again, retried once quietly when a call fails.
+    claim = {"id": "c1", "type": "damage", "status": "resolved", "message_ids": [], "decision": {"action": "refund", "cause": "courier_transit"}}
+    store.docs[f"stores/{config.STORE}/orders/o1"]["claims"] = [claim]
     failing.append(1)
-    assert get() == {"summary": "Summary 4."}
+    assert get() == {"summary": "Summary 3."} and "cause recorded: the courier, in transit" in asked[-1]
     # Both tries fail: nothing is kept, so asking again (Try again) writes it.
-    chat.append({"id": "m3", "from_page": False, "created_time": "2026-10-18T03:00:00+00:00", "text": "Hello?"})
+    store.docs[f"stores/{config.STORE}/orders/o1"]["claims"] = [{**claim, "decision": {**claim["decision"], "cause": "unknown"}}]
     failing.extend([1, 1])
     assert get() == {"summary": None, "problem": "Could not write the brief right now."}
-    assert get() == {"summary": "Summary 7."}
+    assert get() == {"summary": "Summary 6."}

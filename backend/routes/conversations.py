@@ -1,4 +1,3 @@
-import hashlib
 import logging
 import re
 from datetime import UTC, datetime
@@ -186,18 +185,20 @@ def conversation(conversation_id: str, user: dict = Depends(auth.current_user)):
 
 @router.get("/api/conversations/{conversation_id}/brief")
 def customer_brief(conversation_id: str, user: dict = Depends(auth.current_user)):
-    """Who this customer is to the shop: a short paragraph Gemini writes from their whole chat and their order history counted
-    in code. Kept until a new message arrives or an order changes."""
+    """A short paragraph on this customer's history with the shop, written by Gemini from their finished orders and the
+    messages about them. A new message does not change it; a newly finished order does. Briefs are kept by their input's
+    hash, so every chat with the same history (every demo visitor's Mark, the same day) shares one. No history: a fixed
+    first-order line, with no Gemini call."""
     messages = conversation(conversation_id, user)
     orders = [o for _, o in db.chat_orders(conversation_id) if auth.visible(o, user)]
-    prompt = brief.prompt(messages, orders)
-    key = hashlib.sha256(f"{config.GEMINI_MODEL}|{brief.SYSTEM}|{prompt}".encode()).hexdigest()
-    ref = db.store_doc().collection("customerBriefs").document(conversation_id)
-    cached = ref.get().to_dict() or {}
-    if cached.get("key") == key:
-        return {"summary": cached["summary"]}
-    if not messages:
-        return {"summary": None}
+    done, said = brief.history(messages, orders)
+    if not done:
+        return {"summary": brief.FIRST, "first": True}
+    prompt = brief.prompt(said, done)
+    ref = db.store_doc().collection("customerBriefs").document(brief.key(config.GEMINI_MODEL, prompt))
+    kept = ref.get().to_dict()
+    if kept:
+        return {"summary": kept["summary"]}
     auth.ai_budget(user)
     summary = None
     for attempt in range(2):  # one quiet retry: a Vertex call occasionally fails or returns an empty answer
@@ -208,7 +209,7 @@ def customer_brief(conversation_id: str, user: dict = Depends(auth.current_user)
             log.warning("customer brief attempt %d failed: %r", attempt + 1, e)
     if not summary:
         return {"summary": None, "problem": "Could not write the brief right now."}
-    ref.set({"key": key, "summary": summary, "model": config.GEMINI_MODEL, "at": firestore.SERVER_TIMESTAMP})
+    ref.set({"summary": summary, "model": config.GEMINI_MODEL, "at": firestore.SERVER_TIMESTAMP})
     return {"summary": summary}
 
 
