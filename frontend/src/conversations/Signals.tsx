@@ -33,6 +33,9 @@ type Props = {
 }
 
 /** What to verify before shipping, each tied to the messages it came from. Never a verdict on the customer. */
+const ABOUT =
+  'AI reading of what was said, to help you decide what to verify. "Not seen" means the AI did not spot it, not that it was checked. Never a judgement of the customer, and it never blocks an order.'
+
 export default function Signals({ conversationId, messages, latest }: Props) {
   const [signals, setSignals] = useState<Signal[]>()
   const [error, setError] = useState('')
@@ -80,7 +83,12 @@ export default function Signals({ conversationId, messages, latest }: Props) {
 
   return (
     <section className="signals" aria-label="Checks before shipping">
-      <h3>Checks before shipping{signals && ` (${open.length} to verify)`}</h3>
+      <h3>
+        Checks before shipping{signals && ` (${open.length} to verify)`}{' '}
+        <span className="info" tabIndex={0} role="img" aria-label={ABOUT} title={ABOUT}>
+          ⓘ
+        </span>
+      </h3>
       {error && <p role="alert">{error}</p>}
       {!signals && !error && <p>Reading the conversation…</p>}
       {found && (
@@ -180,12 +188,6 @@ export default function Signals({ conversationId, messages, latest }: Props) {
           </ul>
         </details>
       )}
-      <p>
-        <small>
-          AI reading of what was said, to help you decide what to verify. "Not seen" means the AI did not spot it, not that it was checked.
-          Never a judgement of the customer, and it never blocks an order.
-        </small>
-      </p>
     </section>
   )
 }

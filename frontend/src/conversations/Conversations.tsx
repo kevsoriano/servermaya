@@ -3,6 +3,7 @@ import { load } from '../lib/firebase'
 import { peso, STATUS } from '../lib/format'
 import type { Order } from '../orders/OrderView'
 import VerifyPanel from '../orders/VerifyPanel'
+import CustomerBrief from './CustomerBrief'
 import Reply from './Reply'
 import ScreenshotView from './ScreenshotView'
 import Signals from './Signals'
@@ -460,6 +461,12 @@ export default function Conversations({ replyHours, onOpenOrder }: { replyHours:
             <Avatar name={name} src={customer?.picture} />
             <strong>{name}</strong>
           </div>
+          {orders && (
+            <CustomerBrief
+              conversationId={openId}
+              changed={`${messages.at(-1)?.id}|${orders.map((o) => `${o.id}:${o.status}:${o.version}:${o.receipt?.status ?? ''}:${(o.claims ?? []).map((c) => c.status).join()}`).join()}`}
+            />
+          )}
           {messages.length > 0 && <Signals conversationId={openId} messages={messages} latest={messages.at(-1)?.id} />}
           {order && <VerifyPanel order={order} onChange={orderChanged} onSent={reloadMessages} onOpen={onOpenOrder} chat={messages} />}
           {messages.length > 0 && orders && (!orders.length || customerWroteSince || drafting) && (

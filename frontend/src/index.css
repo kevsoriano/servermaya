@@ -1124,3 +1124,10 @@ mark.source.provider {
 .verify .choices > div {
   flex-basis: 100%;
 }
+
+/* An explanation kept in a tooltip, beside a heading. */
+.info {
+  cursor: help;
+  font-weight: normal;
+  color: var(--muted);
+}

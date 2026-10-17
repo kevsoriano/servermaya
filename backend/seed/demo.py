@@ -375,7 +375,8 @@ def parse(chat: str) -> list[tuple[bool, str]]:
     return out
 
 
-# Earlier orders for every demo chat except Ana's, so Orders and Patterns have history to show. Each goes through the same
+# Earlier orders for every demo chat except Ana's and Dan's, so Orders and Patterns have history to show. Ana and Dan are
+# first-time customers: Dan's crypto scam is the classic new contact. Each goes through the same
 # rules as a real one: drafted from its own messages, confirmed in the chat, paid, packed, sent by Lalamove's sandbox with a
 # simulated rider, received, and some with a claim decided and refunded. All within the last 26 days. Sample Rider 2 carried
 # three of the parcels that arrived crushed, so the Patterns tab has a driver card to show; the others carried one between them.
@@ -384,7 +385,6 @@ def parse(chat: str) -> list[tuple[bool, str]]:
 # claim: (type, the customer's words, cause the seller recorded, action, partial amount in centavos, returned item or None)
 CUSTOMERS = {
     "Mark Dizon": ("0918 555 0199", "45 Rizal Ave., Brgy. 3, Pasig City"),
-    "Dan Cortez": ("0918 555 0144", "14 Kamagong St., Brgy. San Isidro, Parañaque City"),
     "Joy Santos": ("0927 555 0123", "Unit 5B, 88 Katipunan Ave., Quezon City"),
     "Leah Cruz": ("0919 555 0177", "7 Sampaguita St., Brgy. Malamig, Mandaluyong City"),
     "Rico Bautista": ("0917 555 0166", "23 Kalayaan Ave., Brgy. Pinyahan, Quezon City"),
@@ -412,18 +412,6 @@ HISTORY = {
             ("missing_item", "Only 1 candle was in the box, I ordered 2.", "unknown", "partial_refund", 22000, None),
         ),
         (9, "tote", "Black", 1, 0, "delivered", None),
-    ],
-    "Dan Cortez": [
-        (
-            22,
-            "mug",
-            "Blue",
-            1,
-            1,
-            "damaged",
-            ("damage", "The mug is broken, the box looks like something heavy sat on it.", "courier_transit", "refund", None, None),
-        ),
-        (12, "pouch", None, 2, 0, "delivered", None),
     ],
     "Joy Santos": [
         (20, "tote", "Cream", 1, 0, "delivered", ("wrong_item", "I got the black tote, but I ordered cream.", "seller_error", "refund", None, None)),
@@ -453,7 +441,15 @@ HISTORY = {
         (18, "tote", "Cream", 1, 1, "delivered", None),
     ],
     "Bea Villanueva": [
-        (23, "candle", "Vanilla", 1, 2, "delivered", None),
+        (
+            23,
+            "mug",
+            "Blue",
+            1,
+            1,
+            "damaged",
+            ("damage", "The mug arrived with a chipped rim, and the box was crushed at one corner.", "courier_transit", "refund", None, None),
+        ),
         (15, "tote", "Black", 1, 0, "delivered", None),
         (6, "pouch", None, 1, 2, "delivered", None),
     ],
@@ -510,22 +506,10 @@ def history(owner: str, conversation_id: str, name: str, now: datetime, ids: lis
             catalog=catalog.line(product, variant),
         )
         order = confirmed(owner, conversation_id, messages, item, [name, phone, address], 3, at(3))
-        if name == "Dan Cortez":
-            # He paid by card through PayMongo's checkout (test mode): he has no GCash, as he says today.
-            total = order["draft"]["total"]
-            order["payment"] = {
-                "status": "verified",
-                "version": 1,
-                "amount": total,
-                "paid_amount": total,
-                "payment_id": f"pay_demo_{oid[:10]}",
-                "livemode": False,
-            }
-        else:
-            order |= gcash.request(order, pay_to, SHOP, at(5))
-            order |= gcash.confirm(
-                order, samples.new_reference(), SHOP, f"Found ₱{order['draft']['total'] / 100:,.2f} from {name} in our GCash history", at(20), False
-            )
+        order |= gcash.request(order, pay_to, SHOP, at(5))
+        order |= gcash.confirm(
+            order, samples.new_reference(), SHOP, f"Found ₱{order['draft']['total'] / 100:,.2f} from {name} in our GCash history", at(20), False
+        )
         order |= pack.add_photo(order, photos[product])
         order |= pack.confirm_row(order, 1, SHOP, f"Checked by hand: {what}, no damage", at(60))
         order |= pack.complete(order, SHOP, at(61))

@@ -1,3 +1,5 @@
+import hashlib
+import logging
 import re
 from datetime import UTC, datetime
 
@@ -5,10 +7,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from google.api_core.exceptions import AlreadyExists
 from google.cloud import firestore
+from google.genai import types
 from pydantic import BaseModel, Field
 
 from core import auth, config, db
-from domain import delivery, extraction
+from domain import brief, delivery, extraction
 from domain import orders as rules
 from domain import packing as pack
 from domain import signals as risk
@@ -17,6 +20,7 @@ from seed import demo
 from services import catalog, chats, deliveries, seeding
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 
 # ponytail: first page only (25 threads, 50 messages), add paging when a Page outgrows it
@@ -178,6 +182,52 @@ def conversation(conversation_id: str, user: dict = Depends(auth.current_user)):
     if not re.fullmatch(r"t_\d+", conversation_id):
         raise HTTPException(400, "Invalid conversation id")
     return messenger.fetch_messages(conversation_id)
+
+
+@router.get("/api/conversations/{conversation_id}/brief")
+def customer_brief(conversation_id: str, user: dict = Depends(auth.current_user)):
+    """Who this customer is to the shop: a short paragraph Gemini writes from their whole chat and their order history counted
+    in code. Kept until a new message arrives or an order changes."""
+    messages = conversation(conversation_id, user)
+    orders = [o for _, o in db.chat_orders(conversation_id) if auth.visible(o, user)]
+    prompt = brief.prompt(messages, orders)
+    key = hashlib.sha256(f"{config.GEMINI_MODEL}|{brief.SYSTEM}|{prompt}".encode()).hexdigest()
+    ref = db.store_doc().collection("customerBriefs").document(conversation_id)
+    cached = ref.get().to_dict() or {}
+    if cached.get("key") == key:
+        return {"summary": cached["summary"]}
+    if not messages:
+        return {"summary": None}
+    auth.ai_budget(user)
+    summary = None
+    for attempt in range(2):  # one quiet retry: a Vertex call occasionally fails or returns an empty answer
+        try:
+            summary = write_brief(prompt)
+            break
+        except Exception as e:
+            log.warning("customer brief attempt %d failed: %r", attempt + 1, e)
+    if not summary:
+        return {"summary": None, "problem": "Could not write the brief right now."}
+    ref.set({"key": key, "summary": summary, "model": config.GEMINI_MODEL, "at": firestore.SERVER_TIMESTAMP})
+    return {"summary": summary}
+
+
+def write_brief(prompt: str) -> str:
+    r = db.clients()[0].models.generate_content(
+        model=config.GEMINI_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=brief.SYSTEM,
+            response_mime_type="application/json",
+            response_schema=brief.Brief,
+            temperature=0,
+            thinking_config=types.ThinkingConfig(thinking_level="LOW"),
+        ),
+    )
+    summary = brief.Brief.model_validate_json(r.text).summary.strip()
+    if not summary:
+        raise ValueError("empty brief")
+    return summary
 
 
 @router.get("/api/conversations/{conversation_id}/signals")

@@ -435,7 +435,7 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     # Their payments are in the sample GCash history; a reset deletes all four orders and seeds them again.
     history = client.get("/api/demo/sample-statement", headers=SELLER)
     assert history.status_code == 200 and history.headers["content-type"] == "application/pdf"
-    gcash_paid = 3 + sum(len(h) for name, h in demo.HISTORY.items() if name != "Dan Cortez")  # Dan paid his by card
+    gcash_paid = 3 + sum(len(h) for h in demo.HISTORY.values())
     assert len(store.docs[f"stores/{config.STORE}/demoUsers/u1"]["samples"]) == gcash_paid
     assert client.post("/api/demo/reset", headers=SELLER).json() == {"deleted_chats": 8, "deleted_orders": len(listed) + 1}
     assert len(client.get("/api/orders", headers=SELLER).json()) == len(listed) and len(client.get("/api/conversations", headers=SELLER).json()) == 8
@@ -623,3 +623,44 @@ def test_a_return_the_customer_sends_holds_the_refund_until_the_item_is_received
     done = post(f"/returns/{rid}/inspect", json=inspection).json()
     assert done["returns"][0]["status"] == "inspected"
     assert done["claims"][0]["custody"]["steps"][-1]["status"] == "ok"
+
+
+def test_the_customer_brief_is_kept_until_something_changes_and_retried_when_gemini_fails(monkeypatch, seller):
+    from domain import brief
+
+    asked, failing = [], []
+
+    def generate_content(self, model, contents, config):
+        asked.append(contents)
+        if failing:
+            failing.pop()
+            raise RuntimeError("Vertex did not answer")
+        return type("R", (), {"text": brief.Brief(summary=f"Summary {len(asked)}.").model_dump_json()})()
+
+    gemini = type("G", (), {"models": type("M", (), {"generate_content": generate_content})()})()
+    store, _ = fake_google(monkeypatch, gemini)
+    chat = [{"id": "m1", "from_page": False, "created_time": "2026-10-18T01:00:00+00:00", "text": "Hi! 1 mug please"}]
+    monkeypatch.setattr(messenger, "fetch_messages", lambda conversation_id: chat)
+    get = lambda: client.get("/api/conversations/t_1/brief", headers=SELLER).json()
+
+    # No orders yet: Gemini is told so, and the brief is written once, then kept while nothing changes.
+    assert get() == {"summary": "Summary 1."} and get() == {"summary": "Summary 1."} and len(asked) == 1
+    assert "No orders yet" in asked[0] and "Customer: Hi! 1 mug please" in asked[0] and "check their Facebook profile" in brief.SYSTEM
+
+    # A received order from before: written again from the new records.
+    put_order(
+        store,
+        receipt={"status": "customer_confirmed", "fulfillment_id": "f1", "at": "2026-10-10"},
+        source={"type": "messenger", "conversation_id": "t_1"},
+    )
+    assert get() == {"summary": "Summary 2."} and "received by the customer" in asked[1]
+
+    # A new message, and one failed call: retried at once, quietly.
+    chat.append({"id": "m2", "from_page": False, "created_time": "2026-10-18T02:00:00+00:00", "text": "Thanks"})
+    failing.append(1)
+    assert get() == {"summary": "Summary 4."}
+    # Both tries fail: nothing is kept, so asking again (Try again) writes it.
+    chat.append({"id": "m3", "from_page": False, "created_time": "2026-10-18T03:00:00+00:00", "text": "Hello?"})
+    failing.extend([1, 1])
+    assert get() == {"summary": None, "problem": "Could not write the brief right now."}
+    assert get() == {"summary": "Summary 7."}
