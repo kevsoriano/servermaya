@@ -152,6 +152,16 @@ export default function VerifyPanel({
         Review the claim →
       </button>
     )
+  else if (wroteSince && received)
+    // After they confirmed receipt, new messages are as likely a new order as a problem: offer both, push neither.
+    next = (
+      <>
+        <p>
+          The customer wrote again since receiving this order. A new order? Use <strong>+ New order</strong> below. A problem with this one?
+        </p>
+        <button onClick={open}>Open a claim →</button>
+      </>
+    )
   else if (wroteSince)
     next = (
       <>

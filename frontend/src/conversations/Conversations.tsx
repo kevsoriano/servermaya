@@ -347,8 +347,10 @@ export default function Conversations({ replyHours, onOpenOrder }: { replyHours:
   const lastDrafted = orders?.[0]?.messages.at(-1)?.created_time
   // Taps on an order's Confirm or Received button answer that order; they are not the start of a new one.
   const taps = new Set(orders?.flatMap((o) => [o.asked?.confirm?.text, o.asked?.received?.text]))
+  // Only words count: an image alone, such as a payment receipt, is about the order already open, not a new one.
   const customerWroteSince = !!messages?.some(
-    (m) => !m.from_page && !taps.has(m.text.trim()) && (!lastDrafted || Date.parse(m.created_time) > Date.parse(lastDrafted)),
+    (m) =>
+      !m.from_page && !!m.text.trim() && !taps.has(m.text.trim()) && (!lastDrafted || Date.parse(m.created_time) > Date.parse(lastDrafted)),
   )
   const customer = thread?.customer
   const name = customer?.name ?? 'Unknown'
@@ -463,7 +465,7 @@ export default function Conversations({ replyHours, onOpenOrder }: { replyHours:
             avatar={<Avatar name={name} src={customer?.picture} />}
             changed={
               orders &&
-              `${messages.at(-1)?.id}|${orders.map((o) => `${o.id}:${o.status}:${o.version}:${o.receipt?.status ?? ''}:${(o.claims ?? []).map((c) => c.status).join()}`).join()}`
+              `${messages.at(-1)?.id}|${orders.map((o) => [o.id, o.status, o.version, o.payment?.status, o.manual_payment?.status, o.fulfillment?.status, o.receipt?.status, (o.claims ?? []).map((c) => c.status).join()].join(':')).join()}`
             }
           />
           {order && <VerifyPanel order={order} onChange={orderChanged} onSent={reloadMessages} onOpen={onOpenOrder} chat={messages} />}
