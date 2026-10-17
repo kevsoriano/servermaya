@@ -413,6 +413,10 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     assert last["from_page"] and last["quick_replies"] == ["Confirm #ANA1 v1"]
     client.post(f"/api/conversations/{ana}/customer", json={"text": "Confirm #ANA1 v1"}, headers=SELLER)
     assert client.get("/api/orders/ana1", headers=SELLER).json()["confirmations"][-1]["by"] == "chat"
+    # Ask for GCash payment sends the instructions in the chat itself, with the demo shop's account and the total
+    assert client.post("/api/orders/ana1/gcash/request", headers=SELLER).json()["manual_payment"]["status"] == "requested"
+    told = client.get(f"/api/conversations/{ana}", headers=SELLER).json()[-1]
+    assert told["from_page"] and told["text"].startswith("To pay by GCash, send ₱500.00 to Juan Dela Cruz, 0917 123 4567")
     # A photo she sends in the demo chat becomes the claim's photo, read from our storage.
     photo = catalog.image("damage-mug-blue")
     client.post(f"/api/conversations/{ana}/customer/image", content=photo, headers={**SELLER, "Content-Type": "image/jpeg"})

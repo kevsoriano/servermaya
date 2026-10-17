@@ -474,7 +474,7 @@ export default function OrderView({
               )}
             </div>
           )}
-          <GcashPayment order={order} onChange={onChange} write={setMessage} />
+          <GcashPayment order={order} onChange={onChange} write={setMessage} onSent={onSent} />
           <Packing order={order} onChange={onChange} />
           <Dispatch order={order} onChange={onChange} onSent={onSent} chat={chat} />
           <Claims order={order} onChange={onChange} write={setMessage} chat={chat} />

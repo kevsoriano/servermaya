@@ -1,5 +1,6 @@
 import hashlib
 import io
+import re
 from datetime import UTC, datetime
 
 import pypdf
@@ -52,7 +53,28 @@ def request_gcash(order_id: str, body: GcashRequest | None = None, user: dict = 
     qr = pay_to.get("qr") or {}
     snapshot = {"name": pay_to["name"], "mobile": pay_to["mobile"], "masked_name": qr.get("masked_name"), "user_id": qr.get("user_id")}
     says_paid = bool(body and body.says_paid)
-    return db.change(db.orders().document(order_id), lambda o: gcash.request(o, snapshot, user["email"], now, says_paid))
+    ref, order = db.loaded(order_id)
+    rule = lambda o: gcash.request(o, snapshot, user["email"], now, says_paid)
+    source = order.get("source") or {}
+    if source.get("type") in ("messenger", "demo"):
+        # The customer gets the instructions in the chat with this one click; checked first, recorded only once sent.
+        try:
+            rule(order)
+        except rules.Refused as e:
+            raise HTTPException(409, str(e))
+        chats.send(source["conversation_id"], gcash_message(order, pay_to, says_paid), user, order_id)
+    return db.change(ref, rule)
+
+
+def gcash_message(order: dict, pay_to: dict, says_paid: bool) -> str:
+    if says_paid:
+        return "Thank you! Please send a screenshot of your GCash receipt here so we can match it with our GCash history."
+    m = re.sub(r"\D", "", pay_to["mobile"])
+    local = f"0{m[2:5]} {m[5:8]} {m[8:]}" if m.startswith("63") and len(m) == 12 else pay_to["mobile"]
+    return (
+        f"To pay by GCash, send {rules.peso(order['draft']['total'])} to {pay_to['name']}, {local} (GCash > Send Money). "
+        "Then send a screenshot of your receipt here, and we'll confirm once we find the payment in our GCash history."
+    )
 
 
 # ponytail: written before the claim is saved, so a failed read leaves an entry pointing at an order with no claim, and a

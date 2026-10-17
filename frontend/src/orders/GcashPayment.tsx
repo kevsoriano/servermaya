@@ -87,10 +87,12 @@ export default function GcashPayment({
   order,
   onChange,
   write,
+  onSent,
 }: {
   order: Order
   onChange: (o: Order) => void
   write: (text: string) => void
+  onSent?: () => void
 }) {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -118,10 +120,13 @@ export default function GcashPayment({
       .finally(() => setBusy(''))
   }
 
+  // From a chat, the backend sends the instructions itself with this click; otherwise they are written out to copy.
   const ask = () =>
-    run('Saving…', '/request').then((o) => {
+    run('Sending…', '/request').then((o) => {
       const p = o?.manual_payment
-      if (p)
+      if (!p) return
+      if (fromChat(order)) onSent?.()
+      else
         write(
           `You can also pay ${peso(p.amount)} by GCash to ${p.pay_to.name}, ${localMobile(p.pay_to.mobile)}. Please send a screenshot of the receipt here after paying.`,
         )
@@ -129,9 +134,10 @@ export default function GcashPayment({
 
   // The customer says they already paid: nothing to ask for, only proof to match against the seller's own GCash history.
   const saysPaid = () =>
-    run('Saving…', '/request', { says_paid: true }).then((o) => {
-      if (o?.manual_payment)
-        write('Thank you! Please send a screenshot of your GCash receipt here so we can match it with our GCash history.')
+    run('Sending…', '/request', { says_paid: true }).then((o) => {
+      if (!o?.manual_payment) return
+      if (fromChat(order)) onSent?.()
+      else write('Thank you! Please send a screenshot of your GCash receipt here so we can match it with our GCash history.')
     })
 
   // The seller's screenshot of the payment in their own GCash history fills in the form; the seller still confirms.

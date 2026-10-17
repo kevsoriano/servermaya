@@ -132,3 +132,29 @@ def test_a_sandbox_booking_moves_on_by_itself_one_simulated_step_a_second():
     ahead = {"fulfillment": {**shipment, "status": "picked_up", "events": [booked, real]}}
     after = delivery.sandbox_progress(ahead, at(1.5))  # driver_assigned is due, but the shipment is already picked up
     assert after["fulfillment"]["status"] == "picked_up"
+
+
+def test_a_sandbox_booking_can_play_out_a_failed_or_cancelled_delivery_and_the_next_shipment_keeps_it():
+    from datetime import UTC, datetime, timedelta
+
+    from domain import delivery
+
+    t0 = datetime(2026, 10, 17, 9, 0, tzinfo=UTC)
+    booked = delivery.event("lalamove:L1:created", "provider", "ORDER_CREATED", "booked", t0, t0)
+    base = {"id": "f1", "courier": "lalamove", "status": "booked", "quotation": {"livemode": False}, "events": [booked], "driver_id": None}
+    later = t0 + timedelta(seconds=10)
+    failed = delivery.sandbox_progress({"fulfillment": {**base, "sandbox_outcome": "failed"}}, later)["fulfillment"]
+    assert [e["status"] for e in failed["events"]] == ["booked", "driver_assigned", "picked_up", "failed"] and failed["status"] == "failed"
+    assert failed["events"][-1]["note"].startswith("The rider could not deliver")
+    cancelled = delivery.sandbox_progress({"fulfillment": {**base, "sandbox_outcome": "cancelled"}}, later)["fulfillment"]
+    assert [e["status"] for e in cancelled["events"]] == ["booked", "driver_assigned", "cancelled"]
+
+    # The outcome is kept only on a sandbox booking
+    quote = {"expires_at": later, "livemode": True}
+    live = {**base, "status": "quoted", "quotation": quote, "events": []}
+    paid = {"status": "confirmed", "version": 1, "payment": {"status": "verified", "version": 1}, "packing": {"version": 1, "completed": {"at": t0}}}
+    assert "sandbox_outcome" not in delivery.begin_booking({**paid, "fulfillment": live}, t0, "failed")["fulfillment"]
+
+    # After a failed delivery a new one can start, and the failed one stays on record
+    after = delivery.start({**paid, "fulfillment": failed}, "f2", "simulator", "seller", later)
+    assert after["fulfillment"]["id"] == "f2" and after["fulfillment_history"] == [failed]

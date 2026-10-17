@@ -51,6 +51,7 @@ def start(order: dict, fid: str, courier: str, by: str, now: datetime, quotation
     current = active(order)
     if current and current["status"] != "quoted":
         raise Refused("This order already has a shipment. Cancel it before starting another.")
+    ended = order.get("fulfillment") if (order.get("fulfillment") or {}).get("status") in ENDED else None
     shipment = {
         "id": fid,
         "version": order["version"],
@@ -71,14 +72,16 @@ def start(order: dict, fid: str, courier: str, by: str, now: datetime, quotation
     if courier != "lalamove":
         source = "demo" if courier == "simulator" else "seller_reported"
         shipment["events"] = [event(f"{fid}:booked", source, "booked", "booked", now, now)]
-    return {"fulfillment": shipment}
+    # A failed or cancelled shipment stays on record when the next one starts, as a cancelled one does.
+    history = {"fulfillment_history": order.get("fulfillment_history", []) + [ended]} if ended else {}
+    return {"fulfillment": shipment, **history}
 
 
 def event(eid: str, source: str, raw: str, status: str, at: datetime, received_at: datetime, **detail) -> dict:
     return {"id": eid, "source": source, "raw_status": raw, "status": status, "at": at, "received_at": received_at, **detail}
 
 
-def begin_booking(order: dict, now: datetime) -> dict:
+def begin_booking(order: dict, now: datetime, sandbox_outcome: str | None = None) -> dict:
     """Lock the quote before calling Lalamove, so a double click or a retry cannot book twice."""
     can_dispatch(order)
     f = active(order)
@@ -88,7 +91,10 @@ def begin_booking(order: dict, now: datetime) -> dict:
         raise Refused("This shipment is already booked" if f["status"] != "booking" else "Booking is in progress. Wait for Lalamove's answer.")
     if f["quotation"]["expires_at"] <= now:
         raise Refused("The quote has expired. Get a new one.")
-    return {"fulfillment": {**f, "status": "booking", "booking_started_at": now}}
+    booking = {**f, "status": "booking", "booking_started_at": now}
+    if sandbox_outcome and f["quotation"].get("livemode") is False:  # never on a live booking
+        booking["sandbox_outcome"] = sandbox_outcome
+    return {"fulfillment": booking}
 
 
 def booked(order: dict, provider_order_id: str, share_link: str | None, now: datetime) -> dict:
@@ -159,12 +165,22 @@ def apply_event(order: dict, ev: dict, driver_id: str | None = None, share_link:
 # booking moves on by itself, one stage a second, each step labelled as simulated. Never for a live booking.
 SANDBOX_STEP = timedelta(seconds=1)
 SANDBOX_NOTE = "Lalamove's sandbox assigns no driver: this step is simulated for the demo"
+# The outcome the seller picks when booking in the sandbox, and the steps that play it out
+SANDBOX_OUTCOMES = {
+    "delivered": ("driver_assigned", "picked_up", "delivered"),
+    "failed": ("driver_assigned", "picked_up", "failed"),  # the rider could not hand it over
+    "cancelled": ("driver_assigned", "cancelled"),  # the driver cancelled before pickup
+}
+SANDBOX_NOTES = {
+    "failed": "The rider could not deliver it (simulated in Lalamove's sandbox)",
+    "cancelled": "The driver cancelled before pickup (simulated in Lalamove's sandbox)",
+}
 
 
 def sandbox_progress(order: dict, now: datetime) -> dict:
-    """The simulated steps now due on a Lalamove sandbox booking: driver assigned, picked up and delivered, one second
-    apart from the booking. Each step has a fixed ID, so applying this again adds nothing, and a real Lalamove update that
-    is further along is never moved back."""
+    """The simulated steps now due on a Lalamove sandbox booking, one second apart from the booking, playing out the outcome
+    the seller picked (delivered unless said otherwise). Each step has a fixed ID, so applying this again adds nothing, and
+    a real Lalamove update that is further along is never moved back."""
     f = order.get("fulfillment") or {}
     if f.get("courier") != "lalamove" or (f.get("quotation") or {}).get("livemode") is not False or f.get("status") in ENDED:
         return {}
@@ -172,11 +188,12 @@ def sandbox_progress(order: dict, now: datetime) -> dict:
     if not booked_at:
         return {}
     updates, current = {}, order
-    for n, status in enumerate(SIMULATED_STEPS, 1):
+    for n, status in enumerate(SANDBOX_OUTCOMES.get(f.get("sandbox_outcome"), SIMULATED_STEPS), 1):
         at = booked_at + n * SANDBOX_STEP
         if at > now:
             break
-        ev = event(f"{f['id']}:sandbox:{status}", "demo", status, status, at, now, by="Lalamove sandbox", note=SANDBOX_NOTE)
+        note = SANDBOX_NOTES.get(status, SANDBOX_NOTE)
+        ev = event(f"{f['id']}:sandbox:{status}", "demo", status, status, at, now, by="Lalamove sandbox", note=note)
         if done := apply_event(current, ev):
             updates, current = done, {**current, **done}
     return updates

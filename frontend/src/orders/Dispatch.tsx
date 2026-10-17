@@ -78,7 +78,10 @@ export default function Dispatch({
   const [service, setService] = useState('MOTORCYCLE')
   const [tracking, setTracking] = useState('')
   const [openedAt] = useState(() => Date.now())
-  const choosing = order.status === 'confirmed' && (!f || f.status === 'quoted') && !(!f && order.dispatch_blocked)
+  // A failed or cancelled shipment stays on record; the seller can then quote again or send it another way.
+  const ended = !!f && ['cancelled', 'failed'].includes(f.status)
+  const [outcome, setOutcome] = useState('delivered')
+  const choosing = order.status === 'confirmed' && (!f || f.status === 'quoted' || ended) && !(!f && order.dispatch_blocked)
 
   // Suggest a pin from the order's address once the panel can quote. Kept on the order, so this is one lookup per address.
   useEffect(() => {
@@ -186,7 +189,15 @@ export default function Dispatch({
         </p>
       )}
 
-      {(!f || f.status === 'quoted') && (
+      {ended && (
+        <p className="claim">
+          <small>
+            This delivery {f.status === 'failed' ? 'failed' : 'was cancelled'}; it stays on record below. Get a new quote, or send it
+            another way.
+          </small>
+        </p>
+      )}
+      {(!f || f.status === 'quoted' || ended) && (
         <>
           <form
             onSubmit={(e) => {
@@ -263,9 +274,9 @@ export default function Dispatch({
                 <option value="VAN">Van</option>
               </select>
             </label>
-            <button disabled={!!busy}>{f ? 'Get a new quote' : 'Get Lalamove quote'}</button>
+            <button disabled={!!busy}>{f?.status === 'quoted' ? 'Get a new quote' : 'Get Lalamove quote'}</button>
           </form>
-          {f?.quotation && (
+          {f?.quotation && f.status === 'quoted' && (
             <p>
               Lalamove {f.quotation.service.toLowerCase()}: <strong>{peso(f.quotation.price)}</strong>, paid by you.{' '}
               {expired ? (
@@ -280,12 +291,26 @@ export default function Dispatch({
                 </>
               )}
               <br />
-              <button className="primary" disabled={!!busy || !!expired} onClick={() => run('Booking with Lalamove…', '/book')}>
+              {f.quotation.livemode === false && (
+                <label>
+                  Sandbox only: how the simulated delivery ends
+                  <select value={outcome} onChange={(e) => setOutcome(e.target.value)}>
+                    <option value="delivered">Delivered</option>
+                    <option value="failed">Failed delivery (the rider could not hand it over)</option>
+                    <option value="cancelled">Cancelled by the driver before pickup</option>
+                  </select>
+                </label>
+              )}
+              <button
+                className="primary"
+                disabled={!!busy || !!expired}
+                onClick={() => run('Booking with Lalamove…', '/book', { sandbox_outcome: outcome })}
+              >
                 Approve {peso(f.quotation.price)} and book
               </button>
             </p>
           )}
-          {!f && (
+          {(!f || ended) && (
             <details>
               <summary>Other ways to send it</summary>
               <p className="actions">

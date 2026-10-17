@@ -148,12 +148,18 @@ def quote_delivery(order_id: str, body: QuoteIn, user: dict = Depends(auth.curre
         "livemode": "sandbox" not in config.LALAMOVE_URL,
     }
     now = datetime.now(UTC)
-    fid = ((order.get("fulfillment") or {}).get("id")) or secrets.token_hex(8)
+    current = order.get("fulfillment") or {}
+    fid = current.get("id") if current.get("status") == "quoted" else secrets.token_hex(8)  # a new quote after a failed shipment is a new one
     return db.change(ref, lambda o: delivery.start(o, fid, "lalamove", user["email"], now, quotation=quotation))
 
 
+class BookIn(BaseModel):
+    # Sandbox only: how the simulated delivery ends. Ignored for a live booking.
+    sandbox_outcome: Literal["delivered", "failed", "cancelled"] = "delivered"
+
+
 @router.post("/api/orders/{order_id}/dispatch/book")
-def book_delivery(order_id: str, user: dict = Depends(auth.current_user)):
+def book_delivery(order_id: str, body: BookIn | None = None, user: dict = Depends(auth.current_user)):
     """Book the approved quote. The quote is locked first, so a retry cannot book twice."""
     pickup = config.DEMO_PICKUP if db.demo_order(order_id) else get_dispatch_settings(user)
     ref, order = db.loaded(order_id)
@@ -165,7 +171,8 @@ def book_delivery(order_id: str, user: dict = Depends(auth.current_user)):
     if not pickup or len((f.get("quotation") or {}).get("stop_ids", [])) != 2:
         raise HTTPException(409, "Get a Lalamove quote first")
     now = datetime.now(UTC)
-    db.change(ref, lambda o: delivery.begin_booking(o, now))
+    outcome = (body or BookIn()).sandbox_outcome
+    db.change(ref, lambda o: delivery.begin_booking(o, now, outcome))
     q = f["quotation"]
     payload = {
         "data": {
