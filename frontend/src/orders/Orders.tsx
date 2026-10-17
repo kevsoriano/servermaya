@@ -4,6 +4,13 @@ import { peso, STATUS } from '../lib/format'
 import OrderView, { type Order } from './OrderView'
 import { Avatar } from '../conversations/Conversations'
 
+/** Who the order's chat is with, when that is not the recipient (a gift, or ordering for someone else), so it can be found. */
+function chatWith(o: Order) {
+  const name = o.messages.find((m) => !m.from_page)?.from_name
+  const recipient = o.draft.recipient_name.value
+  return name && name.trim().toLowerCase() !== recipient?.trim().toLowerCase() ? name : null
+}
+
 export default function Orders() {
   const [list, setList] = useState<Order[]>()
   const [openId, setOpenId] = useState<string>()
@@ -32,6 +39,7 @@ export default function Orders() {
                     <strong>{o.draft.recipient_name.value ?? 'Unnamed customer'}</strong>
                     <time dateTime={o.created_at}>{new Date(o.created_at).toLocaleDateString()}</time>
                   </div>
+                  {chatWith(o) && <span className="snippet">Chat with {chatWith(o)}</span>}
                   <span className="snippet">
                     {o.draft.total === null ? 'no total yet' : peso(o.draft.total)} · version {o.version}
                   </span>

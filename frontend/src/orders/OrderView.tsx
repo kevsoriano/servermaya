@@ -58,7 +58,7 @@ export type Order = {
   claims?: Claim[]
   refunds?: Refund[]
   refundable: number
-  messages: { id: string; text: string; from_page: boolean; created_time: string }[]
+  messages: { id: string; text: string; from_page: boolean; created_time: string; from_name?: string }[]
   draft: {
     items: Item[]
     total: number | null
