@@ -1,5 +1,6 @@
 import hashlib
 import io
+import logging
 import re
 from datetime import UTC, datetime
 
@@ -20,6 +21,7 @@ from seed import samples
 from services import chats
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 
 @router.get("/api/settings/gcash")
@@ -147,15 +149,17 @@ MAX_RECEIPTS_PER_READ = 5
 
 
 def transcribe(data: bytes, content_type: str, system: str, schema: type[BaseModel]) -> BaseModel:
-    try:
-        response = db.clients()[0].models.generate_content(
-            model=config.GEMINI_MODEL,
-            contents=["Screenshot:", types.Part.from_bytes(data=data, mime_type=content_type)],
-            config={"system_instruction": system, "response_mime_type": "application/json", "response_schema": schema, "temperature": 0},
-        )
-        return schema.model_validate_json(response.text)
-    except Exception:
-        raise HTTPException(502, "Could not read a screenshot. Try again.")
+    for attempt in range(2):  # one quiet retry, as for the brief and the checks: a Vertex call occasionally fails
+        try:
+            response = db.clients()[0].models.generate_content(
+                model=config.GEMINI_MODEL,
+                contents=["Screenshot:", types.Part.from_bytes(data=data, mime_type=content_type)],
+                config={"system_instruction": system, "response_mime_type": "application/json", "response_schema": schema, "temperature": 0},
+            )
+            return schema.model_validate_json(response.text)
+        except Exception as e:
+            log.warning("screenshot read attempt %d failed: %r", attempt + 1, e)
+    raise HTTPException(502, "Could not read a screenshot. Try again.")
 
 
 def index_scope(order: dict) -> str:

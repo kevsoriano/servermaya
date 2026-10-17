@@ -4,17 +4,15 @@ Two scripted flows for the 3-minute demo video, recorded with Playwright as a ne
 that starts on the loaded chat list (sign-in is cut), one screenshot per step and a timing file.
 
 The script only acts as the seller. Each demo customer is played by AI and answers on their own after every seller
-message, with a "typing" indicator while Gemini writes. Code, not the AI, decides when they tap a button and which sample
+message (Mark in Flow A, Dan in Flow B), with a "typing" indicator while Gemini writes. Code, not the AI, decides when they tap a button and which sample
 receipt they send, so Mark always taps Confirm, then sends a receipt paid to someone else, then a matching one once the
-seller points it out.
+seller points it out. His wrong receipt is dated 2 minutes back (he sent it to an old number earlier), so the matching
+one, sent seconds later, never shows the same minute and amount, which the receipt check would flag as a copy.
 
 | Flow | Chats | What it shows | Last length |
 |---|---|---|---|
-| A | Mark | The brief and the checks alert, a draft order, Mark taps Confirm in chat, "Already paid by GCash" and Mark answers with a receipt paid to someone else (recipient ✗), the seller's typed reply and Mark's apology with a matching receipt (passes, still only a claim), the seller finds it in their GCash history, the checks settle to "None open" | 2:05* |
-| B | Dan, then Joy | Dan: a new customer, Binance and a code request, the checks cards. Joy: a fake "SELLER:" line and an instruction in her message; the draft keeps the seller's price and her check stays open | 0:42 |
-
-\* The first take with the AI customer. Mark's second reply took 41 s because Vertex was rate-limiting (429) at the time;
-on its own that reply takes 2–4 s, so a normal take is about 1:25. Re-record, or cut the wait in editing.
+| A | Mark | The brief and the checks alert, a draft order, Mark taps Confirm in chat, "Already paid by GCash" and Mark answers with a receipt paid to someone else (recipient ✗), the seller's typed reply and Mark's apology with a matching receipt (passes, still only a claim), the seller finds it in their GCash history, the checks settle to "None open" | 1:17 |
+| B | Dan, then Joy | Dan: a new customer, Binance and a code request, the checks cards; the seller says GCash only and Dan, played by AI, keeps pushing for the code. Joy: a fake "SELLER:" line and an instruction in her message; the draft keeps the seller's price and her check stays open | 1:12 |
 
 ## Prompt for a new session
 
@@ -68,15 +66,18 @@ at these screenshots:
 - **A-05**: Mark's words (in character, such as "Here is the screenshot. Please make sure to ship it today!") and his
   receipt below them.
 - **A-07**: the viewer with Recipient name ✗ and Recipient number ✗ (MA\*\*A S\*\*\*\*S, +63 918 555 \*\*\*\*), Amount ✓.
-- **A-09**: Mark's apology (an old saved number, paid again) and the new receipt.
+- **A-09**: Mark's apology (an old saved number, paid again) and the new receipt. The alert may read "3 to verify" here:
+  his new words add a check, which the GCash payment settles later.
 - **A-11**: the matching receipt, all ✓, still "a claim, not proof of payment".
 - **A-15**: Checks before shipping says "None open", three checks settled by the GCash payment the seller found.
 - **B-03**: Dan's card "Asked you to open an account, use a link or share a code" with its What to do.
-- **B-05**: Joy's draft is 3× Linen pouch at ₱150 (₱450), not ₱100, and the Payment row says the customer says they paid: not verified.
-- **B-06**: Joy's checks loaded: "Says they already paid", 1 to verify.
+- **B-04**: the seller's "we only accept GCash" and Dan's answer below it, still pushing for the code (in character, such
+  as "It will only take a minute bro, the code is just to verify the wallet…").
+- **B-06**: Joy's draft is 3× Linen pouch at ₱150 (₱450), not ₱100, and the Payment row says the customer says they paid: not verified.
+- **B-07**: Joy's checks loaded: "Says they already paid", 1 to verify.
 
 Each run is a new demo visitor, so it starts from the seeded state. Gemini times vary: the same step can take 4 s or 24 s.
-Mark's words change from take to take; his taps and receipts do not. Re-record or trim long waits in editing.
+Mark's and Dan's words change from take to take; Mark's taps and receipts do not. Re-record or trim long waits in editing.
 
 ## When something goes wrong
 
@@ -86,13 +87,13 @@ Mark's words change from take to take; his taps and receipts do not. Re-record o
   the `/customer/auto` request (the customer's answer), and button texts ("Try the demo", "Create draft order", "Send for
   confirmation in chat", "Already paid by GCash", "Check receipt screenshots", "Sample history screenshot", "Confirm GCash
   payment"). Update the script to match.
-- **"Mark Dizon could not reply right now." with a Try again button**: Gemini failed twice in a row on his reply (the
-  route retries once). The step times out; record again. A receipt Mark owes right after a GCash request is sent even when
-  Gemini fails, just without words.
-- **A Mark step takes 30 s or more**: Vertex is rate-limiting (a `429 RESOURCE_EXHAUSTED` in the backend log), usually
+- **"Mark Dizon could not reply right now." with a Try again button** (or Dan): Gemini failed twice in a row on the reply
+  (the route retries once). The step times out; record again. A receipt Mark owes right after a GCash request is sent even
+  when Gemini fails, just without words.
+- **A customer step takes 30 s or more**: Vertex is rate-limiting (a `429 RESOURCE_EXHAUSTED` in the backend log), usually
   after several takes in a row. Wait a few minutes and record again.
-- **"Could not read a screenshot. Try again."** at Sample history screenshot: a one-off Gemini failure (that read has no
-  retry). Record again.
+- **"Could not read a screenshot. Try again."** at Check receipt screenshots or Sample history screenshot: Gemini failed
+  twice in a row on the read (it retries once, with a "screenshot read attempt" warning in the backend log). Record again.
 - **The chat list stays on "Loading…" after Try the demo**: the local backend got stuck, seen once after a failed run.
   Restart it and record again.
 - **The video opens on a click instead of the still list**: the cut landed late. Raise the 1500 ms hold after the cut.
@@ -163,6 +164,24 @@ const pane = () => page.locator('aside.pane.side')
 const newOrder = 'button:has-text("Create draft order"), button:has-text("New order from the newer messages")'
 const chat = (name) => page.locator(`.threads button:has-text("${name}")`).first()
 
+// Each demo customer is played by AI and answers on their own after each seller message. Wait for the answer to land: the
+// request that writes it, then the typing dots gone, and, when they send a receipt, one more screenshot in the chat.
+const customerAnswers = async (action, receipt = false) => {
+  const shots = await page.locator('.chat .media-open').count()
+  const done = page.waitForResponse((r) => r.url().includes('/customer/auto') && r.request().method() === 'POST', { timeout: 120_000 })
+  await action()
+  await done
+  await page.locator('.messages li.typing').waitFor({ state: 'detached', timeout: 30_000 })
+  if (receipt) await page.waitForFunction((n) => document.querySelectorAll('.chat .media-open').length > n, shots, { timeout: 30_000 })
+}
+// The seller types a message, as a person would, and sends it; the customer answers.
+const sellerSays = async (text, receipt = false) => {
+  const form = page.locator('form.reply').first()
+  await form.locator('textarea').click()
+  await form.locator('textarea').pressSequentially(text, { delay: 18 })
+  await customerAnswers(() => form.locator('button:has-text("Send")').click(), receipt)
+}
+
 // Signing in is not part of the video: it is cut from the start at the moment the chats have loaded.
 await page.goto(URL)
 await click('button:has-text("Try the demo")')
@@ -174,16 +193,6 @@ console.log(`video starts at ${cut.toFixed(1)}s (signed in, chats loaded)`)
 await page.waitForTimeout(1500)
 
 if (flow === 'A') {
-  // Mark is played by AI and answers on his own after each seller message. Wait for his answer to land: the request that
-  // writes it, then the typing dots gone, and, when he sends a receipt, one more screenshot in the chat.
-  const markAnswers = async (action, receipt = false) => {
-    const shots = await page.locator('.chat .media-open').count()
-    const done = page.waitForResponse((r) => r.url().includes('/customer/auto') && r.request().method() === 'POST', { timeout: 120_000 })
-    await action()
-    await done
-    await page.locator('.messages li.typing').waitFor({ state: 'detached', timeout: 30_000 })
-    if (receipt) await page.waitForFunction((n) => document.querySelectorAll('.chat .media-open').length > n, shots, { timeout: 30_000 })
-  }
   await step('Open Mark: AI brief, and an alert: 2 to verify', async () => {
     await chat('Mark Dizon').click()
     await page.locator('.brief .brief-text p:not(.muted)').waitFor({ timeout: 90_000 })
@@ -199,11 +208,11 @@ if (flow === 'A') {
     await page.locator('.verify-head:has-text("Draft")').waitFor({ timeout: 90_000 })
   }, 3000)
   await step('Send for confirmation in chat: Mark taps Confirm', async () => {
-    await markAnswers(() => click('button:has-text("Send for confirmation in chat")'))
+    await customerAnswers(() => click('button:has-text("Send for confirmation in chat")'))
     await page.locator('.gates li:has-text("By the customer")').waitFor({ timeout: 30_000 })
   })
   await step('Already paid by GCash: Mark sends a receipt paid to someone else', () =>
-    markAnswers(() => click('button:has-text("Already paid by GCash")'), true),
+    customerAnswers(() => click('button:has-text("Already paid by GCash")'), true),
   )
   // The newest screenshot in the chat, enlarged: not checked yet.
   const open = async () => {
@@ -220,15 +229,12 @@ if (flow === 'A') {
   await step('Open his screenshot in the chat: not checked yet', open, 2500)
   await step('Check receipt screenshots: the recipient does not fit', check, 6000)
   await step('Close', close, 800)
-  await step('The seller replies; Mark sends a matching receipt', async () => {
-    const form = page.locator('form.reply').first()
-    await form.locator('textarea').click()
-    await form.locator('textarea').pressSequentially(
+  await step('The seller replies; Mark sends a matching receipt', () =>
+    sellerSays(
       'Hi Mark! This receipt shows a different recipient name and number, not our GCash account. Could you check and send the receipt for your payment to us?',
-      { delay: 18 },
-    )
-    await markAnswers(() => form.locator('button:has-text("Send")').click(), true)
-  }, 3000)
+      true,
+    ),
+  3000)
   await step('Open the new screenshot: not checked yet', open, 2500)
   await step('Check it: it passes, but is still only a claim', check, 6000)
   await step('Close', close, 800)
@@ -265,6 +271,10 @@ if (flow === 'A') {
     const card = page.locator('section.signals li.to-verify').filter({ hasText: 'Asked you to open an account' }).first()
     await card.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'smooth' }))
     await page.waitForTimeout(800)
+  }, 5000)
+  await step('The seller says GCash only; Dan, played by AI, keeps pushing', async () => {
+    await sellerSays("Sorry Dan, we only accept GCash. We can't open other accounts or share any codes.")
+    await page.locator('.chat .scroll').evaluate((el) => el.scrollTo(0, el.scrollHeight))
   }, 5000)
   await step('Open Joy: fake seller line and an instruction', async () => {
     await chat('Joy Santos').click()

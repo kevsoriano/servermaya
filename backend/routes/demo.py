@@ -105,11 +105,14 @@ def gcash_waiting(conversation_id: str) -> dict | None:
 
 
 def sample_receipt(conversation_id: str, m: dict, kind: str, user: dict) -> dict:
-    """A made-up GCash receipt for the waiting GCash request m, sent as the customer and dated now."""
+    """A made-up GCash receipt for the waiting GCash request m, sent as the customer. Dated now, except one paid to someone
+    else: that one went to an old number earlier, 2 minutes back but not before receipts count. Otherwise the customer's
+    corrected receipt, sent seconds later, shows the same amount and minute, and is rightly flagged as a possible copy."""
     now, ref = datetime.now(UTC), samples.new_reference()
     amount = m["amount"] - min(10000, m["amount"] // 2) if kind == "wrong_amount" else m["amount"]
     name, mobile = (samples.OTHER_NAME, samples.OTHER_MOBILE) if kind == "wrong_recipient" else (samples.PAY_TO_NAME, samples.PAY_TO_MOBILE)
-    attachment = chats.demo_attachment(samples.receipt_png(amount, ref, now, name, mobile), "image/png")
+    at = max(gcash.window(m)[0], now - timedelta(minutes=2)) if kind == "wrong_recipient" else now
+    attachment = chats.demo_attachment(samples.receipt_png(amount, ref, at, name, mobile), "image/png")
     if kind == "matching":  # only money that reached the demo account appears in the sample history
         sender = samples.sender(chats.demo_doc(conversation_id)["name"])
         db.store_doc().collection("demoUsers").document(user["uid"]).set(

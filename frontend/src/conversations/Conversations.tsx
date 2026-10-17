@@ -310,7 +310,8 @@ export default function Conversations({ replyHours, onOpenOrder }: { replyHours:
     // At least long enough to see them typing, even for a tap that needs no AI.
     Promise.all([customerReply(id), new Promise((r) => setTimeout(r, 1200))])
       .then(
-        () => void (shown.current === id && load<Message[]>(`/conversations/${id}`).then(setMessages, () => {})),
+        // The dots stay until the answer is on screen.
+        () => (shown.current === id ? load<Message[]>(`/conversations/${id}`).then(setMessages, () => {}) : undefined),
         (e) => void (shown.current === id && setTurnError(e.message)),
       )
       .finally(() => {

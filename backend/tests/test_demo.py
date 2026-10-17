@@ -158,6 +158,10 @@ def test_the_demo_customer_taps_answers_and_sends_receipts_in_its_script(monkeyp
     gemini = type("G", (), {"models": type("M", (), {"generate_content": generate_content})()})()
     store, _ = fake_google(monkeypatch, gemini)
     main.app.dependency_overrides[auth.current_user] = lambda: {"uid": "u1", "email": "v@example.com", "demo": True}
+    from seed import samples
+
+    drawn, draw = [], samples.receipt_png  # the time each sample receipt shows
+    monkeypatch.setattr(samples, "receipt_png", lambda amount, ref, at, name, mobile: (drawn.append(at), draw(amount, ref, at, name, mobile))[1])
     now = datetime.now(UTC)
     mark, dan = demo.new_id(), demo.new_id()
     for cid, (name, lines) in ((mark, demo.SEED[1]), (dan, demo.SEED[2])):
@@ -191,6 +195,8 @@ def test_the_demo_customer_taps_answers_and_sends_receipts_in_its_script(monkeyp
         assert auto(mark) == {"action": "receipt", "kind": "matching"}
         assert "can send a GCash receipt" in prompts[-1]
         assert len(store.docs[f"stores/{config.STORE}/demoUsers/u1"]["samples"]) == 1  # now in the sample GCash history
+        # The wrong one went to an old number earlier, so the two never show the same minute (that is flagged as a copy).
+        assert drawn[1] - drawn[0] >= timedelta(minutes=2)
 
         # Anything else is words only.
         client.post(f"/api/conversations/{mark}/reply", json={"text": "Got it, thanks Mark!"})
