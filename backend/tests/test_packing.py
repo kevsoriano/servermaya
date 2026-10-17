@@ -40,6 +40,10 @@ def test_packing_rules():
     assert [r["auto_result"] for r in blurred["rows"]] == ["insufficient_visibility", "insufficient_visibility"]
     assert blurred["suggestions"][0].startswith("Photo 1 is too blurry")
     assert pack.apply_check(order, two_blue, "m", now)["packing"]["rows"][0]["auto_result"] == "matched"
+    # Gemini can also hold a photo back (sensor noise fools the code check); its list cannot make anything pass.
+    flagged = pack.apply_check(order, two_blue.model_copy(update={"unclear_photos": [1, 9]}), "m", now)["packing"]
+    assert [r["auto_result"] for r in flagged["rows"]] == ["insufficient_visibility", "insufficient_visibility"]
+    assert len([x for x in flagged["suggestions"] if "too blurry" in x]) == 1  # photo 9 does not exist
 
     from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 

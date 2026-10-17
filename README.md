@@ -31,6 +31,7 @@ A small Philippine online seller keeps the order in a Messenger thread, the paym
 | Stage | What happens |
 |---|---|
 | **Chat to order** | Gemini reads the Messenger thread and drafts the order: items, quantities, recipient, address. Every field cites the message it came from, and the seller reviews and edits before anything is sent. For a returning customer, the new order is drafted only from the messages after the last order. Name, phone and address the customer doesn't repeat are copied from their last confirmed order and marked as copied, not cited. |
+| **Catalog** | The seller's products, each variant with a price, stock and an optional reference photo, in Settings. Drafting matches each item to a catalog line (Gemini picks the line; code looks up every value). A price no seller message states comes from the catalog and says so; a chat price that differs from it, and stock that runs short, are noted on the order; the chat price the customer agreed to stands. The packing check sends each line's reference photo, so a variant named "Sky" can be checked by how it looks. |
 | **Checks before shipping** | Gemini flags specific things in the chat to verify, such as "says they already paid", pressure to ship before payment, or asking the seller to open an account, use a link or share a code to "receive" payment. Each check quotes the message. It is never a score or a label on the customer. |
 | **Customer confirmation** | The customer gets a link to confirm the order and pay through PayMongo, or by sending GCash directly. |
 | **Payment** | A PayMongo webhook with a verified signature is the only thing that marks a payment as verified. For direct GCash, a customer's screenshot is transcribed by Gemini and checked in code (recipient name and number, amount, date, reference format). It is still only a claim until the seller finds it in their own GCash history, either by screenshot or by uploading the GCash history PDF, which is parsed in code with running-balance checks. If the customer says they paid before being asked, receipts count from the start of the conversation about the order instead of from the request. |
@@ -51,9 +52,10 @@ A small Philippine online seller keeps the order in a Messenger thread, the paym
 
 | Service | Use |
 |---|---|
-| **Gemini** (via Vertex AI on Agent Platform) | Six structured-output calls: chat-to-order extraction, checks before shipping, packing photo review, GCash receipt transcription, GCash history screenshot transcription, and the claim evidence review. |
+| **Gemini** (via Vertex AI on Agent Platform) | Six structured-output calls: chat-to-order extraction (matched to the shop's catalog), checks before shipping, packing photo review, GCash receipt transcription, GCash history screenshot transcription, and the claim evidence review. |
 | **Agent Development Kit (ADK)** | The claim review runs as an ADK `LlmAgent` with five read-only function tools (`read_order`, `read_chat`, `read_packing`, `read_delivery`; packing photos come back as images in the tool result; and `read_past_decisions`, from Memory Bank) and a structured output schema, through an ADK `Runner` with one in-memory session per review. The citation check runs as the agent's after-agent callback, against only what the agent was given or fetched. |
 | **Memory Bank** (Agent Platform) | The shop's past claim decisions. When the seller approves an outcome, the backend writes one memory as given, with no AI rewriting: the claim type, the items and the seller's decision and reason, never the customer's words, so nothing a customer writes can be stored and replayed into later reviews. The claim reviewer recalls the closest past decisions by similarity search, scoped to the store (or to one demo visitor, plus shared demo examples), and cites them as P1, P2… The prompt and an eval case keep them as practice, never as evidence about this customer. If Memory Bank is off or down, reviews go on without it. |
+| **Gemini image generation** | The demo's product photos (catalog references, packing and damage photos) were made once with `gemini-3.1-flash-image`, each packing or damage photo from its product's reference so it shows the same item, and stamped as AI-generated samples (`backend/seed/make_images.py`). A real seller's catalog uses photos of their own products. |
 | **Cloud Run** | The FastAPI backend: all API routes, the Messenger Graph API client, and the PayMongo and Lalamove webhooks. Scales to zero. |
 | **Firebase Hosting** | Serves the React frontend and routes `/api/**` to Cloud Run on the same domain. |
 | **Firebase Authentication** | Google sign-in for sellers, checked against an email allowlist, and anonymous sign-in for demo visitors. The backend verifies the ID token on every protected route and limits demo visitors to their own demo chats and orders. |
@@ -78,7 +80,7 @@ backend/    FastAPI on Cloud Run
     signals.py        checks before shipping, and which order each check belongs to
     orders.py         order versions, confirmation and payment rules
     receipts.py       GCash receipt, history screenshot and history PDF checks
-    packing.py        packing photo checks, including the sharpness check
+    packing.py        packing photo checks, including the blur checks (code's sharpness score, and Gemini's list of unclear photos)
     delivery.py       dispatch gate and delivery events
     claims.py         evidence pack and claim review
     claim_agent.py    the claim review as an ADK agent: its read-only tools, and the citation check as its callback

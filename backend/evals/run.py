@@ -2,13 +2,13 @@
 
 Run: make eval [RUNS=3]   (needs gcloud application-default credentials for the project). Writes docs/eval-results.md.
 
-- 37 conversations (20, plus 17 harder ones) through extraction and checks before shipping: ordinary orders, discrepancies
+- 41 conversations (20, plus 21 harder ones) through extraction and checks before shipping: ordinary orders, discrepancies
   the seller should verify, prompt injection, and returning customers (since_last_order and carry_over, as the draft route
   runs them).
 - 9 claim reviews through the ADK agent, which fetches the order's records and the shop's past decisions with its tools,
   with its citation check.
 - 4 customer GCash receipt screenshots through the receipt prompt and receipts.check_receipt, three with planted text.
-- 18 packing checks on generated images, through packing.unclear and packing.apply_check as the route runs them. They are
+- 20 packing checks on generated images, through packing.unclear and packing.apply_check as the route runs them. They are
   drawings, not photos: they test counting, colour, damage and visibility rules, not real-world photo quality.
 
 Each case runs RUNS times (default 3), because one run cannot show an answer that changes between runs.
@@ -33,12 +33,13 @@ from google.adk.models import Gemini
 from google.genai import types
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
+from domain import catalog as shop
 from domain import claim_agent, extraction, signals
 from domain import claims as cases
 from domain import orders as rules
 from domain import packing as pack
 from domain import receipts as gcash
-from seed import samples
+from seed import catalog, samples
 
 PROJECT = os.environ.get("FIREBASE_PROJECT_ID", "servermaya-ai-builder-cup")
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
@@ -643,6 +644,72 @@ CONVERSATIONS += [
             signals=set(),
             maybe={"changed_payment_details"},
         ),
+        # With the shop's catalog: matched items, a price no message states, a chat price that differs, short stock.
+        dict(
+            name="catalog: price no message states",
+            kind="ordinary",
+            chat=[
+                ("c", "Hi po, 2 blue mugs please. Ana Lim, 0917 222 3333, 9 Rizal St, Pasig"),
+                ("s", "Noted po! I'll send the order link."),
+            ],
+            catalog=catalog.DEMO,
+            items=[("mug", "blue", 2, 18000)],
+            who="Ana Lim",
+            phone="9172223333",
+            address=["rizal", "pasig"],
+            signals=set(),
+            maybe=set(),
+        ),
+        dict(
+            name="catalog: chat price differs",
+            kind="ordinary",
+            chat=[
+                ("c", "How much is the blue mug?"),
+                ("s", "Blue mug is ₱150 po, sale today."),
+                ("c", "1 please. Ben Cruz, 0918 333 4444, 5 Mabini St, Manila"),
+            ],
+            catalog=catalog.DEMO,
+            catalog_notes=["your catalog says ₱180.00"],
+            items=[("mug", "blue", 1, 15000)],
+            who="Ben Cruz",
+            phone="9183334444",
+            address=["mabini", "manila"],
+            signals=set(),
+            maybe=set(),
+        ),
+        dict(
+            name="catalog: more than in stock",
+            kind="ordinary",
+            chat=[
+                ("c", "2 lavender candles po"),
+                ("s", "₱220 each po, ₱440."),
+                ("c", "Cara Diaz, 0917 444 5555, 12 Luna St, Makati"),
+            ],
+            catalog=catalog.DEMO,
+            catalog_notes=["has 1 in stock"],
+            items=[("candle", "lavender", 2, 22000)],
+            who="Cara Diaz",
+            phone="9174445555",
+            address=["luna", "makati"],
+            signals=set(),
+            maybe=set(),
+        ),
+        # The customer's own price never stands: with no seller price, the catalog's is used.
+        dict(
+            name="catalog: customer names a lower price",
+            kind="ordinary",
+            chat=[
+                ("c", "Linen pouch is ₱100 each diba? 3 pieces po. Dina Go, 0918 555 6666, 3 Pine St, Taguig"),
+                ("s", "Noted po, sending the order link."),
+            ],
+            catalog=catalog.DEMO,
+            items=[("pouch", None, 3, 15000)],
+            who="Dina Go",
+            phone="9185556666",
+            address=["pine", "taguig"],
+            signals=set(),
+            maybe=set(),
+        ),
     ]
 ]
 
@@ -791,11 +858,11 @@ def run_conversation(client, case: dict) -> dict:
         new = rules.since_last_order(msgs, [earlier])
         draft = rules.carry_over(extraction.extract(client, MODEL, new), [("earlier", earlier)])
     else:
-        new, draft = msgs, extraction.extract(client, MODEL, msgs)
+        new, draft = msgs, extraction.extract(client, MODEL, msgs, case.get("catalog"))
     seconds = time.monotonic() - start
     if "received" not in case:
         found = signals.detect(client, MODEL, new)
-        score = score_conversation(case, draft, found, msgs)
+        score = catalog_score(case, score_conversation(case, draft, found, msgs), draft)
         return {"case": case, "seconds": seconds, **context_score(case, score, signals.resolve(found, []), msgs, [])}
     # As the app does: checks read the whole chat, and each is settled only by the order it is about.
     checks = signals.resolve(signals.detect(client, MODEL, msgs), [earlier])
@@ -807,6 +874,15 @@ def run_conversation(client, case: dict) -> dict:
     score["notes"] += wrong
     score["ok"] = score["ok"] and not wrong
     return {"case": case, "seconds": seconds, **context_score(case, score, checks, msgs, [earlier])}
+
+
+def catalog_score(case: dict, score: dict, draft: dict) -> dict:
+    """With a catalog: exactly the expected notes (price differs, stock short), each found by a phrase in it."""
+    if "catalog" not in case:
+        return score
+    got, want = shop.notes(draft), case.get("catalog_notes", [])
+    ok = len(got) == len(want) and all(any(w in n for n in got) for w in want)
+    return {**score, "fields": score["fields"] + [ok], "notes": score["notes"] + ([] if ok else [f"catalog notes: {got}"]), "ok": score["ok"] and ok}
 
 
 def context_score(case: dict, score: dict, checks: list[dict], msgs: list[dict], orders: list[dict]) -> dict:
@@ -935,6 +1011,21 @@ PACKING += [
             scene=[("mug", 150, 300, BLUE), ("mug", 560, 300, BLUE), ("box", 470, 250)],
             expect=[{C, U}],
         ),
+        # A shop's variant name that does not say the colour: only the catalog reference photo shows what "Sky" looks like.
+        dict(
+            name="'Sky' mug, reference blue, blue packed",
+            lines=[("mug", "Sky", 1)],
+            reference=[("mug", 430, 280, BLUE)],
+            scene=[("mug", 430, 280, BLUE)],
+            expect=[{M}],
+        ),
+        dict(
+            name="'Sky' mug, reference blue, red packed",
+            lines=[("mug", "Sky", 1)],
+            reference=[("mug", 430, 280, BLUE)],
+            scene=[("mug", 430, 280, RED)],
+            expect=[{C}],
+        ),
     ]
 ]
 
@@ -951,10 +1042,14 @@ def run_packing(client, case: dict) -> dict:
     rows = order["packing"]["rows"]
     checklist = "\n".join(f"[{r['line']}] {r['expected']['quantity']} x {r['expected']['name']} ({r['expected']['variant']})" for r in rows)
     data = photo(case["scene"], case.get("effect"))
+    # As the packing route does: a line's catalog reference photo, labelled, before the packing photos.
+    reference = (
+        ["Reference for line 1:", types.Part.from_bytes(data=photo(case["reference"]), mime_type="image/png")] if case.get("reference") else []
+    )
     start = time.monotonic()
     response = client.models.generate_content(
         model=MODEL,
-        contents=[f"<order>\n{checklist}\n</order>", "Photo 1:", types.Part.from_bytes(data=data, mime_type="image/png")],
+        contents=[f"<order>\n{checklist}\n</order>", *reference, "Photo 1:", types.Part.from_bytes(data=data, mime_type="image/png")],
         config={"system_instruction": pack.SYSTEM, "response_mime_type": "application/json", "response_schema": pack.Report, "temperature": 0},
     )
     seconds = time.monotonic() - start

@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from google.cloud import firestore
 
 from core import config, db
-from seed import demo, samples
+from seed import catalog, demo, samples
 from services import chats
 
 
@@ -37,31 +37,33 @@ def seed_demo(user: dict):
     cid, ref = demo.new_id(), db.orders().document()
     paid_at, reference = now - timedelta(days=10), samples.new_reference()
     receipt = chats.demo_attachment(samples.receipt_png(25000, reference, paid_at, samples.PAY_TO_NAME, samples.PAY_TO_MOBILE), "image/png")
-    save(cid, ref, demo.repeat(uid, cid, ref.id, now, receipt, packing_sample(ref.id, samples.packing_png()), pay_to, reference), paid_at)
+    save(
+        cid, ref, demo.repeat(uid, cid, ref.id, now, receipt, packing_sample(ref.id, catalog.image("packing-tote-cream")), pay_to, reference), paid_at
+    )
 
     cid, ref, claim_id = demo.new_id(), db.orders().document(), secrets.token_hex(6)
-    cracked = samples.mug_png(cracked=True)
-    packed, sent = packing_sample(ref.id, samples.mug_png(cracked=False)), chats.demo_attachment(cracked, "image/png")
+    cracked = catalog.image("damage-mug-blue")
+    packed, sent = packing_sample(ref.id, catalog.image("packing-mug-blue")), chats.demo_attachment(cracked, "image/jpeg")
     claim_photo = claim_sample(ref.id, claim_id, cracked)
     save(cid, ref, demo.damaged(uid, cid, ref.id, now, packed, sent, claim_id, claim_photo, pay_to, samples.new_reference()))
 
     cid, ref = demo.new_id(), db.orders().document()
-    save(cid, ref, demo.to_pack(uid, cid, now, packing_sample(ref.id, samples.packing_png(blur=3)), pay_to, samples.new_reference()))
+    save(cid, ref, demo.to_pack(uid, cid, now, packing_sample(ref.id, catalog.image("packing-tote-cream", blur=8)), pay_to, samples.new_reference()))
 
     batch.set(db.store_doc().collection("demoUsers").document(uid), {"samples": firestore.ArrayUnion(paid)}, merge=True)
     batch.commit()
 
 
 def packing_sample(order_id: str, data: bytes) -> dict:
-    """A drawn packing photo, stored like an uploaded one."""
+    """A sample packing photo (JPEG), stored like an uploaded one."""
     photo_id = secrets.token_hex(8)
     path = f"stores/{config.STORE}/orders/{order_id}/packing/{photo_id}"
-    db.bucket().blob(path).upload_from_string(data, content_type="image/png", if_generation_match=0)
+    db.bucket().blob(path).upload_from_string(data, content_type="image/jpeg", if_generation_match=0)
     return {
         "id": photo_id,
         "path": path,
         "sha256": hashlib.sha256(data).hexdigest(),
-        "content_type": "image/png",
+        "content_type": "image/jpeg",
         "size": len(data),
         "uploaded_at": datetime.now(UTC),
         "uploaded_by": demo.SHOP,
@@ -70,15 +72,15 @@ def packing_sample(order_id: str, data: bytes) -> dict:
 
 
 def claim_sample(order_id: str, claim_id: str, data: bytes) -> dict:
-    """A drawn damage photo, stored like one the customer sent with a report."""
+    """A sample damage photo (JPEG), stored like one the customer sent with a report."""
     sha = hashlib.sha256(data).hexdigest()
     path = f"stores/{config.STORE}/orders/{order_id}/claims/{claim_id}/{sha}"
-    db.bucket().blob(path).upload_from_string(data, content_type="image/png", if_generation_match=0)
+    db.bucket().blob(path).upload_from_string(data, content_type="image/jpeg", if_generation_match=0)
     return {
         "id": sha[:16],
         "path": path,
         "sha256": sha,
-        "content_type": "image/png",
+        "content_type": "image/jpeg",
         "size": len(data),
         "source": "customer",
         "uploaded_at": datetime.now(UTC),

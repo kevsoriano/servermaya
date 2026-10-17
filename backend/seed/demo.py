@@ -12,6 +12,7 @@ from domain import delivery, extraction
 from domain import orders as rules
 from domain import packing as pack
 from domain import receipts as gcash
+from seed import catalog
 
 SHOP = "Demo shop"
 MAX_MESSAGES = 200  # keeps a thread document well under Firestore's 1 MB limit
@@ -176,7 +177,8 @@ HINTS = {
     "Leah Cruz": {
         "short": 'Returning customer: "same address and number as before"',
         "steps": 'She cancelled an order three days ago and now says "same address and number as before". Press + Create draft '
-        "order: only today's candles are drafted, and her address and number are copied from the old order, marked as copied.",
+        "order: only today's candles are drafted, her address and number are copied from the old order, marked as copied, "
+        "and your catalog notes that only 1 lavender candle is in stock.",
     },
     "Rico Bautista": {
         "short": "Paid fine last time, says he paid again today",
@@ -259,7 +261,7 @@ def confirmed(owner: str, conversation_id: str, messages: list[dict], item: extr
         "version": 1,
         "source": {"type": "demo", "conversation_id": conversation_id, "owner": owner},
         "messages": messages,
-        "draft": extraction.finalize(raw, messages),
+        "draft": extraction.finalize(raw, messages, catalog.DEMO),
         "confirmations": [],
         "confirm_token": None,
         "model": "demo_seed",
@@ -280,7 +282,15 @@ def returning(owner: str, conversation_id: str, now: datetime) -> tuple[dict, di
     chat = {**new, "messages": old["messages"] + new["messages"]}
     messages = old["messages"]
     at = lambda n: datetime.fromisoformat(messages[n]["created_time"])
-    item = extraction.Item(name="Scented soy candle", variant="Vanilla", quantity=1, unit_price_php=220, price_source=2, sources=[1, 3])
+    item = extraction.Item(
+        name="Scented soy candle",
+        variant="Vanilla",
+        quantity=1,
+        unit_price_php=220,
+        price_source=2,
+        sources=[1, 3],
+        catalog=catalog.line("candle", "Vanilla"),
+    )
     details = ["Leah Cruz", "0919 555 0177", "7 Sampaguita St., Brgy. Malamig, Mandaluyong City"]
     order = confirmed(owner, conversation_id, messages, item, details, 3, at(3))
     order |= rules.cancel(order, SHOP, "The customer asked to cancel in chat", at(5))
@@ -300,7 +310,9 @@ def repeat(
     chat = {**new, "messages": old["messages"] + new["messages"]}
     messages = old["messages"][:4]  # drafted before he wrote that he had paid
     at = lambda n: datetime.fromisoformat(old["messages"][n]["created_time"])
-    item = extraction.Item(name="Tote bag", variant="Cream", quantity=1, unit_price_php=250, price_source=2, sources=[1, 3])
+    item = extraction.Item(
+        name="Tote bag", variant="Cream", quantity=1, unit_price_php=250, price_source=2, sources=[1, 3], catalog=catalog.line("tote", "Cream")
+    )
     details = ["Rico Bautista", "0917 555 0166", "23 Kalayaan Ave., Brgy. Pinyahan, Quezon City"]
     order = confirmed(owner, conversation_id, messages, item, details, 3, at(3))
     order |= gcash.request(order, pay_to, SHOP, at(5), says_paid=True)
@@ -339,7 +351,9 @@ def damaged(
     new["messages"][0]["attachments"] = [sent]
     chat = {**new, "messages": old["messages"] + new["messages"]}
     at = lambda n: datetime.fromisoformat(chat["messages"][n]["created_time"])
-    item = extraction.Item(name="Ceramic mug", variant="Blue", quantity=1, unit_price_php=180, price_source=2, sources=[1])
+    item = extraction.Item(
+        name="Ceramic mug", variant="Blue", quantity=1, unit_price_php=180, price_source=2, sources=[1], catalog=catalog.line("mug", "Blue")
+    )
     details = ["Bea Villanueva", "0917 555 0188", "31 Molave St., Brgy. Bagong Ilog, Pasig City"]
     order = confirmed(owner, conversation_id, old["messages"][:4], item, details, 3, at(3))
     order |= gcash.request(order, pay_to, SHOP, at(4), says_paid=True)
@@ -364,7 +378,9 @@ def to_pack(owner: str, conversation_id: str, now: datetime, photo: dict, pay_to
     name, lines = TO_PACK
     chat = thread(name, lines, owner, now - timedelta(hours=2 * len(SEED) + 6))
     at = lambda n: datetime.fromisoformat(chat["messages"][n]["created_time"])
-    item = extraction.Item(name="Tote bag", variant="Cream", quantity=1, unit_price_php=250, price_source=2, sources=[1])
+    item = extraction.Item(
+        name="Tote bag", variant="Cream", quantity=1, unit_price_php=250, price_source=2, sources=[1], catalog=catalog.line("tote", "Cream")
+    )
     details = ["Nico Ramos", "0918 555 0133", "9 Acacia Lane, Brgy. Kapitolyo, Pasig City"]
     order = confirmed(owner, conversation_id, chat["messages"][:4], item, details, 3, at(3))
     order |= gcash.request(order, pay_to, SHOP, at(4), says_paid=True)

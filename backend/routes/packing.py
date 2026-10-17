@@ -11,6 +11,7 @@ from core import auth, config, db
 from domain import extraction
 from domain import orders as rules
 from domain import packing as pack
+from services import catalog
 
 router = APIRouter()
 
@@ -77,6 +78,13 @@ def check_packing(order_id: str, user: dict = Depends(auth.current_user)):
     auth.ai_budget(user)
     photos = [db.bucket().blob(p["path"]).download_as_bytes() for p in packing["photos"]]
     contents = [f"<order>\n{checklist}\n</order>"]
+    for r in packing["rows"]:
+        if r.get("reference"):
+            try:
+                image = catalog.photo_bytes(r["reference"])
+            except Exception:
+                continue  # a missing reference only means the check works from the item's name, as without a catalog
+            contents += [f"Reference for line {r['line']}:", types.Part.from_bytes(data=image, mime_type=r["reference"]["content_type"])]
     for n, (p, data) in enumerate(zip(packing["photos"], photos), 1):
         contents += [f"Photo {n}:", types.Part.from_bytes(data=data, mime_type=p["content_type"])]
     try:

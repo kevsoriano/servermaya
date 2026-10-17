@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import Conversations from './conversations/Conversations'
 import Orders from './orders/Orders'
 import Patterns from './patterns/Patterns'
+import Catalog from './settings/Catalog'
 import DispatchSettings from './settings/DispatchSettings'
 import GcashSettings from './settings/GcashSettings'
 import { api, auth } from './lib/firebase'
@@ -102,9 +103,10 @@ export default function App() {
         <div className="page">
           {me.demo && (
             <p className="demo-banner" role="note">
-              Demo settings: a made-up GCash account and pickup address. They can't be changed in the demo.
+              Demo settings: a made-up catalog, GCash account and pickup address. They can't be changed in the demo.
             </p>
           )}
+          <Catalog readOnly={!!me.demo} />
           <GcashSettings />
           <DispatchSettings />
         </div>

@@ -17,7 +17,7 @@ from domain import packing as pack
 from helpers import client, fake_google, fake_token, ready_order
 from integrations import lalamove, memory, messenger, paymongo
 from routes import dispatch
-from seed import demo, samples
+from seed import catalog, demo
 
 SELLER = {"Authorization": "Bearer x"}
 asked = []
@@ -116,8 +116,8 @@ def test_packing_delivery_claims_refunds_and_replacement(monkeypatch, seller):
     monkeypatch.setattr(config, "PAYMONGO_WEBHOOK_SECRET", "whsk")
 
     # Packing: the photo is stored once with its hash, Gemini's report is applied, and packing completes.
-    photo = samples.packing_png()
-    upload = lambda: client.post("/api/orders/o1/packing/photos", content=photo, headers={**SELLER, "Content-Type": "image/png"})
+    photo = catalog.image("packing-mug-blue")
+    upload = lambda: client.post("/api/orders/o1/packing/photos", content=photo, headers={**SELLER, "Content-Type": "image/jpeg"})
     assert client.post("/api/orders/o1/packing/photos", content=b"x", headers={**SELLER, "Content-Type": "text/plain"}).status_code == 415
     assert client.post("/api/orders/o1/dispatch/start", json={"courier": "simulator"}, headers=SELLER).status_code == 409  # not packed
     p = upload().json()["packing"]["photos"][0]
@@ -136,7 +136,7 @@ def test_packing_delivery_claims_refunds_and_replacement(monkeypatch, seller):
 
     # The customer reports damage with a photo; the ADK reviewer's made-up citation is dropped.
     cid = client.post("/api/public/orders/tok/claims", json={"type": "damage", "narrative": "Cracked"}).json()["claims"][0]["id"]
-    claim = client.post(f"/api/public/orders/tok/claims/{cid}/photos", content=photo, headers={"Content-Type": "image/png"}).json()["claims"][0]
+    claim = client.post(f"/api/public/orders/tok/claims/{cid}/photos", content=photo, headers={"Content-Type": "image/jpeg"}).json()["claims"][0]
     assert claim["photos"] == 1
     chat = [{"id": "m1", "from_page": False, "created_time": "t", "text": "cracked!"}]
     monkeypatch.setattr(messenger, "fetch_messages", lambda conversation_id: chat)
@@ -308,3 +308,40 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     assert len(store.docs[f"stores/{config.STORE}/demoUsers/u1"]["samples"]) == 3
     assert client.post("/api/demo/reset", headers=SELLER).json() == {"deleted_chats": 8, "deleted_orders": 4}
     assert len(client.get("/api/orders", headers=SELLER).json()) == 4 and len(client.get("/api/conversations", headers=SELLER).json()) == 8
+
+
+def test_catalog_edit_photos_demo_read_only_and_notes_on_drafts(monkeypatch, seller):
+    store, bucket = fake_google(monkeypatch)
+    post = lambda path, headers=SELLER, **k: client.post(f"/api/catalog{path}", headers=headers, **k)
+    mug = {"name": "Ceramic mug", "variants": [{"name": "Blue", "price": 18000, "stock": 2}, {"name": "White", "price": 18000}]}
+    assert post("", json={"name": "", "variants": []}).status_code == 422
+    pid = post("", json=mug).json()["id"]
+    image = catalog.image("mug-blue")
+    assert post(f"/{pid}/photos/1", content=b"x", headers={**SELLER, "Content-Type": "text/plain"}).status_code == 415
+    assert post(f"/{pid}/photos/5", content=image, headers={**SELLER, "Content-Type": "image/jpeg"}).status_code == 404
+    saved = post(f"/{pid}/photos/0", content=image, headers={**SELLER, "Content-Type": "image/jpeg"}).json()
+    assert bucket.files[saved["variants"][0]["photo"]["path"]] == image
+    assert client.get(f"/api/catalog/{pid}/photos/0", headers=SELLER).content == image
+    assert client.get(f"/api/catalog/{pid}/photos/1", headers=SELLER).status_code == 404  # no photo for white
+    # An edit keeps each variant's photo by name, and the list is the store's.
+    edited = client.put(f"/api/catalog/{pid}", json={**mug, "variants": [{"name": "Blue", "price": 19000, "stock": 0}]}, headers=SELLER).json()
+    assert edited["variants"][0]["photo"] and edited["variants"][0]["price"] == 19000
+    assert [p["name"] for p in client.get("/api/catalog", headers=SELLER).json()] == ["Ceramic mug"]
+
+    # Notes from the catalog snapshot come back with the order.
+    snap = {"product_id": pid, "name": "Ceramic mug", "variant": "Blue", "price": 19000, "stock": 0, "photo": None}
+    item = {"name": "Ceramic mug", "variant": "Blue", "quantity": 1, "unit_price": 18000, "price_from": "chat", "sources": [], "catalog": snap}
+    put_order(store, status="draft", draft={**ready_order()["draft"], "items": [item]})
+    notes = client.get("/api/orders/o1", headers=SELLER).json()["catalog_notes"]
+    assert notes == [
+        "Ceramic mug (Blue): the chat says ₱180.00, your catalog says ₱190.00. The chat price is what the customer agreed to.",
+        "Ceramic mug (Blue): out of stock in your catalog.",
+    ]
+    assert client.delete(f"/api/catalog/{pid}", headers=SELLER).json() == {"deleted": pid}
+
+    # A demo visitor sees the demo shop's catalog and its photos, and cannot change anything.
+    assert fake_token(monkeypatch, firebase={"sign_in_provider": "anonymous"}).status_code == 200
+    shown = client.get("/api/catalog", headers=SELLER).json()
+    assert [p["id"] for p in shown] == ["mug", "tote", "candle", "pouch"]
+    assert client.get("/api/catalog/mug/photos/0", headers=SELLER).content == catalog.image("mug-blue")
+    assert post("", json=mug).status_code == 403 and client.delete("/api/catalog/mug", headers=SELLER).status_code == 403

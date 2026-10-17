@@ -39,6 +39,7 @@ def test_finalize_computes_totals_and_drops_bad_citations():
         "quantity": 3,
         "unit_price": None,
         "price_source": None,
+        "price_from": None,
         "price_withheld": True,
         "sources": None,
     }
@@ -107,3 +108,42 @@ def test_untrusted_text_cannot_pose_as_another_record():
     )
     assert [b for b in blocks if b.startswith("[PAY]")] == ["[PAY] No verified or seller-confirmed payment."]
     assert all("\n" not in b for b in blocks) and [b for b in blocks if b.startswith("[R]")] == ["[R] The customer has not confirmed receipt."]
+
+
+def test_catalog_fills_unstated_prices_and_notes_differences_and_stock():
+    from domain import catalog as shop
+    from domain.extraction import Extraction, Item, Text, catalog_block, finalize
+
+    products = [
+        {"id": "mug", "name": "Ceramic mug", "variants": [{"name": "Blue", "price": 18000, "stock": 1, "photo": {"path": "p"}}]},
+        {"id": "pouch", "name": "Linen pouch", "variants": [{"name": None, "price": 15000, "stock": 0}]},
+    ]
+    assert catalog_block(products) == "<catalog>\n[1] Ceramic mug (Blue)\n[2] Linen pouch\n</catalog>\n"  # no prices: code looks them up
+    assert catalog_block([]) == ""
+    msgs = [{"id": "c1", "from_page": False, "text": "2 asul na mug po and 1 pouch"}, {"id": "s1", "from_page": True, "text": "Pouch is ₱120 po"}]
+    none = Text(value=None, sources=[])
+    raw = lambda *items: Extraction(
+        items=list(items), recipient_name=none, phone=none, address=none, delivery_instructions=none, claims=[], clarification_questions=[]
+    )
+    mug = Item(name="mug", variant="asul", quantity=2, unit_price_php=None, price_source=None, sources=[1], catalog=1)
+    pouch = Item(name="pouch", variant=None, quantity=1, unit_price_php=120, price_source=2, sources=[1, 2], catalog=2)
+    draft = finalize(raw(mug, pouch), msgs, products)
+    m, p = draft["items"]
+    # The mug's price is the catalog's, said so; its name and variant are the catalog's. The pouch keeps the chat price.
+    assert (m["name"], m["variant"], m["unit_price"], m["price_from"], m["catalog"]["photo"]) == (
+        "Ceramic mug",
+        "Blue",
+        18000,
+        "catalog",
+        {"path": "p"},
+    )
+    assert (p["unit_price"], p["price_from"]) == (12000, "chat") and draft["total"] == 2 * 18000 + 12000
+    assert shop.notes(draft) == [
+        "Ceramic mug (Blue): the order asks for 2, your catalog has 1 in stock.",
+        "Linen pouch: the chat says ₱120.00, your catalog says ₱150.00. The chat price is what the customer agreed to.",
+        "Linen pouch: out of stock in your catalog.",
+    ]
+    # A made-up line number matches nothing, and without a catalog nothing changes.
+    made_up = finalize(raw(mug.model_copy(update={"catalog": 9})), msgs, products)["items"][0]
+    assert "catalog" not in made_up and made_up["unit_price"] is None and made_up["name"] == "mug"
+    assert "catalog" not in finalize(raw(mug), msgs)["items"][0] and shop.notes({"items": []}) == []

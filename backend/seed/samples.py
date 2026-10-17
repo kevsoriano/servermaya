@@ -10,7 +10,7 @@ import secrets
 from datetime import datetime
 
 import pypdf
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
 from domain.receipts import PHT
 
@@ -99,45 +99,6 @@ def history_png(amount: int, reference: str, at: datetime, sender: str) -> bytes
     stamp = Image.new("RGBA", (w, 160), (0, 0, 0, 0))
     ImageDraw.Draw(stamp).text((w / 2, 80), "SAMPLE", font=font(130), fill=(198, 40, 40, 70), anchor="mm")
     img.paste(stamp.rotate(30, expand=True), (0, 280), stamp.rotate(30, expand=True))
-    out = io.BytesIO()
-    img.save(out, "PNG")
-    return out.getvalue()
-
-
-def packing_png(blur: int = 0) -> bytes:
-    """A drawn packing photo of one cream tote bag on a table, stamped SAMPLE: the demo has no product photos.
-    blur: a Gaussian blur radius, for a shaky photo the sharpness check must hold back (3 is far below MIN_SHARPNESS)."""
-    w, h = 1024, 768
-    img = Image.new("RGB", (w, h), "#e9dcc9")
-    d = ImageDraw.Draw(img)
-    for y in range(40, h, 90):
-        d.line([(0, y), (w, y + 12)], fill="#decebb", width=3)
-    x, y, bag, edge = 400, 220, "#eee2c4", "#b9a57c"
-    d.arc((x + 40, y - 20, x + 110, y + 110), 180, 360, fill=edge, width=12)
-    d.arc((x + 130, y - 20, x + 200, y + 110), 180, 360, fill=edge, width=12)
-    d.polygon([(x, y + 50), (x + 240, y + 50), (x + 220, y + 330), (x + 20, y + 330)], fill=bag, outline=edge)
-    d.text((w / 2, h - 60), "SAMPLE PACKING PHOTO - DEMO ONLY", font=ImageFont.load_default(size=26), fill="#c62828", anchor="mm")
-    out = io.BytesIO()
-    (img.filter(ImageFilter.GaussianBlur(blur)) if blur else img).save(out, "PNG")
-    return out.getvalue()
-
-
-def mug_png(cracked: bool) -> bytes:
-    """A drawn blue ceramic mug on a table, stamped SAMPLE: whole as packed, or as the customer photographed it, cracked."""
-    w, h = 1024, 768
-    img = Image.new("RGB", (w, h), "#e9dcc9")
-    d = ImageDraw.Draw(img)
-    for y in range(40, h, 90):
-        d.line([(0, y), (w, y + 12)], fill="#decebb", width=3)
-    x, y, blue, edge = 380, 200, "#2f5fb3", "#1d3d78"
-    d.arc((x + 160, y + 80, x + 300, y + 260), 270, 90, fill=edge, width=26)  # the handle
-    d.rounded_rectangle((x, y, x + 240, y + 340), 22, fill=blue, outline=edge, width=4)
-    d.ellipse((x, y - 22, x + 240, y + 22), fill="#c9d6ee", outline=edge, width=4)  # the rim
-    if cracked:
-        d.line([(x + 70, y + 5), (x + 95, y + 80), (x + 75, y + 150), (x + 110, y + 230), (x + 92, y + 330)], fill="#111827", width=6)
-        d.polygon([(x + 40, y - 14), (x + 90, y - 20), (x + 70, y + 18)], fill="#e9dcc9", outline="#111827")  # a chip out of the rim
-    label = "SAMPLE DAMAGE PHOTO - DEMO ONLY" if cracked else "SAMPLE PACKING PHOTO - DEMO ONLY"
-    d.text((w / 2, h - 60), label, font=ImageFont.load_default(size=26), fill="#c62828", anchor="mm")
     out = io.BytesIO()
     img.save(out, "PNG")
     return out.getvalue()

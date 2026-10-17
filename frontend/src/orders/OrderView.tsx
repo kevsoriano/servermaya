@@ -18,6 +18,8 @@ type Item = {
   sources: string[]
   /** Gemini read a price, but no seller message writes it, so it was left blank. */
   price_withheld?: boolean
+  /** chat: a seller message states it. catalog: no message does, so it is the seller's catalog price. */
+  price_from?: 'chat' | 'catalog' | null
 }
 export type Order = {
   id: string
@@ -45,6 +47,8 @@ export type Order = {
   packing: PackingState | null
   packing_blocked: string | null
   dispatch_blocked: string | null
+  /** From the seller's catalog, checked in code: a chat price that differs from it, and stock that is short. */
+  catalog_notes?: string[]
   fulfillment?: Fulfillment | null
   fulfillment_history?: Fulfillment[]
   receipt?: { status: 'customer_confirmed'; fulfillment_id: string; source: string; at: string } | null
@@ -273,6 +277,13 @@ export default function OrderView({ order, onChange, checks = true }: { order: O
         </form>
       ) : (
         <>
+          {!!order.catalog_notes?.length && (
+            <ul className="catalog-notes">
+              {order.catalog_notes.map((n) => (
+                <li key={n}>{n}</li>
+              ))}
+            </ul>
+          )}
           <table>
             <thead>
               <tr>
@@ -293,6 +304,9 @@ export default function OrderView({ order, onChange, checks = true }: { order: O
                   <td>
                     {peso(i.unit_price)}
                     {i.price_withheld && <small className="withheld"> None of your messages states this price. Enter it with Edit.</small>}
+                    {i.price_from === 'catalog' && (
+                      <small className="from-catalog"> From your catalog: no message states this price.</small>
+                    )}
                   </td>
                 </tr>
               ))}

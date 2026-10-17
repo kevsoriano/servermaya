@@ -53,6 +53,8 @@ DEMO_ROUTES = {
     ("GET", "/api/patterns"),
     ("POST", "/api/gcash/statements"),
     ("GET", "/api/demo/sample-statement"),
+    ("GET", "/api/catalog"),
+    ("GET", "/api/catalog/{product_id}/photos/{n}"),
 }
 
 

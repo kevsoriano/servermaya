@@ -6,6 +6,7 @@ from google import genai
 from google.cloud import firestore, storage
 
 from core import config
+from domain import catalog as shop
 from domain import delivery, refunds
 from domain import orders as rules
 from domain import packing as pack
@@ -64,6 +65,7 @@ def present(snap) -> dict:
         "packing_blocked": blocked,
         "dispatch_blocked": dispatch_blocked,
         "refundable": refunds.refundable(order),
+        "catalog_notes": shop.notes(order["draft"]),
     }
 
 

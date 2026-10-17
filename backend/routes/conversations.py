@@ -15,7 +15,7 @@ from domain import packing as pack
 from domain import signals as risk
 from integrations import messenger
 from seed import demo
-from services import chats, seeding
+from services import catalog, chats, seeding
 
 router = APIRouter()
 
@@ -332,7 +332,7 @@ def draft_order(conversation_id: str, user: dict = Depends(auth.current_user)):
         raise HTTPException(409, "The customer has not written since this chat's last order. To change that order, edit it.")
     auth.ai_budget(user)
     try:
-        draft = extraction.extract(db.clients()[0], config.GEMINI_MODEL, messages)
+        draft = extraction.extract(db.clients()[0], config.GEMINI_MODEL, messages, catalog.products(demo.is_demo(conversation_id)))
     except Exception:
         raise HTTPException(502, "Could not extract an order from this conversation")
     draft = rules.carry_over(draft, previous)
