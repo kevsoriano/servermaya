@@ -113,7 +113,7 @@ export default function OrderView({
   const [form, setForm] = useState<Form>()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [copied, setCopied] = useState<'link' | 'details'>()
+  const [copied, setCopied] = useState<'link'>()
   const [message, setMessage] = useState('')
 
   // The customer confirms and pays on their own page, usually in another tab, so reload the order on coming back.
@@ -129,17 +129,6 @@ export default function OrderView({
   const link = order.confirm_token && `${location.origin}/c/${order.confirm_token}`
   const { payment } = order
   const paymentClaim = draft.claims.find((c) => c.kind === 'payment')
-
-  const details = [
-    ...draft.items.map(
-      (i) =>
-        `${i.quantity} × ${i.name}${i.variant ? ` (${i.variant})` : ''} - ${peso(i.unit_price === null ? null : i.unit_price * i.quantity)}`,
-    ),
-    `Total: ${draft.total === null ? 'to be confirmed' : peso(draft.total)}`,
-    '',
-    `Deliver to: ${[draft.recipient_name.value, draft.phone.value, draft.address.value].filter(Boolean).join(', ')}`,
-    ...(draft.delivery_instructions.value ? [`Note: ${draft.delivery_instructions.value}`] : []),
-  ].join('\n')
 
   const call = (path: string, init: RequestInit, sends = false) => {
     setBusy(true)
@@ -520,9 +509,6 @@ export default function OrderView({
           )}
           <p className="actions">
             <button onClick={() => setForm(toForm(draft))}>Edit</button>
-            <button onClick={() => navigator.clipboard.writeText(details).then(() => setCopied('details'))}>
-              {copied === 'details' ? 'Copied' : 'Copy order details'}
-            </button>
             {order.status === 'draft' &&
               (fromChat(order) ? (
                 <button
