@@ -80,11 +80,14 @@ def test_demo_visitors_only_reach_their_own_demo_chats_and_orders(monkeypatch):
 def test_demo_ai_budget_limits_visitors_and_the_whole_demo_but_never_sellers(monkeypatch):
     from seed import demo
 
+    monkeypatch.setattr(demo, "AI_PER_VISITOR", 250)
     assert demo.over_budget(0, 0, 1) is None
     assert demo.over_budget(demo.AI_PER_VISITOR - 3, 0, 3) is None  # a receipt read of 3 images that just fits
     assert "limit of AI reads" in demo.over_budget(demo.AI_PER_VISITOR - 2, 0, 3)
     assert "all visitors" in demo.over_budget(0, demo.AI_PER_DAY, 1)
     assert "all visitors" in demo.over_budget(demo.AI_PER_VISITOR, demo.AI_PER_DAY, 1)  # the shared limit is the one to report
+    monkeypatch.setattr(demo, "AI_PER_VISITOR", None)  # switched off: only the shared limit applies
+    assert demo.over_budget(10_000, 0, 1) is None and "all visitors" in demo.over_budget(10_000, demo.AI_PER_DAY, 1)
 
     # A seller is never counted: no Firestore read or write at all.
     monkeypatch.setattr(db, "store_doc", lambda: (_ for _ in ()).throw(AssertionError("sellers are not counted")))

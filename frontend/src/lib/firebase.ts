@@ -19,6 +19,9 @@ async function json<T>(r: Response): Promise<T> {
 /** JSON from an authenticated backend route; throws with the backend's message on failure. */
 export const load = <T>(path: string, init?: RequestInit) => api(path, init).then((r) => json<T>(r))
 
+/** Demo chats: the customer, played by AI, answers the seller's latest message. */
+export const customerReply = (conversationId: string) => load(`/conversations/${conversationId}/customer/auto`, { method: 'POST' })
+
 /** JSON from a customer-link route, which needs no sign-in. */
 
 /** fetch() against the backend with the signed-in user's ID token attached. */

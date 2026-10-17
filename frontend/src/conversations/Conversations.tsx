@@ -1,5 +1,5 @@
-import { useEffect, useState, type CSSProperties } from 'react'
-import { load } from '../lib/firebase'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { customerReply, load } from '../lib/firebase'
 import { peso, STATUS } from '../lib/format'
 import type { Order } from '../orders/OrderView'
 import VerifyPanel from '../orders/VerifyPanel'
@@ -118,7 +118,7 @@ function DemoTools({ onDone }: { onDone: (id?: string) => void }) {
   return (
     <div className="demo-tools">
       <p className="muted">
-        <small>Demo chats stay in this app. You write both sides; nothing is sent to Messenger.</small>
+        <small>Demo chats stay in this app: you are the seller, and AI plays the customer. Nothing is sent to Messenger.</small>
       </p>
       {open ? (
         <form onSubmit={create}>
@@ -209,7 +209,7 @@ export default function Conversations({ replyHours, onOpenOrder }: { replyHours:
   const [viewing, setViewing] = useState<{ a: Attachment; m: Message }>()
   const [drafting, setDrafting] = useState(false)
   const [reply, setReply] = useState('')
-  const [asCustomer, setAsCustomer] = useState('')
+  const shown = useRef<string>(undefined) // the open chat, for answers that arrive after the seller moved on
 
   useEffect(() => {
     load<Conversation[]>('/conversations').then(setList, (e) => setError(e.message))
@@ -262,13 +262,14 @@ export default function Conversations({ replyHours, onOpenOrder }: { replyHours:
   }, [openId, lastFromCustomer])
 
   const open = (id: string) => {
+    shown.current = id
     setOpenId(id)
     setMessages(undefined)
     setOrder(undefined)
     setOrders(undefined)
     setViewing(undefined)
     setReply('')
-    setAsCustomer('')
+    setTurnError('')
     setError('')
     load<Message[]>(`/conversations/${id}`).then(setMessages, (e) => setError(e.message))
     // Open the order still in progress; otherwise the newest, so a returning customer's history is one click away.
@@ -294,17 +295,34 @@ export default function Conversations({ replyHours, onOpenOrder }: { replyHours:
     refreshDemoList()
   }
 
-  // Demo: tapping a quick reply sends its text as the customer, as Messenger does.
-  const [tapping, setTapping] = useState(false)
-  const tap = (text: string) => {
-    setTapping(true)
-    load(`/conversations/${openId}/customer`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    })
-      .then(reloadMessages, (e) => setError(e.message))
-      .finally(() => setTapping(false))
+  // Demo: after the seller writes, the customer, played by AI, answers: words, a tap on the seller's button, or a receipt.
+  // One answer at a time per chat; a message the seller sends meanwhile gets its own answer after it.
+  const [typing, setTyping] = useState<string>() // the demo chat whose customer is answering
+  const [turnError, setTurnError] = useState('')
+  const answering = useRef(new Set<string>())
+  const again = useRef(new Set<string>())
+  const customerTurn = (id: string) => {
+    if (!id.startsWith('demo_')) return
+    if (answering.current.has(id)) return void again.current.add(id)
+    answering.current.add(id)
+    setTyping(id)
+    setTurnError('')
+    // At least long enough to see them typing, even for a tap that needs no AI.
+    Promise.all([customerReply(id), new Promise((r) => setTimeout(r, 1200))])
+      .then(
+        () => void (shown.current === id && load<Message[]>(`/conversations/${id}`).then(setMessages, () => {})),
+        (e) => void (shown.current === id && setTurnError(e.message)),
+      )
+      .finally(() => {
+        answering.current.delete(id)
+        refreshDemoList()
+        if (again.current.delete(id)) customerTurn(id)
+        else setTyping((t) => (t === id ? undefined : t))
+      })
+  }
+  const sellerSent = () => {
+    reloadMessages()
+    if (openId) customerTurn(openId)
   }
 
   const orderChanged = (o: Order) => {
@@ -424,38 +442,36 @@ export default function Conversations({ replyHours, onOpenOrder }: { replyHours:
                 {m.attachments.map((a, n) => (
                   <Media key={n} a={a} onOpen={() => setViewing({ a, m })} />
                 ))}
-                {/* Like Messenger, a quick reply is offered only until the next message. */}
+                {/* Like Messenger, a quick reply is offered only until the next message. Only the customer can tap it. */}
                 {k === messages.length - 1 &&
                   m.quick_replies?.map((q) => (
-                    <button
-                      key={q}
-                      type="button"
-                      className="quick-reply"
-                      disabled={tapping}
-                      onClick={() => tap(q)}
-                      title="Tap as the customer"
-                    >
+                    <span key={q} className="quick-reply" title="The customer taps this in their chat">
                       {q}
-                    </button>
+                    </span>
                   ))}
               </li>
             ))}
+            {typing === openId && (
+              <li className="customer typing" role="status">
+                <small>{name} is typing…</small>
+                <p aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                </p>
+              </li>
+            )}
           </ol>
         </div>
-        {openId && messages && thread?.demo && (
-          <div className="composers">
-            <Reply
-              conversationId={openId}
-              text={asCustomer}
-              setText={setAsCustomer}
-              asCustomer
-              gcashWaiting={order?.manual_payment?.status === 'requested' || order?.manual_payment?.status === 'claimed'}
-              paid={order?.payment?.status === 'verified'}
-              onSent={reloadMessages}
-            />
-            <Reply conversationId={openId} text={reply} setText={setReply} onSent={reloadMessages} />
-          </div>
+        {openId && turnError && typing !== openId && (
+          <p className="turn-error" role="alert">
+            {turnError}{' '}
+            <button type="button" onClick={() => customerTurn(openId)}>
+              Try again
+            </button>
+          </p>
         )}
+        {openId && messages && thread?.demo && <Reply conversationId={openId} text={reply} setText={setReply} onSent={sellerSent} />}
         {openId && messages && !thread?.demo && (
           <Reply conversationId={openId} text={reply} setText={setReply} until={replyUntil(messages, replyHours)} onSent={reloadMessages} />
         )}
@@ -497,7 +513,7 @@ export default function Conversations({ replyHours, onOpenOrder }: { replyHours:
               <span aria-hidden>↓</span>
             </a>
           )}
-          {order && <VerifyPanel order={order} onChange={orderChanged} onSent={reloadMessages} onOpen={onOpenOrder} chat={messages} />}
+          {order && <VerifyPanel order={order} onChange={orderChanged} onSent={sellerSent} onOpen={onOpenOrder} chat={messages} />}
           {messages.length > 0 && orders && (!orders.length || customerWroteSince || drafting) && (
             <div className="block">
               <button className={openOrder ? undefined : 'primary'} onClick={createDraft} disabled={drafting}>

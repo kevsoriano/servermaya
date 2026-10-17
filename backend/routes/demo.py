@@ -1,18 +1,21 @@
+import logging
 import re
 from datetime import UTC, datetime, timedelta
-from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from google.cloud import firestore
+from google.genai import types
 from pydantic import BaseModel, Field
 
 from core import auth, config, db
+from domain import customer_agent as agent
 from domain import orders as rules
 from domain import receipts as gcash
 from seed import demo, samples
 from services import chats, seeding
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 
 # ponytail: public by hash so a plain <img> can show it; demo images only. Fetch with the seller's token if real photos ever land here.
@@ -87,35 +90,99 @@ async def demo_customer_image(conversation_id: str, request: Request, user: dict
     return await chats.demo_image(conversation_id, request, False)
 
 
-class SampleReceipt(BaseModel):
-    kind: Literal[samples.KINDS]
-
-
-@router.post("/api/conversations/{conversation_id}/customer/sample-receipt")
-def demo_sample_receipt(conversation_id: str, body: SampleReceipt, user: dict = Depends(auth.current_user)):
-    """A made-up GCash receipt for this chat's waiting GCash request, sent as the customer and dated now."""
-    demo_only(conversation_id)
+def gcash_waiting(conversation_id: str) -> dict | None:
+    """The newest GCash request still waiting for the customer's payment in this chat, unless PayMongo already verified one."""
     waiting = []
     for d in db.orders().where(filter=firestore.FieldFilter("source.conversation_id", "==", conversation_id)).stream():
+        o = d.to_dict()
         try:
-            m = gcash.current(d.to_dict())
+            m = gcash.current(o)
         except rules.Refused:
             continue
-        if m["status"] in ("requested", "claimed"):
+        if m["status"] in ("requested", "claimed") and (o.get("payment") or {}).get("status") != "verified":
             waiting.append(m)
-    if not waiting:
-        raise HTTPException(409, "Send the GCash QR code on this chat's order first.")
-    m = max(waiting, key=lambda m: m["requested_at"])
+    return max(waiting, key=lambda m: m["requested_at"]) if waiting else None
+
+
+def sample_receipt(conversation_id: str, m: dict, kind: str, user: dict) -> dict:
+    """A made-up GCash receipt for the waiting GCash request m, sent as the customer and dated now."""
     now, ref = datetime.now(UTC), samples.new_reference()
-    amount = m["amount"] - min(10000, m["amount"] // 2) if body.kind == "wrong_amount" else m["amount"]
-    name, mobile = (samples.OTHER_NAME, samples.OTHER_MOBILE) if body.kind == "wrong_recipient" else (samples.PAY_TO_NAME, samples.PAY_TO_MOBILE)
+    amount = m["amount"] - min(10000, m["amount"] // 2) if kind == "wrong_amount" else m["amount"]
+    name, mobile = (samples.OTHER_NAME, samples.OTHER_MOBILE) if kind == "wrong_recipient" else (samples.PAY_TO_NAME, samples.PAY_TO_MOBILE)
     attachment = chats.demo_attachment(samples.receipt_png(amount, ref, now, name, mobile), "image/png")
-    if body.kind == "matching":  # only money that reached the demo account appears in the sample history
+    if kind == "matching":  # only money that reached the demo account appears in the sample history
         sender = samples.sender(chats.demo_doc(conversation_id)["name"])
         db.store_doc().collection("demoUsers").document(user["uid"]).set(
             {"samples": firestore.ArrayUnion([{"reference": ref, "amount": amount, "at": now, "sender": sender}])}, merge=True
         )
     return chats.demo_post(conversation_id, False, "", attachment)
+
+
+def quick_reply_waiting(conversation_id: str, last: dict) -> str | None:
+    """The seller's latest message carries a Confirm or Received button that one of this chat's orders is waiting for."""
+    button = (last.get("quick_replies") or [None])[0]
+    if not last["from_page"] or not button:
+        return None
+    for _, o in db.chat_orders(conversation_id):
+        if any(((o.get("asked") or {}).get(k) or {}).get("text") == button for k in rules.waiting_for(o)):
+            return button
+    return None
+
+
+@router.post("/api/conversations/{conversation_id}/customer/auto")
+def demo_customer_turn(conversation_id: str, user: dict = Depends(auth.current_user)):
+    """The demo customer answers the seller's latest message. A tap on the seller's button needs no Gemini. Otherwise
+    Gemini writes the words, and code decides whether a sample GCash receipt goes with them and which one."""
+    demo_only(conversation_id)
+    d = chats.demo_doc(conversation_id)
+    messages = d["messages"]
+    if not messages or not messages[-1]["from_page"]:
+        return {"action": "none"}  # nothing new from the seller to answer
+    if button := quick_reply_waiting(conversation_id, messages[-1]):
+        chats.demo_post(conversation_id, False, button)
+        chats.apply_answers(conversation_id)
+        return {"action": "tap"}
+
+    p = agent.persona(d["name"])
+    m = gcash_waiting(conversation_id)
+    sent = agent.receipts_sent(messages, m["requested_at"]) if m else 0
+    kind = agent.receipt_kind(p, sent) if m else None
+    attaching = bool(kind) and sent == 0  # the first receipt for a request always follows it
+    auth.ai_budget(user)
+    turn = None
+    for attempt in range(2):  # one quiet retry, as for the brief: a Vertex call occasionally fails
+        try:
+            turn = write_turn(agent.prompt(d["name"], p, messages, attaching, bool(kind)))
+            break
+        except Exception as e:
+            log.warning("demo customer attempt %d failed: %r", attempt + 1, e)
+    if turn is None and not attaching:
+        raise HTTPException(502, f"{d['name']} could not reply right now.")
+    # The seller wrote again while Gemini was answering: that message gets its own turn, so this answer is dropped.
+    if chats.demo_doc(conversation_id)["messages"][-1]["id"] != messages[-1]["id"]:
+        return {"action": "none"}
+    text = (turn.message.strip() if turn else "")[:2000]
+    if text:
+        chats.demo_post(conversation_id, False, text)
+    if kind and (attaching or (turn and turn.send_receipt)):
+        sample_receipt(conversation_id, m, kind, user)
+        return {"action": "receipt", "kind": kind}
+    return {"action": "reply" if text else "none"}
+
+
+def write_turn(prompt: str) -> agent.Turn:
+    r = db.clients()[0].models.generate_content(
+        model=config.GEMINI_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=agent.SYSTEM,
+            response_mime_type="application/json",
+            response_schema=agent.Turn,
+            temperature=0.7,
+            thinking_config=types.ThinkingConfig(thinking_level="LOW"),
+        ),
+    )
+    return agent.Turn.model_validate_json(r.text)
 
 
 @router.get("/api/demo/sample-statement")

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { load } from '../lib/firebase'
 
 const IMAGE_TYPES = 'image/jpeg,image/png,image/gif' // what Messenger shows as an image
-// Demo chats also take a video, such as the customer's unboxing video
+// Demo chats also take a video, such as a packing video
 const DEMO_IMAGE_TYPES = `${IMAGE_TYPES},image/webp,video/mp4,video/quicktime,video/webm`
 
 type Props = {
@@ -13,36 +13,15 @@ type Props = {
   /** When the 24-hour reply window closes. Unknown means the backend decides. */
   until?: Date | null
   onSent?: () => void
-  /** Demo chats only: write as the customer instead of the seller. */
-  asCustomer?: boolean
-  /** Demo chats only: this chat's order has a GCash request waiting, so sample receipts can be sent. */
-  gcashWaiting?: boolean
-  /** PayMongo verified the payment: no receipt to send, so the sample GCash receipts are not offered. */
-  paid?: boolean
 }
 
 /** Sends one message as the Page. Nothing is sent without the seller pressing Send. In a demo chat the message is only stored. */
-export default function Reply({ conversationId, text, setText, orderId, until, onSent, asCustomer, gcashWaiting, paid }: Props) {
+export default function Reply({ conversationId, text, setText, orderId, until, onSent }: Props) {
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
   const [image, setImage] = useState<File>()
   const [picker, setPicker] = useState(0) // remounts the file input so the same file can be picked again
 
-  // Demo only: the customer sends a made-up GCash receipt for this chat's waiting GCash request, dated now.
-  const sample = (kind: string) => {
-    setBusy(true)
-    setStatus('')
-    load(`/conversations/${conversationId}/customer/sample-receipt`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind }),
-    })
-      .then(
-        () => (setStatus('Sent.'), onSent?.()),
-        (e) => setStatus(e.message),
-      )
-      .finally(() => setBusy(false))
-  }
   const [openedAt] = useState(() => Date.now())
   const demo = conversationId.startsWith('demo_')
   const closed = !demo && until !== undefined && (!until || until.getTime() < openedAt)
@@ -54,7 +33,7 @@ export default function Reply({ conversationId, text, setText, orderId, until, o
     e.preventDefault()
     setBusy(true)
     setStatus('')
-    const path = `/conversations/${conversationId}/${asCustomer ? 'customer' : 'reply'}`
+    const path = `/conversations/${conversationId}/reply`
     if (text.trim()) {
       await load(path, {
         method: 'POST',
@@ -83,52 +62,20 @@ export default function Reply({ conversationId, text, setText, orderId, until, o
       .finally(() => setBusy(false))
 
   return (
-    <form className={asCustomer ? 'reply as-customer' : 'reply'} onSubmit={submit}>
+    <form className="reply" onSubmit={submit}>
       <textarea
-        aria-label={asCustomer ? 'Message from the customer' : demo ? 'Message to the customer' : 'Message to the customer on Messenger'}
-        placeholder={
-          asCustomer ? 'Write as the customer…' : demo ? 'Reply as the seller…' : closed ? 'Reply window closed' : 'Reply in Messenger…'
-        }
+        aria-label={demo ? 'Message to the customer' : 'Message to the customer on Messenger'}
+        placeholder={demo ? 'Reply as the seller…' : closed ? 'Reply window closed' : 'Reply in Messenger…'}
         value={text}
         onChange={(e) => setText(e.target.value)}
         maxLength={2000}
         rows={2}
         disabled={closed}
       />
-      {asCustomer &&
-        (paid ? (
-          <p className="samples">
-            <small>Paid through PayMongo and verified by its webhook: there is no GCash receipt to send.</small>
-          </p>
-        ) : gcashWaiting ? (
-          <p className="samples">
-            <small>Sample GCash receipt:</small>
-            <button type="button" disabled={busy} onClick={() => sample('matching')}>
-              Matching
-            </button>
-            <button type="button" disabled={busy} onClick={() => sample('wrong_amount')}>
-              Wrong amount
-            </button>
-            <button type="button" disabled={busy} onClick={() => sample('wrong_recipient')}>
-              Wrong recipient
-            </button>
-          </p>
-        ) : (
-          <p className="samples">
-            <small>
-              Sample GCash receipts unlock once the seller asks for GCash: create the draft order, send it for confirmation, tap Confirm as
-              the customer, then press Send GCash QR code or Already paid by GCash (outside the chat).
-            </small>
-          </p>
-        ))}
       <div className="reply-foot">
         <small>
           {demo ? (
-            asCustomer ? (
-              'You play the customer.'
-            ) : (
-              'Not sent to Messenger.'
-            )
+            'Not sent to Messenger. The customer replies on their own.'
           ) : closed ? (
             <>Messenger's window to reply after the customer's last message has closed{until && <> ({until.toLocaleString()})</>}.</>
           ) : (

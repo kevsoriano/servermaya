@@ -65,7 +65,8 @@ export default function App() {
         ) : (
           <>
             <p>
-              Try it with demo chats: you play both the seller and the customer. Nothing reaches real customers, Messenger, or real money.
+              Try it with demo chats: you are the seller, and AI plays each customer. Nothing reaches real customers, Messenger, or real
+              money.
             </p>
             <p className="actions">
               <button className="primary" onClick={tryDemo}>

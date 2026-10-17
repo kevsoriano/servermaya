@@ -139,3 +139,99 @@ def test_damaged_and_to_pack_seeds():
     chat, nico = demo.to_pack("u1", "demo_dddddddddddd", now, photo, pay_to, "1012345678902")
     assert pack.paid_by(nico) == "gcash_seller_confirmed" and pack.require_ready(nico)["photos"] == [photo]
     assert not pack.require_ready(nico)["completed"] and nico["draft"]["total"] == 25000
+
+
+def test_the_demo_customer_taps_answers_and_sends_receipts_in_its_script(monkeypatch):
+    from datetime import datetime
+
+    from core import config, db
+    from domain import customer_agent as agent
+    from helpers import fake_google, ready_order
+    from seed import demo
+
+    prompts, turns = [], []
+
+    def generate_content(self, model, contents, config):
+        prompts.append(contents)
+        return type("R", (), {"text": turns.pop(0).model_dump_json()})()
+
+    gemini = type("G", (), {"models": type("M", (), {"generate_content": generate_content})()})()
+    store, _ = fake_google(monkeypatch, gemini)
+    main.app.dependency_overrides[auth.current_user] = lambda: {"uid": "u1", "email": "v@example.com", "demo": True}
+    now = datetime.now(UTC)
+    mark, dan = demo.new_id(), demo.new_id()
+    for cid, (name, lines) in ((mark, demo.SEED[1]), (dan, demo.SEED[2])):
+        chats.demo_threads().document(cid).set(demo.thread(name, lines, "u1", now - timedelta(minutes=5)))
+    source = {"type": "demo", "conversation_id": mark, "owner": "u1"}
+    drafted = chats.demo_doc(mark)["messages"]  # the evidence a draft is made from
+    db.orders().document("mark1").set(ready_order(status="draft", confirmations=[], payment=None, packing=None, source=source, messages=drafted))
+    chat = lambda cid: client.get(f"/api/conversations/{cid}").json()
+    auto = lambda cid: client.post(f"/api/conversations/{cid}/customer/auto").json()
+    try:
+        assert auto(mark) == {"action": "none"}  # the customer wrote last: nothing to answer
+
+        # The seller's summary carries a Confirm button: the customer taps it at once, with no Gemini call.
+        client.post("/api/orders/mark1/ask-confirmation")
+        assert auto(mark) == {"action": "tap"} and not prompts
+        assert chat(mark)[-1]["text"] == "Confirm #MARK1 v1" and db.orders().document("mark1").get().to_dict()["status"] == "confirmed"
+
+        # "Already paid by GCash": the first receipt always follows the request, and Mark's script sends one paid to someone else.
+        r = client.post("/api/orders/mark1/gcash/request", json={"says_paid": True})
+        assert r.status_code == 200, r.text
+        turns.append(agent.Turn(message="Here's my receipt, please ship today!", send_receipt=False))
+        assert auto(mark) == {"action": "receipt", "kind": "wrong_recipient"}
+        assert "attaching your GCash receipt" in prompts[-1] and "Mark is in a hurry" in prompts[-1]
+        words, receipt = chat(mark)[-2:]
+        assert words["text"] == "Here's my receipt, please ship today!" and receipt["attachments"][0]["kind"] == "image"
+        assert not (store.docs.get(f"stores/{config.STORE}/demoUsers/u1") or {}).get("samples")  # not paid to the shop
+
+        # The seller says it went to someone else: Gemini asks for another, and code sends the next in his script, the matching one.
+        client.post(f"/api/conversations/{mark}/reply", json={"text": "This receipt shows a different recipient. Please send the right one."})
+        turns.append(agent.Turn(message="Sorry! Sent it to an old number. Here's the new one.", send_receipt=True))
+        assert auto(mark) == {"action": "receipt", "kind": "matching"}
+        assert "can send a GCash receipt" in prompts[-1]
+        assert len(store.docs[f"stores/{config.STORE}/demoUsers/u1"]["samples"]) == 1  # now in the sample GCash history
+
+        # Anything else is words only.
+        client.post(f"/api/conversations/{mark}/reply", json={"text": "Got it, thanks Mark!"})
+        turns.append(agent.Turn(message="Thank you!", send_receipt=False))
+        assert auto(mark) == {"action": "reply"} and chat(mark)[-1]["text"] == "Thank you!"
+
+        # Dan never has a receipt, whatever Gemini says.
+        client.post(f"/api/conversations/{dan}/reply", json={"text": "Sorry, we only take GCash."})
+        turns.append(agent.Turn(message="Just open Binance please, it's quick!", send_receipt=True))
+        assert auto(dan) == {"action": "reply"} and not chat(dan)[-1]["attachments"]
+        assert "no receipt or photo to send" in prompts[-1]
+
+        # The seller wrote again while Gemini was answering: the stale answer is dropped.
+        client.post(f"/api/conversations/{dan}/reply", json={"text": "Do you want to pay by GCash?"})
+
+        def late(self, model, contents, config):
+            client.post(f"/api/conversations/{dan}/reply", json={"text": "Hello?"})
+            return type("R", (), {"text": agent.Turn(message="Binance!", send_receipt=False).model_dump_json()})()
+
+        monkeypatch.setattr(type(gemini.models), "generate_content", late)
+        assert auto(dan) == {"action": "none"} and chat(dan)[-1]["text"] == "Hello?"
+    finally:
+        main.app.dependency_overrides.clear()
+
+
+def test_customer_personas_match_the_seed_and_scripts():
+    from datetime import datetime
+
+    from domain import customer_agent as agent
+    from seed import demo
+
+    seeded = [n for n, _ in demo.SEED] + [demo.RETURNING[0], demo.REPEAT[0], demo.DAMAGED[0], demo.TO_PACK[0]]
+    assert set(agent.PERSONAS) == set(seeded)  # every seeded customer has a persona, and only they do
+    mark = agent.persona("Mark Dizon")
+    assert [agent.receipt_kind(mark, n) for n in range(3)] == ["wrong_recipient", "matching", "matching"]
+    assert agent.receipt_kind(agent.persona("Dan Cortez"), 0) is None and agent.persona("Someone new") is agent.ANYONE
+    at = datetime(2026, 10, 1, tzinfo=UTC)
+    msg = lambda page, minutes, kind=None: {
+        "from_page": page,
+        "created_time": (at + timedelta(minutes=minutes)).isoformat(),
+        "attachments": [{"kind": kind}] if kind else [],
+    }
+    messages = [msg(False, -5, "image"), msg(True, 1, "image"), msg(False, 2), msg(False, 3, "image")]
+    assert agent.receipts_sent(messages, at) == 1  # only the customer's images since the request

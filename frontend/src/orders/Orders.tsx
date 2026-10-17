@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { load } from '../lib/firebase'
+import { customerReply, load } from '../lib/firebase'
 import { fromChat, peso, STATUS } from '../lib/format'
 import OrderView, { type ChatMessage, type Order } from './OrderView'
 import { Avatar } from '../conversations/Conversations'
@@ -84,7 +84,11 @@ export default function Orders({ initial }: { initial?: string }) {
             order={open}
             onChange={(o) => setList((l) => l?.map((x) => (x.id === o.id ? o : x)))}
             chat={orderChat}
-            onSent={() => setSends((n) => n + 1)}
+            onSent={() => {
+              setSends((n) => n + 1)
+              // A demo customer answers here too; the chat reloads once they have.
+              if (conversation?.startsWith('demo_')) customerReply(conversation).finally(() => setSends((n) => n + 1))
+            }}
           />
         ) : (
           <p className="empty">Pick an order to see it.</p>

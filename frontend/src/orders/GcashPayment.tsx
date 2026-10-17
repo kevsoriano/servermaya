@@ -313,8 +313,8 @@ export default function GcashPayment({
                       <button type="button" disabled={!!busy} onClick={sampleHistory}>
                         Sample history screenshot
                       </button>{' '}
-                      for its entry of a Matching sample receipt, or the sample history PDF in Settings. A customer's receipt uploaded here
-                      fails on purpose: it shows money sent, not money received.
+                      for its entry of the customer's payment to the demo shop, or the sample history PDF in Settings. A customer's receipt
+                      uploaded here fails on purpose: it shows money sent, not money received.
                     </small>
                   </p>
                 )}

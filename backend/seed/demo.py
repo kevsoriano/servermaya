@@ -153,9 +153,11 @@ TO_PACK = (
 )
 
 
-# Gemini calls demo visitors may make in a Philippine day. A judge's full run is about 20. The total is the real ceiling:
-# anyone can make a new anonymous account, so only it bounds what the demo can cost (about $30 a day at Flash prices).
-AI_PER_VISITOR = 250
+# Gemini calls demo visitors may make in a Philippine day. A judge's full run is about 20, plus one per customer reply. The
+# total is the real ceiling: anyone can make a new anonymous account, so only it bounds what the demo can cost (about $30 a
+# day at Flash prices).
+# ponytail: no per-visitor limit while we test; set it back to 250 before judging.
+AI_PER_VISITOR: int | None = None
 AI_PER_DAY = 5000
 
 
@@ -163,7 +165,7 @@ def over_budget(visitor_used: int, all_used: int, n: int) -> str | None:
     """Why n more Gemini calls are refused, or None if they fit both limits."""
     if all_used + n > AI_PER_DAY:
         return "The demo has reached today's AI limit for all visitors. Everything else still works; try again tomorrow."
-    if visitor_used + n > AI_PER_VISITOR:
+    if AI_PER_VISITOR is not None and visitor_used + n > AI_PER_VISITOR:
         return "You've reached today's limit of AI reads in the demo. Everything else still works; AI reads come back tomorrow."
     return None
 

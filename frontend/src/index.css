@@ -510,14 +510,54 @@ mark.status.confirmed {
   text-decoration: underline;
 }
 
-/* Messenger's quick reply: an outlined pill the customer taps */
+/* Messenger's quick reply: an outlined pill the customer taps, shown as they see it */
 .messages .quick-reply {
   margin-top: 0.4rem;
   border: 1px solid var(--accent);
   border-radius: 18px;
-  background: none;
   color: var(--accent-text);
   padding: 0.35rem 0.9rem;
+  cursor: default;
+}
+
+/* The demo customer, played by AI, is answering. */
+.messages li.typing p {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.75rem 0.9rem;
+}
+
+.messages li.typing p span {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: typing 1.2s infinite ease-in-out;
+}
+
+.messages li.typing p span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.messages li.typing p span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+    transform: none;
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+.turn-error {
+  margin: 0.5rem 1rem 0;
 }
 
 .messages img,
@@ -554,16 +594,6 @@ mark.status.confirmed {
 
 .reply textarea:focus {
   box-shadow: none;
-}
-
-/* Demo chats: the judge also writes as the customer, in a box that can't be mistaken for the seller's. */
-.reply.as-customer {
-  border-style: dashed;
-  background: var(--hover);
-}
-
-.reply.as-customer textarea {
-  background: none;
 }
 
 .demo-tools {
@@ -620,18 +650,6 @@ mark.status.confirmed {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
-}
-
-/* Demo chats: customer box on the left and seller box on the right, the same sides as their messages. */
-.composers {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.75rem;
-  margin: 0.75rem 1rem 1rem;
-}
-
-.composers .reply {
-  margin: 0;
 }
 
 .side .reply {
@@ -1051,8 +1069,7 @@ mark.status.confirmed {
   }
 
   .inbox,
-  .inbox.two,
-  .composers {
+  .inbox.two {
     grid-template-columns: 1fr;
   }
 
@@ -1139,24 +1156,6 @@ mark.source.provider {
   text-transform: uppercase;
   background: var(--demo-text);
   color: var(--demo);
-}
-
-/* Demo: one-click sample receipts above the customer's composer footer. */
-.reply .samples {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.375rem;
-  margin: 0.25rem 0;
-}
-
-.reply .samples small {
-  color: var(--muted);
-}
-
-.reply .samples button {
-  padding: 0.125rem 0.5rem;
-  font-size: 0.8rem;
 }
 
 /* Demo notes inside the order panel: yellow, like the Demo badge. */

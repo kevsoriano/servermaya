@@ -275,7 +275,7 @@ def demo_sample_history(order_id: str, user: dict = Depends(auth.current_user)):
     got = (db.store_doc().collection("demoUsers").document(user["uid"]).get().to_dict() or {}).get("samples", [])
     fits = [s for s in got if s["amount"] == manual["amount"] and s["at"] >= start]
     if not fits:
-        raise HTTPException(409, "Send a Matching sample receipt as the customer first. Only money that reached the demo account is in its history.")
+        raise HTTPException(409, "No payment from this customer has reached the demo account yet. Only money that reached it is in its history.")
     s = max(fits, key=lambda s: s["at"])
     return history_read(order_id, samples.history_png(s["amount"], s["reference"], s["at"], s["sender"]), "image/png", user)
 
