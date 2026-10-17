@@ -264,14 +264,6 @@ mark.status.confirmed {
   color: var(--ok);
 }
 
-.demo-hint {
-  margin: 0.5rem 1rem;
-  padding: 0.6rem 0.8rem;
-  border-radius: 10px;
-  background: var(--selected);
-  font-size: 0.9rem;
-}
-
 .threads button.unread .snippet {
   color: var(--text);
   font-weight: 600;
@@ -842,7 +834,7 @@ mark.source.provider {
   font-size: 0.8rem;
 }
 
-/* Demo hints inside the order panel use the banner's colour. */
+/* Demo notes inside the order panel: yellow, like the Demo badge. */
 .demo-note {
   padding: 0.4rem 0.6rem;
   border-radius: 8px;

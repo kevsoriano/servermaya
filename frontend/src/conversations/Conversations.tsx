@@ -408,11 +408,6 @@ export default function Conversations({ replyHours }: { replyHours: number }) {
             <strong>{name}</strong>
           </header>
         )}
-        {thread?.hint && (
-          <p className="demo-hint">
-            <strong>What to try:</strong> {thread.hint.steps}
-          </p>
-        )}
         {error && <p role="alert">{error}</p>}
         {!openId && !error && <p className="empty">Pick a conversation to read it.</p>}
         {openId && !messages && !error && <p className="empty">Loading messages…</p>}
