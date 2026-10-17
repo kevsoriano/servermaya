@@ -255,7 +255,11 @@ def conversation_signals(conversation_id: str, user: dict = Depends(auth.current
         # merge keeps the seller's reviews across re-analysis
         ref.set({"signals": found, "latest_message_id": latest, "model": config.GEMINI_MODEL, "analysed_at": firestore.SERVER_TIMESTAMP}, merge=True)
     chat = [o for _, o in db.chat_orders(conversation_id)]
-    return [{**s, "context": risk.payment_context(s, messages, chat)} for s in risk.resolve(found, chat, cached.get("reviews"))]
+    # The advice is fixed per kind, so a check kept from an earlier analysis shows today's wording.
+    return [
+        {**s, "check": risk.SUGGESTED.get(s["kind"], s["check"]), "context": risk.payment_context(s, messages, chat)}
+        for s in risk.resolve(found, chat, cached.get("reviews"))
+    ]
 
 
 class Review(BaseModel):

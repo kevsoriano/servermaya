@@ -24,9 +24,9 @@ def test_signals_keep_only_cited_customer_messages_and_resolve_on_payment():
     done = risk.resolve(got + extra, [paid])
     # A verified payment does not settle changed refund details, nor make sharing a code or opening someone's link safe.
     assert [bool(s["resolved"]) for s in done] == [True, True, False, False]
-    # A GCash payment the seller found in their own history settles the payment claim only.
+    # So does a GCash payment the seller found in their own history, which is checked at the source.
     gcash = order(["c1", "s1", "c2"], manual_payment={"status": "seller_confirmed", "amount": 89000, "confirmed": {"reference": "1234567890123"}})
-    assert [bool(s["resolved"]) for s in risk.resolve(got, [gcash])] == [True, False]
+    assert [bool(s["resolved"]) for s in risk.resolve(got + extra, [gcash])] == [True, True, False, False]
 
     # A seller review closes a check without claiming it was settled; it survives re-analysis while the evidence is the same.
     reviewed = risk.resolve(got, [], {"pressure:c2": {"by": "s", "note": "Regular customer, paid via link before"}})

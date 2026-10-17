@@ -563,16 +563,50 @@ mark.status.confirmed {
   gap: 0.5rem;
 }
 
-/* Checks before shipping */
-.checks li.to-verify {
-  background: var(--warn-bg);
-  border-radius: 8px;
-  padding: 0.5rem 0.6rem;
+/* Checks before shipping: an open check is a card that says what was said, what to do, and what the records show. */
+.signals h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
 }
 
-.checks li.unseen strong {
-  font-weight: 500;
+.pill {
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--hover);
   color: var(--muted);
+}
+
+.pill.warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.checks li.to-verify {
+  background: var(--warn-bg);
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  border-left: 4px solid var(--warn);
+  border-radius: 8px;
+  padding: 0.65rem 0.7rem 0.7rem 0.5rem;
+}
+
+.checks li.to-verify .result.open {
+  display: grid;
+  place-items: center;
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 50%;
+  background: var(--warn);
+  color: var(--surface);
+  font-size: 0.8rem;
+}
+
+.checks li.done > div > strong {
+  font-weight: 500;
 }
 
 .checks .result.open {
@@ -584,11 +618,60 @@ mark.status.confirmed {
 }
 
 .checks blockquote {
-  margin: 0.25rem 0;
-  padding-left: 0.5rem;
-  border-left: 2px solid var(--line);
+  margin: 0.4rem 0;
+  padding: 0.4rem 0.6rem;
+  border-left: 3px solid var(--line);
+  border-radius: 0 6px 6px 0;
+  background: var(--surface);
   font-style: italic;
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
+.checks p.same-quote {
+  font-size: 0.82rem;
+  font-style: italic;
+}
+
+.checks p.todo {
+  margin-top: 0.4rem;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+/* Small labels inside a check card: what to do, and the facts the records hold (code, not the AI). */
+.checks p.todo > span,
+.checks .records > span,
+.signals .unseen > span {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--muted);
+}
+
+.checks p.todo > span {
+  color: var(--warn);
+}
+
+.checks .records {
+  margin-top: 0.5rem;
+  padding-top: 0.45rem;
+  border-top: 1px dashed color-mix(in srgb, var(--warn) 30%, transparent);
+}
+
+.checks .records ul,
+.signals .unseen ul {
+  margin: 0.2rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+}
+
+.checks .records li {
+  display: list-item;
+  list-style: disc;
+  margin-top: 0.15rem;
 }
 
 .earlier-checks > summary {
@@ -596,26 +679,73 @@ mark.status.confirmed {
   color: var(--muted);
 }
 
-.checks p.context {
-  color: inherit;
-}
-
 .checks details {
   margin: 0.25rem 0;
+  font-size: 0.88rem;
 }
 
 .checks summary {
   cursor: pointer;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
-.signals label {
+.signals .unseen {
+  margin: 0.75rem 0;
+  color: var(--muted);
+}
+
+.signals .unseen li {
+  margin-top: 0.1rem;
+}
+
+/* The pane's top line when a check is open: the checks sit at the bottom, so this says so and jumps there. */
+.checks-alert {
   display: grid;
-  margin: 0.5rem 0;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  border-left: 4px solid var(--warn);
+  border-radius: 8px;
+  background: var(--warn-bg);
+  color: var(--text);
+  text-decoration: none;
 }
 
-.signals input {
-  padding: 0.35rem 0.5rem;
+.checks-alert:hover {
+  border-color: var(--warn);
+}
+
+.checks-alert > span:first-child {
+  display: grid;
+  place-items: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 50%;
+  background: var(--warn);
+  color: var(--surface);
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+.checks-alert strong,
+.checks-alert small {
+  display: block;
+}
+
+.checks-alert strong {
+  color: var(--warn);
+  font-size: 0.92rem;
+}
+
+.checks-alert small {
+  color: var(--muted);
+}
+
+.checks-alert > span:last-child {
+  color: var(--warn);
+  font-weight: 700;
 }
 
 .signals small {

@@ -30,24 +30,24 @@ type Props = {
   messages: { id: string; text: string }[]
   /** Changes when a new message arrives, so the checks are refreshed. */
   latest?: string
+  /** Told how many checks are open, so the pane can say so at the top. */
+  onOpenCount?: (n: number) => void
 }
 
 /** What to verify before shipping, each tied to the messages it came from. Never a verdict on the customer. */
 const ABOUT =
   'AI reading of what was said, to help you decide what to verify. "Not seen" means the AI did not spot it, not that it was checked. Never a judgement of the customer, and it never blocks an order.'
 
-export default function Signals({ conversationId, messages, latest }: Props) {
-  const [signals, setSignals] = useState<Signal[]>()
+export default function Signals({ conversationId, messages, latest, onOpenCount }: Props) {
+  // Kept with the chat they are about, so another chat's checks never show here, nor their count above.
+  const [loaded, setLoaded] = useState<{ id: string; s: Signal[] }>()
   const [error, setError] = useState('')
-  const [reviewing, setReviewing] = useState<string>()
-  const [note, setNote] = useState('')
-  const [busy, setBusy] = useState(false)
   const [tries, setTries] = useState(0) // Try again: checks that could not be read are never kept, so asking again retries
 
   useEffect(() => {
     let live = true
     load<Signal[]>(`/conversations/${conversationId}/signals`).then(
-      (s) => live && (setSignals(s), setError('')),
+      (s) => live && (setLoaded({ id: conversationId, s }), setError('')),
       (e) => live && setError(e.message),
     )
     return () => {
@@ -55,40 +55,37 @@ export default function Signals({ conversationId, messages, latest }: Props) {
     }
   }, [conversationId, latest, tries])
 
+  const signals = loaded?.id === conversationId ? loaded.s : undefined
   const isOpen = (s: Signal) => !s.resolved && !s.reviewed && !s.earlier
   const current = signals?.filter((s) => !s.earlier)
   const earlier = signals?.filter((s) => s.earlier) ?? []
   const open = signals?.filter(isOpen) ?? []
+  useEffect(() => onOpenCount?.(signals ? open.length : 0), [signals, open.length, onOpenCount])
   // Every kind is listed, so the seller sees what was looked for. A kind with nothing found is "not seen", never a pass:
   // the AI missing something is not the same as code checking it.
   const found = current && [...open, ...current.filter((s) => !isOpen(s))]
   const unseen = Object.keys(LABEL).filter((kind) => !current?.some((s) => s.kind === kind))
 
-  const review = (body: { key: string; note?: string; reopen?: boolean }) => {
-    setBusy(true)
-    setError('')
-    load<Signal[]>(`/conversations/${conversationId}/signals/review`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-      .then((s) => {
-        setSignals(s)
-        setReviewing(undefined)
-        setNote('')
-      })
-      .catch((e) => setError(e.message))
-      .finally(() => setBusy(false))
-  }
   const quote = (id: string) => messages.find((m) => m.id === id)?.text
 
+  // A message two checks rest on is quoted once, in the first of them.
+  const quoted = new Set<string>()
+  const firstQuote = (s: Signal) => {
+    const id = s.sources.find((x) => quote(x))
+    if (!id) return null
+    if (quoted.has(id)) return <p className="same-quote">Same message as above</p>
+    quoted.add(id)
+    return <blockquote>{quote(id)}</blockquote>
+  }
+
   return (
-    <section className="signals" aria-label="Checks before shipping">
+    <section className="signals" id="checks" aria-label="Checks before shipping">
       <h3>
-        Checks before shipping{signals && ` (${open.length} to verify)`}{' '}
+        Checks before shipping{' '}
         <span className="info" tabIndex={0} role="img" aria-label={ABOUT} data-tip={ABOUT}>
           ⓘ
         </span>
+        {signals && <span className={`pill ${open.length ? 'warn' : ''}`}>{open.length ? `${open.length} to verify` : 'None open'}</span>}
       </h3>
       {error && (
         <p role="alert">
@@ -96,10 +93,10 @@ export default function Signals({ conversationId, messages, latest }: Props) {
         </p>
       )}
       {!signals && !error && <p>Reading the conversation…</p>}
-      {found && (
+      {found && found.length > 0 && (
         <ul className="checks">
           {found.map((s) => (
-            <li key={s.key} className={isOpen(s) ? 'to-verify' : undefined}>
+            <li key={s.key} className={isOpen(s) ? 'to-verify' : 'done'}>
               <span
                 className={`result ${isOpen(s) ? 'open' : 'pass'}`}
                 aria-label={isOpen(s) ? 'To verify' : s.resolved ? 'Settled' : 'Reviewed'}
@@ -113,60 +110,55 @@ export default function Signals({ conversationId, messages, latest }: Props) {
                   <p>Settled: {s.resolved}.</p>
                 ) : s.reviewed ? (
                   <p>
-                    Reviewed by {s.reviewed.by}: {s.reviewed.note}{' '}
-                    <button disabled={busy} onClick={() => review({ key: s.key, reopen: true })}>
-                      Reopen
-                    </button>
+                    Reviewed by {s.reviewed.by}: {s.reviewed.note}
                   </p>
                 ) : (
-                  s.sources.slice(0, 1).map((id) => quote(id) && <blockquote key={id}>{quote(id)}</blockquote>)
+                  <>
+                    {firstQuote(s)}
+                    <p className="todo">
+                      <span>What to do</span> {s.check}
+                    </p>
+                  </>
                 )}
-                {s.context?.map((c) => (
-                  <p key={c} className="context">
-                    {c}
-                  </p>
-                ))}
-                <details>
-                  <summary>{isOpen(s) ? 'What to check' : 'Details'}</summary>
-                  <p>{s.summary}</p>
-                  {s.sources.slice(isOpen(s) ? 1 : 0).map((id) => quote(id) && <blockquote key={id}>{quote(id)}</blockquote>)}
-                  <p>{s.check}</p>
-                </details>
-                {isOpen(s) &&
-                  (reviewing === s.key ? (
-                    <form
-                      onSubmit={(e) => {
-                        e.preventDefault()
-                        review({ key: s.key, note })
-                      }}
-                    >
-                      <label>
-                        Why is this fine?
-                        <input required autoFocus value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />
-                      </label>
-                      <button disabled={busy || !note.trim()}>Mark reviewed</button>{' '}
-                      <button type="button" onClick={() => setReviewing(undefined)}>
-                        Cancel
-                      </button>
-                    </form>
-                  ) : (
-                    <button onClick={() => (setReviewing(s.key), setNote(''))}>Mark reviewed…</button>
-                  ))}
-              </div>
-            </li>
-          ))}
-          {unseen.map((kind) => (
-            <li key={kind} className="unseen">
-              <span className="result none" aria-label="Not seen" title="Not seen">
-                –
-              </span>
-              <div>
-                <strong>{LABEL[kind]}</strong>
-                <p>Not seen in the chat</p>
+                {!!s.context?.length && (
+                  <div className="records">
+                    <span>From your records</span>
+                    <ul>
+                      {s.context.map((c) => (
+                        <li key={c}>{c}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {isOpen(s) && (
+                  <details>
+                    <summary>Why it was flagged</summary>
+                    <p>{s.summary}</p>
+                    {s.sources.slice(1).map((id) => quote(id) && <blockquote key={id}>{quote(id)}</blockquote>)}
+                  </details>
+                )}
+                {!isOpen(s) && (
+                  <details>
+                    <summary>Details</summary>
+                    <p>{s.summary}</p>
+                    {s.sources.map((id) => quote(id) && <blockquote key={id}>{quote(id)}</blockquote>)}
+                    <p>{s.check}</p>
+                  </details>
+                )}
               </div>
             </li>
           ))}
         </ul>
+      )}
+      {current && unseen.length > 0 && (
+        <div className="unseen">
+          <span>Not seen in chat</span>
+          <ul>
+            {unseen.map((kind) => (
+              <li key={kind}>{LABEL[kind]}</li>
+            ))}
+          </ul>
+        </div>
       )}
       {earlier.length > 0 && (
         <details className="earlier-checks">

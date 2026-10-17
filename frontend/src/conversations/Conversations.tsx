@@ -202,6 +202,7 @@ export default function Conversations({ replyHours, onOpenOrder }: { replyHours:
   const [messages, setMessages] = useState<Message[]>()
   const [error, setError] = useState('')
   const [order, setOrder] = useState<Order>()
+  const [openChecks, setOpenChecks] = useState(0) // open checks in this chat, said at the top of the pane
   const [orders, setOrders] = useState<Order[]>() // this chat's orders, newest first
   const [viewing, setViewing] = useState<{ a: Attachment; m: Message }>()
   const [drafting, setDrafting] = useState(false)
@@ -480,6 +481,20 @@ export default function Conversations({ replyHours, onOpenOrder }: { replyHours:
                 .join()
             }
           />
+          {openChecks > 0 && (
+            <a
+              className="checks-alert"
+              href="#checks"
+              onClick={(e) => (e.preventDefault(), document.getElementById('checks')?.scrollIntoView({ behavior: 'smooth' }))}
+            >
+              <span aria-hidden>!</span>
+              <span>
+                <strong>{openChecks} to verify before shipping</strong>
+                <small>From what was said in this chat</small>
+              </span>
+              <span aria-hidden>↓</span>
+            </a>
+          )}
           {order && <VerifyPanel order={order} onChange={orderChanged} onSent={reloadMessages} onOpen={onOpenOrder} chat={messages} />}
           {messages.length > 0 && orders && (!orders.length || customerWroteSince || drafting) && (
             <div className="block">
@@ -513,7 +528,9 @@ export default function Conversations({ replyHours, onOpenOrder }: { replyHours:
               </ul>
             </details>
           )}
-          {messages.length > 0 && <Signals conversationId={openId} messages={messages} latest={messages.at(-1)?.id} />}
+          {messages.length > 0 && (
+            <Signals conversationId={openId} messages={messages} latest={messages.at(-1)?.id} onOpenCount={setOpenChecks} />
+          )}
         </aside>
       )}
       {viewing && (

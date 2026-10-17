@@ -15,11 +15,11 @@ from . import orders as rules
 Kind = Literal["pressure", "payment_claim", "changed_payment_details", "inconsistent_details", "receipt_image", "account_request"]
 
 SUGGESTED = {
-    "pressure": "Do not pack or ship until PayMongo has verified the payment.",
+    "pressure": "Do not pack or ship until the payment is confirmed: verified by PayMongo, or found in your own GCash history.",
     "payment_claim": "Check the order's payment panel. Only a PayMongo-verified payment, or a GCash payment you found in your own GCash history, counts.",
     "changed_payment_details": "Confirm the change in writing. Refunds only go back to the original payment.",
     "inconsistent_details": "Confirm the final details with the customer before shipping.",
-    "receipt_image": "Treat the image as a claim. Only a PayMongo-verified payment counts.",
+    "receipt_image": "Treat the image as a claim, not proof. Only a PayMongo-verified payment, or a GCash payment you found in your own GCash history, counts.",
     # Never settled by a payment: a verified payment does not make sharing a code or opening someone's link safe.
     "account_request": "You don't need a new account, app or link to get paid. Never share a code, OTP or PIN. Use your usual GCash or the PayMongo link.",
 }
@@ -106,8 +106,9 @@ def resolve(signals: list[dict], orders: list[dict], reviews: dict | None = None
     """Deterministic status for each check: settled by its own order's payment, reviewed by the seller, or open.
     Checks on an earlier, finished order are marked earlier: history for the seller, not something to verify now.
 
-    A PayMongo-verified payment settles pressure, payment claims and receipt images. A GCash payment the seller found in
-    their own history settles only the payment claim: the claim was checked at the source, but a screenshot is still a screenshot.
+    A PayMongo-verified payment, or a GCash payment the seller found in their own history (checked at the source, not from
+    a screenshot), settles pressure, payment claims and receipt images. Nothing settles the rest; they leave the open list once
+    their order is received or cancelled.
     """
     reviews = reviews or {}
 
@@ -115,7 +116,7 @@ def resolve(signals: list[dict], orders: list[dict], reviews: dict | None = None
         payment, manual = (o or {}).get("payment") or {}, (o or {}).get("manual_payment") or {}
         if payment.get("status") == "verified" and kind in ("pressure", "payment_claim", "receipt_image"):
             return f"PayMongo verified a payment of ₱{payment.get('paid_amount', payment['amount']) / 100:,.2f} for this order"
-        if manual.get("status") == "seller_confirmed" and kind == "payment_claim":
+        if manual.get("status") == "seller_confirmed" and kind in ("pressure", "payment_claim", "receipt_image"):
             return (
                 f"You found GCash reference {manual['confirmed']['reference']} for ₱{manual['amount'] / 100:,.2f} in your own "
                 "GCash history (not verified by PayMongo)"
