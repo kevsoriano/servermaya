@@ -90,3 +90,17 @@ def test_what_is_at_a_pin_is_checked_against_the_orders_address(monkeypatch):
     # Lalamove would quote this pin just the same for a Makati address; the seller is told
     moved = maps.reverse(14.63, 121.05, "12 Mabini St., Makati City")
     assert moved["warning"] == "This pin is not in the city the address names. This pin is on Kalayaan Avenue, not the street in the address."
+
+
+def test_a_pin_near_a_corner_is_not_flagged_for_the_cross_street(monkeypatch):
+    # Live: the estimated pin for "31 Molave St, Pasig" was nearest to a building on Quezon St
+    monkeypatch.setattr(config, "MAPS_SERVER_KEY", "k")
+    on = lambda street: {
+        "formatted_address": f"{street}, Pasig",
+        "address_components": [{"long_name": street, "types": ["route"]}, {"long_name": "Pasig", "types": ["locality"]}],
+    }
+    reply = lambda results: type("R", (), {"json": lambda self: {"status": "OK", "results": results}})()
+    monkeypatch.setattr(maps.requests, "get", lambda url, params, timeout: reply([on("Quezon Street"), on("Molave Street")]))
+    assert maps.reverse(14.57, 121.08, "31 Molave St., Brgy. Bagong Ilog, Pasig City")["warning"] is None
+    monkeypatch.setattr(maps.requests, "get", lambda url, params, timeout: reply([on("Quezon Street"), on("Shaw Boulevard")]))
+    assert maps.reverse(14.57, 121.08, "31 Molave St., Pasig City")["warning"] == "This pin is on Quezon Street, not the street in the address."

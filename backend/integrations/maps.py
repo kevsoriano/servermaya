@@ -25,6 +25,7 @@ PRECISION = {
 }
 PLACE_TYPES = {"locality", "administrative_area_level_2", "administrative_area_level_3", "sublocality", "sublocality_level_1"}
 SHORT_HOSTS = ("maps.app.goo.gl", "goo.gl")
+NEARBY = 5  # results around a pin that count as "on the address's street"
 
 
 def places(result: dict) -> list[str]:
@@ -112,14 +113,16 @@ def reverse(lat: float, lng: float, address: str) -> dict | None:
     results = data.get("results", []) if data.get("status") == "OK" else []
     if not results:
         return None
-    here, text = results[0], (address or "").lower()
+    # The nearest few results, not only the first: an estimated pin near a corner is closest to a building on the cross
+    # street ("31 Molave St, Pasig" came back nearest to Quezon St), which is no reason to doubt it.
+    near, text = results[:NEARBY], (address or "").lower()
     problems = []
-    if not any(name.lower().removesuffix(" city") in text for name in places(here) if name):
+    if not any(name.lower().removesuffix(" city") in text for r in near for name in places(r) if name):
         problems.append("This pin is not in the city the address names.")
-    street = street_of(here)
-    if street and not same_street(address or "", street):
-        problems.append(f"This pin is on {street}, not the street in the address.")
-    return {"formatted": here.get("formatted_address", ""), "warning": " ".join(problems) or None}
+    streets = [st for r in near if (st := street_of(r))]
+    if streets and not any(same_street(address or "", st) for st in streets):
+        problems.append(f"This pin is on {streets[0]}, not the street in the address.")
+    return {"formatted": results[0].get("formatted_address", ""), "warning": " ".join(problems) or None}
 
 
 def google_host(host: str) -> bool:
