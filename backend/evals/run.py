@@ -5,9 +5,11 @@ Run: make eval [RUNS=3]   (needs gcloud application-default credentials for the 
 - 41 conversations (20, plus 21 harder ones) through extraction and checks before shipping: ordinary orders, discrepancies
   the seller should verify, prompt injection, and returning customers (since_last_order and carry_over, as the draft route
   runs them).
-- 15 claim reviews through the ADK agent, which fetches the order's records and the shop's past decisions with its tools,
+- 17 claim reviews through the ADK agent, which fetches the order's records and the shop's past decisions with its tools,
   with its citation check. Six have Veo sample videos (an unboxing video and the seller's packing video), each checked on
-  its own first by claims.video_records, as the route does; two of them show the parcel's packing label.
+  its own first by claims.video_records, as the route does; two of them show the parcel's packing label. Two have the
+  courier's pickup and drop-off photos (generated samples), each checked by claims.parcel_records, with the custody check's
+  [COC] record, as the route builds them.
 - 4 customer GCash receipt screenshots through the receipt prompt and receipts.check_receipt, three with planted text.
 - 20 packing checks on generated images, through packing.unclear and packing.apply_check as the route runs them. They are
   drawings, not photos: they test counting, colour, damage and visibility rules, not real-world photo quality.
@@ -35,7 +37,7 @@ from google.genai import types
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 from domain import catalog as shop
-from domain import claim_agent, extraction, signals
+from domain import claim_agent, custody, delivery, extraction, signals
 from domain import claims as cases
 from domain import orders as rules
 from domain import packing as pack
@@ -1266,8 +1268,39 @@ CLAIMS += [
 ]
 
 
+# The courier's pickup and drop-off photos (generated samples of one sealed box), checked on their own and read by the custody
+# check in code. Crushed only at drop-off, with a photo of the cracked mug: the records point to transit, so acting on it is
+# right. Intact at both ends with no photo of the damage: nothing shows when it broke, so asking first is right.
+CLAIMS += [
+    dict(
+        name="courier photos: intact at pickup, crushed at drop-off",
+        order=dict(blue_mugs=1, packed=True, delivered=True, received=True),
+        type="damage",
+        narrative="The box arrived crushed and the mug inside is cracked.",
+        photo=[("mug", 430, 280, BLUE, True)],
+        pop="courier-pickup-intact",
+        pod="courier-dropoff-crushed",
+        allowed={"refund", "partial_refund", "replacement"},
+    ),
+    dict(
+        name="courier photos: box intact at both ends, no damage photo",
+        order=dict(blue_mugs=1, packed=True, delivered=True, received=True),
+        type="damage",
+        narrative="Basag po yung mug pagbukas ko.",
+        pop="courier-pickup-intact",
+        pod="courier-dropoff-intact",
+        allowed={"clarification", "escalation"},
+    ),
+]
+
+
 def run_claim(model: tuple[str, str], case: dict) -> dict:
     order = claim_order(**case["order"])
+    for key in ("pop", "pod"):
+        if case.get(key):
+            order["fulfillment"][key] = delivery.proof(
+                "PICKED_UP" if key == "pop" else "DELIVERED", NOW - timedelta(days=1), "provider", {"sample": case[key]}
+            )
     if case.get("packing_video"):
         order["packing"]["videos"] = [{"id": "kv1", "content_type": "video/mp4", "uploaded_at": NOW - timedelta(days=2)}]
     photos = ([{"id": "cp1"}] if case.get("photo") else []) + ([{"id": "cv1", "content_type": "video/mp4"}] if case.get("video") else [])
@@ -1281,11 +1314,19 @@ def run_claim(model: tuple[str, str], case: dict) -> dict:
         "CP1": lambda: (photo(case["photo"]), "image/png"),
         "KV1": lambda: (catalog.video(case["packing_video"]), "video/mp4"),
         "CV1": lambda: (catalog.video(case["video"]), "video/mp4"),
+        "POPP": lambda: (catalog.image(case["pop"]), "image/jpeg"),
+        "PODP": lambda: (catalog.image(case["pod"]), "image/jpeg"),
     }
     shown = [(label, types.Part.from_bytes(data=media[label]()[0], mime_type=media[label]()[1])) for label, _ in images if label in media]
     start = time.monotonic()
     expect = (case.get("code", "ANA01"), order["draft"]["recipient_name"]["value"])
-    blocks += cases.video_records(genai.Client(vertexai=True, project=PROJECT, location="global"), MODEL, shown, expect)
+    client = genai.Client(vertexai=True, project=PROJECT, location="global")
+    videos: dict = {}
+    blocks += cases.video_records(client, MODEL, shown, expect, out=videos)
+    texts, parcels = cases.parcel_records(client, MODEL, [(label, part, None) for label, part in shown if label in cases.PROOFS], expect)
+    blocks += texts
+    current = {**order, **cases.with_checks(order, "c1", videos, parcels)}
+    blocks.append(custody.record(custody.check(current, cases.claim(current, "c1"))))
     review = claim_agent.review(claim_agent.gemini(*model), MODEL, blocks, cases.photos_only(shown), NOW, recall=lambda: case.get("past", []))
     seconds = time.monotonic() - start
     findings = review["findings"]

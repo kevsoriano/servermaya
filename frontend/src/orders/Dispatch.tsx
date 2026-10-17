@@ -3,6 +3,7 @@ import { load } from '../lib/firebase'
 import { fromChat, peso } from '../lib/format'
 import { parsePin, pinText } from '../lib/maps'
 import type { ChatMessage, Order } from './OrderView'
+import { Photo } from './Packing'
 import PinMap from './PinMap'
 
 /** A drop-off pin Google suggested from the order's address: how precise it is, and whether it is in the city the address names. */
@@ -22,16 +23,40 @@ type Event = {
   at: string
   note?: string | null
 }
+/** A courier's pickup or drop-off proof. image: the copy kept by the app, or a sample photo for the sandbox demo. */
+export type Proof = {
+  status: string | null
+  at?: string | null
+  delivered_at?: string | null // proofs kept before pickup photos existed
+  source?: 'provider' | 'demo'
+  image?: { path?: string; sample?: string } | null
+  image_url?: string | null
+  check?: { parcel_visible: boolean; outer_damage: string; seal_intact: boolean | null; label_match: boolean | null }
+}
+/** Who carried it, and where that came from: Lalamove, the sandbox demo, or the seller. */
+export type Driver = { source: 'provider' | 'simulated' | 'seller_reported'; driver_id: string; name: string | null; plate: string | null }
 export type Fulfillment = {
   id: string
   courier: 'lalamove' | 'simulator' | 'other'
   status: 'quoted' | 'booking' | 'booked' | 'driver_assigned' | 'picked_up' | 'delivered' | 'cancelled' | 'failed'
-  quotation: { id: string; service: string; price: number; expires_at: string; livemode: boolean; dropoff?: [number, number] } | null
+  quotation: {
+    id: string
+    service: string
+    price: number
+    expires_at: string
+    livemode: boolean
+    dropoff?: [number, number]
+    distance_m?: number | null
+  } | null
   provider_order_id: string | null
   share_link: string | null
   tracking: string | null
   driver_id: string | null
-  pod: { status: string | null; image_url: string | null; delivered_at: string | null } | null
+  driver?: Driver | null
+  drivers?: { driver_id: string; source: string; at: string }[]
+  pop?: Proof | null
+  pod: Proof | null
+  end_reason?: { who: string; why: string; note: string | null; by: string } | null
   events: Event[]
   booking_uncertain?: boolean
   problem?: string
@@ -50,6 +75,152 @@ const STATUS: Record<string, string> = {
   cancelled: 'Cancelled',
   failed: 'Failed',
 }
+const DRIVER_SOURCE = { provider: 'from Lalamove', simulated: 'simulated', seller_reported: 'named by you' }
+const WHO: Record<string, string> = {
+  driver: 'The driver',
+  customer: 'The customer',
+  seller: 'Us',
+  courier: 'The courier',
+  unknown: 'Unknown',
+}
+const WHY: Record<string, string> = {
+  customer_unreachable: 'Customer unreachable',
+  wrong_pin: 'Wrong pin or address',
+  refused: 'Refused at the door',
+  driver_no_show: 'Driver did not come',
+  damaged: 'Damaged before handover',
+  other: 'Other',
+}
+
+/** The driver on a shipment, with where the details came from. */
+export function DriverLine({ f }: { f: Fulfillment }) {
+  const d = f.driver ?? (f.driver_id ? { source: 'provider' as const, driver_id: f.driver_id, name: null, plate: null } : null)
+  if (!d) return null
+  const changed = new Set((f.drivers ?? []).map((x) => x.driver_id)).size > 1
+  return (
+    <p>
+      Driver: <strong>{d.name ?? `ID ${d.driver_id}`}</strong>
+      {d.plate && <> · plate {d.plate}</>}{' '}
+      <mark className={`source ${d.source === 'simulated' ? 'demo' : d.source}`}>{DRIVER_SOURCE[d.source]}</mark>
+      {changed && <small> · the driver changed during this delivery</small>}
+    </p>
+  )
+}
+
+/** The courier's pickup and drop-off proofs, with their photos. They show the parcel's outside, never what was inside. */
+export function Proofs({ orderId, f }: { orderId: string; f: Fulfillment }) {
+  const shown = (['pop', 'pod'] as const).filter((k) => f[k])
+  if (!shown.length) return null
+  return (
+    <div className="photos">
+      {shown.map((k) => {
+        const p = f[k]!
+        const at = p.at ?? p.delivered_at
+        const caption = `${k === 'pop' ? 'Pickup' : 'Drop-off'}: ${p.status ?? 'status unknown'}${at ? `, ${new Date(at).toLocaleString()}` : ''}${p.source === 'demo' ? ' · simulated' : ''}${p.check ? ` · outer damage: ${p.check.outer_damage}` : ''}`
+        return p.image?.path || p.image?.sample ? (
+          <Photo
+            key={k}
+            path={`/orders/${orderId}/shipments/${f.id}/proof/${k}`}
+            alt={`${k === 'pop' ? 'Pickup' : 'Drop-off'} photo`}
+            caption={caption}
+          />
+        ) : (
+          <p key={k}>
+            <small>
+              {caption}
+              {p.image_url && (
+                <>
+                  {' '}
+                  ·{' '}
+                  <a href={p.image_url} target="_blank" rel="noreferrer">
+                    Lalamove's photo
+                  </a>
+                </>
+              )}
+            </small>
+          </p>
+        )
+      })}
+    </div>
+  )
+}
+
+/** The seller names the rider, for another courier or a rider they arranged (a Favourite Driver, or one outside Lalamove). */
+export function NameDriver({ path, run }: { path: string; run: (label: string, path: string, body?: object) => Promise<unknown> }) {
+  const [open, setOpen] = useState(false)
+  const [name, setName] = useState('')
+  const [plate, setPlate] = useState('')
+  if (!open) return <button onClick={() => setOpen(true)}>Name the rider</button>
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault()
+        run('Saving…', path, { name, plate }).then(() => setOpen(false))
+      }}
+    >
+      <label>
+        Rider's name
+        <input required maxLength={100} value={name} onChange={(e) => setName(e.target.value)} />
+      </label>
+      <label>
+        Plate (optional)
+        <input maxLength={20} value={plate} onChange={(e) => setPlate(e.target.value)} />
+      </label>
+      <button>Save rider</button> <small>Kept as named by you, for delivery patterns, such as a favourite or regular rider.</small>
+    </form>
+  )
+}
+
+/** Why a shipment failed or was cancelled: Lalamove never says, so the seller records it. */
+function EndReason({ f, run }: { f: Fulfillment; run: (label: string, path: string, body?: object) => Promise<unknown> }) {
+  const [who, setWho] = useState('unknown')
+  const [why, setWhy] = useState('customer_unreachable')
+  const [note, setNote] = useState('')
+  if (f.end_reason)
+    return (
+      <p>
+        <small>
+          Why: {WHO[f.end_reason.who]}, {WHY[f.end_reason.why].toLowerCase()}
+          {f.end_reason.note && <> ({f.end_reason.note})</>}. Recorded by {f.end_reason.by}.
+        </small>
+      </p>
+    )
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault()
+        run('Saving…', `/${f.id}/end-reason`, { who, why, note })
+      }}
+    >
+      <label>
+        Who
+        <select value={who} onChange={(e) => setWho(e.target.value)}>
+          {Object.entries(WHO).map(([k, v]) => (
+            <option key={k} value={k}>
+              {v}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Why
+        <select value={why} onChange={(e) => setWhy(e.target.value)}>
+          {Object.entries(WHY).map(([k, v]) => (
+            <option key={k} value={k}>
+              {v}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Note{why === 'other' ? '' : ' (optional)'}
+        <input required={why === 'other'} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} />
+      </label>
+      <button>Record why</button>
+    </form>
+  )
+}
+
 const NEXT: Record<string, string[]> = {
   simulator: ['driver_assigned', 'picked_up', 'delivered'],
   other: ['picked_up', 'delivered', 'failed'],
@@ -183,19 +354,22 @@ export default function Dispatch({
       {f?.courier === 'lalamove' && f.quotation?.livemode === false && f.status !== 'quoted' && f.status !== 'booking' && (
         <p>
           <small>
-            Lalamove sandbox: the quote and booking are real sandbox calls, but the sandbox assigns no driver, so the delivery steps are
-            simulated for the demo, one a second, and labelled Simulated.
+            Lalamove sandbox: the quote and booking are real sandbox calls, but the sandbox rarely assigns a driver, so the delivery steps,
+            the driver and the pickup and drop-off photos are simulated for the demo, one step a second, and labelled Simulated.
           </small>
         </p>
       )}
 
       {ended && (
-        <p className="claim">
-          <small>
-            This delivery {f.status === 'failed' ? 'failed' : 'was cancelled'}; it stays on record below. Get a new quote, or send it
-            another way.
-          </small>
-        </p>
+        <div className="claim">
+          <p>
+            <small>
+              This delivery {f.status === 'failed' ? 'failed' : 'was cancelled'}; it stays on record below. Get a new quote, or send it
+              another way.
+            </small>
+          </p>
+          <EndReason f={f} run={run} />
+        </div>
       )}
       {(!f || f.status === 'quoted' || ended) && (
         <>
@@ -296,6 +470,7 @@ export default function Dispatch({
                   Sandbox only: how the simulated delivery ends
                   <select value={outcome} onChange={(e) => setOutcome(e.target.value)}>
                     <option value="delivered">Delivered</option>
+                    <option value="damaged">Delivered with a crushed corner (damaged in transit)</option>
                     <option value="failed">Failed delivery (the rider could not hand it over)</option>
                     <option value="cancelled">Cancelled by the driver before pickup</option>
                   </select>
@@ -358,8 +533,11 @@ export default function Dispatch({
                 Tracking link
               </a>
             )}
-            {f.driver_id && <> · Driver ID {f.driver_id}</>}
           </p>
+          <DriverLine f={f} />
+          {!f.driver?.name &&
+            f.quotation?.livemode !== false &&
+            ['driver_assigned', 'picked_up', 'delivered', 'booked'].includes(f.status) && <NameDriver path={`/${f.id}/driver`} run={run} />}
           <ol className="timeline">
             {f.events.map((e) => (
               <li key={e.id}>
@@ -369,20 +547,10 @@ export default function Dispatch({
               </li>
             ))}
           </ol>
-          {f.pod && (
+          <Proofs orderId={order.id} f={f} />
+          {(f.pop || f.pod) && (
             <p>
-              Proof of delivery from Lalamove: {f.pod.status ?? 'status unknown'}
-              {f.pod.delivered_at && <>, {new Date(f.pod.delivered_at).toLocaleString()}</>}
-              {f.pod.image_url && (
-                <>
-                  {' '}
-                  ·{' '}
-                  <a href={f.pod.image_url} target="_blank" rel="noreferrer">
-                    image
-                  </a>
-                </>
-              )}
-              . It shows the parcel was handed over, not what was inside.
+              <small>Pickup and drop-off photos show the parcel's outside when it was handed over, not what was inside.</small>
             </p>
           )}
           <p>
@@ -429,6 +597,22 @@ export default function Dispatch({
             </p>
           )}
         </>
+      )}
+      {!!order.fulfillment_history?.length && (
+        <details>
+          <summary>Earlier shipments ({order.fulfillment_history.length})</summary>
+          {[...order.fulfillment_history].reverse().map((h) => (
+            <div key={h.id} className="claim">
+              <p>
+                {h.courier === 'lalamove' ? `Lalamove ${h.provider_order_id ?? ''}` : h.courier === 'other' ? h.tracking : 'Simulator'} ·{' '}
+                {STATUS[h.status] ?? h.status}
+              </p>
+              <DriverLine f={h} />
+              <Proofs orderId={order.id} f={h} />
+              {['cancelled', 'failed'].includes(h.status) && <EndReason f={h} run={run} />}
+            </div>
+          ))}
+        </details>
       )}
       {error && <p role="alert">{error}</p>}
       {busy && <p role="status">{busy}</p>}

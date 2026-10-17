@@ -4,6 +4,7 @@ import json
 import re
 import time
 from datetime import UTC, datetime
+from urllib.parse import urlparse
 
 import requests
 from fastapi import HTTPException
@@ -53,20 +54,52 @@ def lalamove_time(text: str | None) -> datetime:
     return datetime.fromisoformat(found[1]).replace(tzinfo=UTC) if found else datetime.now(UTC)
 
 
-def lalamove_pod(provider_order_id: str) -> dict | None:
-    """Proof of delivery for the drop-off stop, as Lalamove reports it. Missing POD means unavailable, not failed."""
+def proofs(order_data: dict) -> dict:
+    """Pickup (POP) and drop-off (POD) proofs from an order's stops, as Lalamove reports them: {"pop": ..., "pod": ...}, each
+    {status, image_url, at} or missing. Missing means unavailable, not failed. Lalamove documents POD on each stop; POP's
+    fields are not documented, so it is read the same way, from the pickup stop, and left out when it is not there."""
+    stops = order_data.get("stops") or []
+    out = {}
+    for key, stop, when in (("pop", stops[0] if stops else {}, "pickedUpAt"), ("pod", stops[-1] if len(stops) > 1 else {}, "deliveredAt")):
+        p = (stop or {}).get(key.upper()) or {}
+        if p:
+            out[key] = {"status": p.get("status"), "image_url": p.get("image"), "at": lalamove_time(p.get(when) or p.get("updatedAt"))}
+    return out
+
+
+def lalamove_proofs(provider_order_id: str) -> dict:
     try:
-        stops = lalamove("GET", f"/v3/orders/{provider_order_id}").get("stops", [])
+        return proofs(lalamove("GET", f"/v3/orders/{provider_order_id}"))
+    except (HTTPException, LalamoveNoAnswer):
+        return {}
+
+
+def lalamove_driver(provider_order_id: str, driver_id: str) -> dict | None:
+    """The driver's name and masked plate, kept as they were for this order. Lalamove serves them only while the order is
+    active (403 afterwards), so they are fetched when the driver is matched. The phone and live location are not kept."""
+    try:
+        d = lalamove("GET", f"/v3/orders/{provider_order_id}/drivers/{driver_id}")
     except (HTTPException, LalamoveNoAnswer):
         return None
-    pod = (stops[-1].get("POD") or {}) if stops else {}
-    if not pod:
+    return {"name": d.get("name") or None, "plate": d.get("plateNumber") or None}
+
+
+IMAGE_HOSTS = ("lalamove.com",)  # the sandbox's proof images came from sg-oimg-pre.lalamove.com, over plain http
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+
+def proof_image(url: str) -> tuple[bytes, str] | None:
+    """A proof photo's bytes and type, downloaded only from Lalamove's own hosts. None if it cannot be had."""
+    parsed = urlparse(url or "")
+    host = parsed.hostname or ""
+    if parsed.scheme not in ("https", "http") or not (host == IMAGE_HOSTS[0] or host.endswith("." + IMAGE_HOSTS[0])):
         return None
-    # ponytail: keeps Lalamove's image link, which may expire; copy the image into the evidence bucket when retention lands
-    return {
-        "status": pod.get("status"),
-        "image_url": pod.get("image"),
-        "delivered_at": pod.get("deliveredAt"),
-        "source": "lalamove",
-        "fetched_at": datetime.now(UTC),
-    }
+    try:
+        r = requests.get(url, timeout=20)
+        r.raise_for_status()
+    except requests.RequestException:
+        return None
+    kind = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if not kind.startswith("image/") or len(r.content) > MAX_IMAGE_BYTES:
+        return None
+    return r.content, kind

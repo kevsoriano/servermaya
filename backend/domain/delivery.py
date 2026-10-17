@@ -6,6 +6,7 @@ Every status change is an event labelled with its source: provider (Lalamove), s
 are separate records, and neither proves the parcel held the right items.
 """
 
+import hashlib
 import re
 from datetime import datetime, timedelta
 
@@ -62,6 +63,8 @@ def start(order: dict, fid: str, courier: str, by: str, now: datetime, quotation
         "share_link": None,
         "tracking": tracking,
         "driver_id": None,
+        "driver": None,
+        "pop": None,
         "pod": None,
         "events": [],
         "created_by": by,
@@ -138,11 +141,11 @@ def release_booking(order: dict, now: datetime) -> dict:
     return {"fulfillment": {**f, "status": "quoted", "booking_uncertain": False, "released_at": now}}
 
 
-def apply_event(order: dict, ev: dict, driver_id: str | None = None, share_link: str | None = None, pod: dict | None = None) -> dict:
-    """Record one status event. Duplicates change nothing; a late or out-of-order event is kept but never moves status back."""
-    f = order.get("fulfillment")
-    if not f or any(e["id"] == ev["id"] for e in f["events"]):
-        return {}
+def record(f: dict, ev: dict, driver: dict | None = None, share_link: str | None = None, pod: dict | None = None, pop: dict | None = None):
+    """One status event on a shipment (an order's delivery or a return's). The updated shipment, or None for a duplicate.
+    A late or out-of-order event is kept but never moves status back."""
+    if any(e["id"] == ev["id"] for e in f["events"]):
+        return None
     status = f["status"]
     if ev["status"] in ENDED:
         if status != "delivered":
@@ -150,24 +153,118 @@ def apply_event(order: dict, ev: dict, driver_id: str | None = None, share_link:
     elif status not in ENDED and RANK.get(ev["status"], -1) > RANK.get(status, -1):
         status = ev["status"]
     updated = {**f, "status": status, "events": f["events"] + [ev]}
-    if driver_id and driver_id != f["driver_id"]:
-        # Reassignment is recorded, not overwritten: who was assigned when matters for delivery patterns.
-        updated["driver_id"] = driver_id
-        updated["drivers"] = f.get("drivers", []) + [{"driver_id": driver_id, "at": ev["at"]}]
+    if driver:
+        updated = with_driver(updated, driver)
     if share_link:
         updated["share_link"] = share_link
     if pod:
         updated["pod"] = pod
-    return {"fulfillment": updated}
+    if pop:
+        updated["pop"] = pop
+    return updated
 
 
-# Lalamove's sandbox takes a booking but assigns no driver, and its API cannot move an order on. For the demo, a sandbox
-# booking moves on by itself, one stage a second, each step labelled as simulated. Never for a live booking.
+def apply_event(
+    order: dict, ev: dict, driver_id: str | None = None, share_link: str | None = None, pod: dict | None = None, pop: dict | None = None, driver=None
+) -> dict:
+    """Record one status event on the order's shipment. Duplicates change nothing."""
+    f = order.get("fulfillment")
+    if not f:
+        return {}
+    if driver_id and not driver:
+        driver = driver_record("provider", driver_id, at=ev["at"])
+    updated = record(f, ev, driver, share_link, pod, pop)
+    return {"fulfillment": updated} if updated else {}
+
+
+# Drivers. Every record says where it came from: provider (Lalamove), simulated (the sandbox demo), or seller_reported (a
+# rider the seller names, such as a Favourite Driver booked in Lalamove's own app or one hired outside Lalamove). Lalamove's
+# driver is never replaced by another source; a different driver is added to the history, because who carried a parcel
+# matters for delivery patterns.
+DRIVER_SOURCES = ("provider", "simulated", "seller_reported")
+
+
+def driver_record(source: str, driver_id: str, name: str | None = None, plate: str | None = None, at: datetime | None = None) -> dict:
+    return {"source": source, "driver_id": driver_id, "name": name, "plate": plate, "at": at}
+
+
+def with_driver(f: dict, d: dict) -> dict:
+    current = f.get("driver") or (driver_record("provider", f["driver_id"]) if f.get("driver_id") else None)
+    if current and current["source"] == "provider" and d["source"] != "provider":
+        return f
+    if current and (current["source"], current["driver_id"]) == (d["source"], d["driver_id"]):
+        return {**f, "driver": {**current, **{k: v for k, v in d.items() if v is not None and k != "at"}}}  # details fetched later
+    history = f.get("drivers", []) + [{"driver_id": d["driver_id"], "source": d["source"], "at": d["at"]}]
+    return {**f, "driver": d, "driver_id": d["driver_id"], "drivers": history}
+
+
+def seller_driver_id(name: str, plate: str) -> str:
+    """A seller-reported rider has no courier ID: grouped on what the seller typed, which is all there is."""
+    norm = lambda s: re.sub(r"[^a-z0-9]", "", (s or "").lower())
+    return f"seller:{norm(name)}|{norm(plate)}"
+
+
+def shipments(order: dict) -> list[dict]:
+    return [f for f in [order.get("fulfillment")] + order.get("fulfillment_history", []) if f]
+
+
+def replace_shipment(order: dict, updated: dict) -> dict:
+    """The update that stores one changed shipment where it already is: current, or in the history."""
+    if (order.get("fulfillment") or {}).get("id") == updated["id"]:
+        return {"fulfillment": updated}
+    return {"fulfillment_history": [updated if f["id"] == updated["id"] else f for f in order.get("fulfillment_history", [])]}
+
+
+def find_shipment(order: dict, fid: str) -> dict:
+    found = next((f for f in shipments(order) if f["id"] == fid), None)
+    if not found:
+        raise Refused("No such shipment")
+    return found
+
+
+def named(f: dict, name: str, plate: str, by: str, now: datetime) -> dict:
+    """A shipment with the rider the seller names: for another courier, a rider they arranged, or a Lalamove booking that came
+    without driver details (Lalamove's ID is kept, with the seller's details)."""
+    current = f.get("driver") or {}
+    if current.get("source") == "provider" and (current.get("name") or current.get("plate")):
+        raise Refused("Lalamove already gave this shipment's driver")
+    if not name.strip():
+        raise Refused("Enter the rider's name")
+    if current.get("source") == "provider":
+        return {**f, "driver": {**current, "name": name.strip(), "plate": plate.strip() or None, "named_by": by}}
+    d = {**driver_record("seller_reported", seller_driver_id(name, plate), name.strip(), plate.strip() or None, now), "by": by}
+    return with_driver(f, d)
+
+
+def name_driver(order: dict, fid: str, name: str, plate: str, by: str, now: datetime) -> dict:
+    return replace_shipment(order, named(find_shipment(order, fid), name, plate, by, now))
+
+
+# Why a shipment failed or was cancelled. Lalamove gives no reason, so the seller records one.
+END_WHO = ("driver", "customer", "seller", "courier", "unknown")
+END_WHY = ("customer_unreachable", "wrong_pin", "refused", "driver_no_show", "damaged", "other")
+
+
+def end_reason(order: dict, fid: str, who: str, why: str, note: str, by: str, now: datetime) -> dict:
+    f = find_shipment(order, fid)
+    if f["status"] not in ENDED:
+        raise Refused("Only a failed or cancelled shipment has an end reason")
+    if who not in END_WHO or why not in END_WHY:
+        raise Refused("Pick who and why")
+    if why == "other" and not note.strip():
+        raise Refused("Say what happened")
+    return replace_shipment(order, {**f, "end_reason": {"who": who, "why": why, "note": note.strip() or None, "by": by, "at": now}})
+
+
+# Lalamove's sandbox takes a booking but rarely assigns a driver (none in 20 minutes, in two tries on 2026-10-17), and its API
+# cannot move an order on. For the demo, a sandbox booking moves on by itself, one stage a second, each step labelled as
+# simulated, with a simulated driver and sample pickup and drop-off photos. Never for a live booking.
 SANDBOX_STEP = timedelta(seconds=1)
-SANDBOX_NOTE = "Lalamove's sandbox assigns no driver: this step is simulated for the demo"
+SANDBOX_NOTE = "Lalamove's sandbox rarely assigns a driver: this step is simulated for the demo"
 # The outcome the seller picks when booking in the sandbox, and the steps that play it out
 SANDBOX_OUTCOMES = {
     "delivered": ("driver_assigned", "picked_up", "delivered"),
+    "damaged": ("driver_assigned", "picked_up", "delivered"),  # handed over with a crushed corner
     "failed": ("driver_assigned", "picked_up", "failed"),  # the rider could not hand it over
     "cancelled": ("driver_assigned", "cancelled"),  # the driver cancelled before pickup
 }
@@ -175,28 +272,61 @@ SANDBOX_NOTES = {
     "failed": "The rider could not deliver it (simulated in Lalamove's sandbox)",
     "cancelled": "The driver cancelled before pickup (simulated in Lalamove's sandbox)",
 }
+# Made-up riders, so a sandbox shipment shows a driver as a live one would. The shipment's ID picks one, so it never changes.
+SANDBOX_DRIVERS = [
+    ("sim-1", "Sample Rider 1", "ABC ***1"),
+    ("sim-2", "Sample Rider 2", "DEF ***2"),
+    ("sim-3", "Sample Rider 3", "GHI ***3"),
+]
+# Sample courier photos (seed/images), stamped as AI-generated samples: the parcel at pickup, and at drop-off by outcome.
+SANDBOX_PICKUP = "courier-pickup-intact"
+SANDBOX_DROPOFF = {"delivered": "courier-dropoff-intact", "damaged": "courier-dropoff-crushed"}
 
 
-def sandbox_progress(order: dict, now: datetime) -> dict:
-    """The simulated steps now due on a Lalamove sandbox booking, one second apart from the booking, playing out the outcome
+def sandbox_driver(fid: str, at: datetime) -> dict:
+    driver_id, name, plate = SANDBOX_DRIVERS[int(hashlib.sha256(fid.encode()).hexdigest(), 16) % len(SANDBOX_DRIVERS)]
+    return driver_record("simulated", driver_id, name, plate, at)
+
+
+def proof(status: str, at: datetime, source: str, image: dict | None = None, image_url: str | None = None) -> dict:
+    """A courier's pickup or drop-off proof. image: the copy kept in Storage, or {"sample": name} for a demo photo."""
+    return {"status": status, "at": at, "source": source, "image": image, "image_url": image_url}
+
+
+def sandbox_steps(f: dict, now: datetime) -> dict | None:
+    """The simulated steps now due on a Lalamove sandbox shipment, one second apart from the booking, playing out the outcome
     the seller picked (delivered unless said otherwise). Each step has a fixed ID, so applying this again adds nothing, and
-    a real Lalamove update that is further along is never moved back."""
-    f = order.get("fulfillment") or {}
+    a real Lalamove update that is further along is never moved back. The updated shipment, or None."""
     if f.get("courier") != "lalamove" or (f.get("quotation") or {}).get("livemode") is not False or f.get("status") in ENDED:
-        return {}
+        return None
     booked_at = next((e["at"] for e in f.get("events", []) if e["status"] == "booked"), None)
     if not booked_at:
-        return {}
-    updates, current = {}, order
-    for n, status in enumerate(SANDBOX_OUTCOMES.get(f.get("sandbox_outcome"), SIMULATED_STEPS), 1):
+        return None
+    outcome = f.get("sandbox_outcome") or "delivered"
+    current, changed = f, False
+    for n, status in enumerate(SANDBOX_OUTCOMES.get(outcome, SIMULATED_STEPS), 1):
         at = booked_at + n * SANDBOX_STEP
         if at > now:
             break
         note = SANDBOX_NOTES.get(status, SANDBOX_NOTE)
         ev = event(f"{f['id']}:sandbox:{status}", "demo", status, status, at, now, by="Lalamove sandbox", note=note)
-        if done := apply_event(current, ev):
-            updates, current = done, {**current, **done}
-    return updates
+        driver = sandbox_driver(f["id"], at) if status == "driver_assigned" else None
+        pop = proof("PICKED_UP", at, "demo", {"sample": SANDBOX_PICKUP}) if status == "picked_up" else None
+        pod = None
+        if status == "delivered":
+            pod = proof("DELIVERED", at, "demo", {"sample": SANDBOX_DROPOFF.get(outcome, SANDBOX_DROPOFF["delivered"])})
+        elif status == "failed":
+            pod = proof("FAILED", at, "demo")
+        if done := record(current, ev, driver, pod=pod, pop=pop):
+            current, changed = done, True
+    return current if changed else None
+
+
+def sandbox_progress(order: dict, now: datetime) -> dict:
+    """The order's shipment's simulated sandbox steps now due, as an update."""
+    f = order.get("fulfillment") or {}
+    updated = sandbox_steps(f, now) if f else None
+    return {"fulfillment": updated} if updated else {}
 
 
 def step(order: dict, status: str, source: str, by: str, now: datetime, note: str = "") -> dict:

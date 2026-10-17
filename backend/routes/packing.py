@@ -66,41 +66,58 @@ def packing_photo(order_id: str, photo_id: str, user: dict = Depends(auth.curren
     )
 
 
-@router.post("/api/orders/{order_id}/packing/check")
-def check_packing(order_id: str, user: dict = Depends(auth.current_user)):
-    ref, order = db.loaded(order_id)
-    packing = ready(order)
-    if not packing["photos"]:
-        raise HTTPException(409, "Add at least one packing photo")
+def photo_check(rows: list[dict], photos: list[tuple[bytes, str]]) -> pack.Report:
+    """Gemini reads the photos against the order's lines (with each line's catalog photo, when there is one). Code decides
+    each line's result from the report, in pack.result. Used for packing, and for an item that came back."""
     checklist = "\n".join(
         f"[{r['line']}] {r['expected']['quantity']} x {extraction.inline(r['expected']['name'])}"
         + (f" ({extraction.inline(r['expected']['variant'])})" if r["expected"]["variant"] else "")
-        for r in packing["rows"]
+        for r in rows
     )
-    auth.ai_budget(user)
-    photos = [db.bucket().blob(p["path"]).download_as_bytes() for p in packing["photos"]]
     contents = [f"<order>\n{checklist}\n</order>"]
-    for r in packing["rows"]:
+    for r in rows:
         if r.get("reference"):
             try:
                 image = catalog.photo_bytes(r["reference"])
             except Exception:
                 continue  # a missing reference only means the check works from the item's name, as without a catalog
             contents += [f"Reference for line {r['line']}:", types.Part.from_bytes(data=image, mime_type=r["reference"]["content_type"])]
-    for n, (p, data) in enumerate(zip(packing["photos"], photos), 1):
-        contents += [f"Photo {n}:", types.Part.from_bytes(data=data, mime_type=p["content_type"])]
+    for n, (data, kind) in enumerate(photos, 1):
+        contents += [f"Photo {n}:", types.Part.from_bytes(data=data, mime_type=kind)]
     try:
         response = db.clients()[0].models.generate_content(
             model=config.GEMINI_MODEL,
             contents=contents,
             config={"system_instruction": pack.SYSTEM, "response_mime_type": "application/json", "response_schema": pack.Report, "temperature": 0},
         )
-        report = pack.Report.model_validate_json(response.text)
+        return pack.Report.model_validate_json(response.text)
     except Exception:
         raise HTTPException(502, "Could not check the photos. Try again.")
+
+
+@router.post("/api/orders/{order_id}/packing/check")
+def check_packing(order_id: str, user: dict = Depends(auth.current_user)):
+    ref, order = db.loaded(order_id)
+    packing = ready(order)
+    if not packing["photos"]:
+        raise HTTPException(409, "Add at least one packing photo")
+    auth.ai_budget(user)
+    photos = [db.bucket().blob(p["path"]).download_as_bytes() for p in packing["photos"]]
+    report = photo_check(packing["rows"], list(zip(photos, [p["content_type"] for p in packing["photos"]])))
     now = datetime.now(UTC)
     too_unclear = pack.unclear(photos)
     return db.change(ref, lambda o: pack.apply_check(o, report, config.GEMINI_MODEL, now, too_unclear))
+
+
+class Details(BaseModel):
+    weight_g: int | None = Field(default=None, ge=1, le=1_000_000)
+    seal_id: str = Field(default="", max_length=60)
+
+
+@router.post("/api/orders/{order_id}/packing/details")
+def packing_details(order_id: str, body: Details, user: dict = Depends(auth.current_user)):
+    """Optional: the parcel's weight and the ID on its seal, to compare with an item that comes back."""
+    return db.change(db.orders().document(order_id), lambda o: pack.details(o, body.weight_g, body.seal_id))
 
 
 class Inspection(BaseModel):

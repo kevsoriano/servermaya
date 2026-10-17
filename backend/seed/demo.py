@@ -424,3 +424,64 @@ def parse(chat: str) -> list[tuple[bool, str]]:
     if len(out) > MAX_MESSAGES:
         raise ValueError(f"Paste at most {MAX_MESSAGES} messages")
     return out
+
+
+# Sample delivery history for the Patterns tab. Real shops rarely see one Lalamove driver twice, but sellers who book a
+# Favourite Driver or keep a regular rider do; this shows what a driver card looks like then. Built in memory on each
+# Patterns load for a demo visitor, never stored, never listed with their orders, and labelled as sample data.
+SAMPLE_PREFIX = "sample-"
+# (rider, product, area, what happened: None, or (claim type, cause, outcome))
+SAMPLE_HISTORY = [
+    *[(0, "Tote bag (Cream)", "Quezon City", None)] * 3,
+    *[(0, "Ceramic mug (Blue)", "Pasig City", None)] * 3,
+    (1, "Ceramic mug (Blue)", "Makati City", ("damage", "courier_transit", "refund")),
+    (1, "Ceramic mug (White)", "Makati City", ("damage", "courier_transit", "replacement")),
+    (1, "Ceramic mug (Blue)", "Pasig City", ("damage", "courier_transit", "refund")),
+    *[(1, "Tote bag (Black)", "Quezon City", None)] * 3,
+    (2, "Ceramic mug (White)", "Mandaluyong City", ("damage", "unknown", "partial_refund")),
+    (2, "Tote bag (Cream)", "Quezon City", ("wrong_item", "seller_error", "replacement")),
+    *[(2, "Scented soy candle (Vanilla)", "Pasig City", None)] * 4,
+]
+
+
+def sample_history(now: datetime) -> list[dict]:
+    out = []
+    for n, (rider, product, place, what) in enumerate(SAMPLE_HISTORY):
+        oid, fid, at = f"{SAMPLE_PREFIX}{n + 1}", f"{SAMPLE_PREFIX}f{n + 1}", now - timedelta(days=24 - n, hours=3)
+        name, variant = product.rsplit(" (", 1)
+        driver_id, rider_name, plate = delivery.SANDBOX_DRIVERS[rider]
+        f = {
+            "id": fid,
+            "courier": "lalamove",
+            "status": "delivered",
+            "quotation": {"service": "MOTORCYCLE", "price": 12000, "livemode": False},
+            "driver_id": driver_id,
+            "driver": delivery.driver_record("simulated", driver_id, rider_name, plate, at),
+            "events": [],
+            "created_at": at,
+        }
+        order = {
+            "id": oid,
+            "sample": True,
+            "created_at": at,
+            "source": {"type": "demo_sample", "conversation_id": oid},
+            "draft": {"items": [{"name": name, "variant": variant.rstrip(")"), "quantity": 1}], "address": {"value": f"Sample St., {place}"}},
+            "fulfillment": f,
+            "claims": [],
+            "refunds": [],
+        }
+        if what:
+            kind, cause, action = what
+            cid, amount = f"{SAMPLE_PREFIX}c{n + 1}", (18000 if action == "refund" else 9000 if action == "partial_refund" else None)
+            decision = {"action": action, "amount": amount, "cause": cause, "by": SHOP, "at": at + timedelta(days=2)}
+            order["claims"] = [
+                {"id": cid, "type": kind, "fulfillment_id": fid, "created_at": at + timedelta(days=1), "status": "resolved", "decision": decision}
+            ]
+            if amount:
+                order["refunds"] = [{"id": f"{cid}-r", "claim_id": cid, "amount": amount, "status": "seller_reported"}]
+            if action == "replacement":
+                order["fulfillment_history"] = [
+                    {**f, "id": f"{fid}-r", "claim_id": cid, "created_at": at + timedelta(days=3), "driver": None, "driver_id": None}
+                ]
+        out.append(order)
+    return out

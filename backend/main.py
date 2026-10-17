@@ -4,7 +4,7 @@ as pure functions, in domain/."""
 from fastapi import Depends, FastAPI
 
 from core import auth, config
-from routes import catalog, claims, conversations, customer, demo, dispatch, gcash, orders, packing, patterns, refunds, webhooks
+from routes import catalog, claims, conversations, customer, demo, dispatch, gcash, orders, packing, patterns, refunds, returns, webhooks
 
 app = FastAPI()
 
@@ -22,5 +22,5 @@ def me(user: dict = Depends(auth.current_user)):
 
 
 # FastAPI matches routes in the order they were added: these keep the order main.py had before it was split.
-for area in (conversations, demo, orders, customer, webhooks, packing, gcash, dispatch, claims, refunds, patterns, catalog):
+for area in (conversations, demo, orders, customer, webhooks, packing, gcash, dispatch, claims, refunds, returns, patterns, catalog):
     app.include_router(area.router)

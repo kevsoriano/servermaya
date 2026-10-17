@@ -207,6 +207,14 @@ def confirm_row(order: dict, line: int, by: str, reason: str, now: datetime) -> 
     return {"packing": {**packing, "rows": rows}}
 
 
+def details(order: dict, weight_g: int | None, seal_id: str) -> dict:
+    """The parcel's weight in grams and its seal ID, both optional, recorded before packing is marked complete."""
+    packing = require_ready(order)
+    if packing["completed"]:
+        raise Refused("Packing is already marked complete")
+    return {"packing": {**packing, "weight_g": weight_g, "seal_id": seal_id.strip() or None}}
+
+
 def status(row: dict) -> str:
     return "seller_confirmed" if row["manual"] else (row["auto_result"] or "not_checked")
 

@@ -32,11 +32,19 @@ SECTIONS = {
     "KV": "packing",
     "D": "delivery",
     "POD": "delivery",
+    "POP": "delivery",
+    "POPP": "delivery",
+    "PODP": "delivery",
+    "POPC": "delivery",
+    "PODC": "delivery",
     "R": "delivery",
+    "RET": "delivery",
+    "RP": "delivery",
 }
 
 TOOLS = """
-You start with the claim [C], any photos the customer sent with it [CP1, CP2, ...] and the check of each video they sent [CV1C, ...]. The order's records are not in the
+You start with the claim [C], any photos the customer sent with it [CP1, CP2, ...], the check of each video they sent [CV1C, ...]
+and the custody check [COC]. The order's records are not in the
 message: fetch them with the tools read_order, read_chat, read_packing and read_delivery. Call every tool whose records could
 support or contradict the claim; when unsure, call it. You can cite only IDs you were given or fetched; any other is dropped.
 read_past_decisions recalls how this shop decided similar claims from other customers [P1, ...]. Use it to suggest an outcome
@@ -82,7 +90,9 @@ def agent(llm: BaseLlm, records: dict[str, list], read: list[str], recall: Calla
         return fetch("packing")
 
     def read_delivery() -> dict:
-        """The shipment's status events [D1, ...], any courier proof of delivery [POD], and whether the customer confirmed receipt [R]."""
+        """The shipment's status events [D1, ...], the courier's pickup and drop-off proofs [POP], [POD] with the checks of their
+        photos [POPC], [PODC], whether the customer confirmed receipt [R], and any returned item as the seller inspected it [RET],
+        with its photos [RP1, ...]."""
         return fetch("delivery")
 
     def read_past_decisions() -> dict:

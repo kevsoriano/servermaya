@@ -2,13 +2,14 @@ import secrets
 from datetime import UTC, datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from core import auth, config, db
 from domain import delivery
 from domain import orders as rules
 from integrations import lalamove, maps
+from seed import catalog
 from services import deliveries
 
 router = APIRouter()
@@ -116,6 +117,30 @@ def centavos_of(text: str) -> int:
     return int(round(float(text) * 100))
 
 
+def lalamove_quotation(stops: list[dict], service: str, dropoff: tuple[float, float]) -> dict:
+    """A Lalamove quotation as kept on a shipment, for a delivery or a return. stops: pickup first, drop-off last."""
+    try:
+        q = lalamove.lalamove("POST", "/v3/quotations", {"data": {"serviceType": service, "language": "en_PH", "stops": stops}})
+    except lalamove.LalamoveNoAnswer:
+        raise HTTPException(502, "Lalamove did not answer. Try again.")
+    price, distance = q.get("priceBreakdown") or {}, q.get("distance") or {}
+    return {
+        "id": q["quotationId"],
+        "service": service,
+        "price": centavos_of(price.get("total", "0")),
+        "currency": price.get("currency", "PHP"),
+        "expires_at": lalamove.lalamove_time(q.get("expiresAt")),
+        "stop_ids": [s["stopId"] for s in q.get("stops", [])],
+        "dropoff": list(dropoff),
+        "distance_m": int(float(distance["value"])) if distance.get("unit") == "m" and distance.get("value") else None,
+        "livemode": "sandbox" not in config.LALAMOVE_URL,
+    }
+
+
+def stop(lat: float, lng: float, address: str) -> dict:
+    return {"coordinates": {"lat": str(lat), "lng": str(lng)}, "address": address}
+
+
 @router.post("/api/orders/{order_id}/dispatch/quote")
 def quote_delivery(order_id: str, body: QuoteIn, user: dict = Depends(auth.current_user)):
     """A Lalamove quotation for the seller to approve. Nothing is booked yet."""
@@ -128,25 +153,8 @@ def quote_delivery(order_id: str, body: QuoteIn, user: dict = Depends(auth.curre
         lat, lng = maps.pin(body.pin)
     except rules.Refused as e:
         raise HTTPException(409, str(e))
-    stops = [
-        {"coordinates": {"lat": str(pickup["lat"]), "lng": str(pickup["lng"])}, "address": pickup["address"]},
-        {"coordinates": {"lat": str(lat), "lng": str(lng)}, "address": order["draft"]["address"]["value"]},
-    ]
-    try:
-        q = lalamove.lalamove("POST", "/v3/quotations", {"data": {"serviceType": body.service, "language": "en_PH", "stops": stops}})
-    except lalamove.LalamoveNoAnswer:
-        raise HTTPException(502, "Lalamove did not answer. Try again.")
-    price = q.get("priceBreakdown") or {}
-    quotation = {
-        "id": q["quotationId"],
-        "service": body.service,
-        "price": centavos_of(price.get("total", "0")),
-        "currency": price.get("currency", "PHP"),
-        "expires_at": lalamove.lalamove_time(q.get("expiresAt")),
-        "stop_ids": [s["stopId"] for s in q.get("stops", [])],
-        "dropoff": [lat, lng],
-        "livemode": "sandbox" not in config.LALAMOVE_URL,
-    }
+    stops = [stop(pickup["lat"], pickup["lng"], pickup["address"]), stop(lat, lng, order["draft"]["address"]["value"])]
+    quotation = lalamove_quotation(stops, body.service, (lat, lng))
     now = datetime.now(UTC)
     current = order.get("fulfillment") or {}
     fid = current.get("id") if current.get("status") == "quoted" else secrets.token_hex(8)  # a new quote after a failed shipment is a new one
@@ -155,7 +163,7 @@ def quote_delivery(order_id: str, body: QuoteIn, user: dict = Depends(auth.curre
 
 class BookIn(BaseModel):
     # Sandbox only: how the simulated delivery ends. Ignored for a live booking.
-    sandbox_outcome: Literal["delivered", "failed", "cancelled"] = "delivered"
+    sandbox_outcome: Literal["delivered", "damaged", "failed", "cancelled"] = "delivered"
 
 
 @router.post("/api/orders/{order_id}/dispatch/book")
@@ -220,7 +228,7 @@ def refresh_delivery(order_id: str, user: dict = Depends(auth.current_user)):
         raise HTTPException(502, "Lalamove did not answer. Status unchanged.")
     raw = o.get("status")
     eid = f"lalamove:{f['provider_order_id']}:poll:{raw}"  # one event per status seen by polling
-    return db.change(ref, deliveries.lalamove_rule(f["provider_order_id"], raw, eid, datetime.now(UTC), o))
+    return db.change(ref, deliveries.lalamove_rule(f["provider_order_id"], raw, eid, datetime.now(UTC), o, proofs=True))
 
 
 class StartIn(BaseModel):
@@ -269,3 +277,45 @@ def cancel_delivery(order_id: str, body: rules.Cancel, user: dict = Depends(auth
             raise HTTPException(502, "Lalamove did not answer. The booking may still be active; try again.")
     now = datetime.now(UTC)
     return db.change(ref, lambda o: delivery.cancel(o, user["email"], body.reason, now))
+
+
+class DriverIn(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    plate: str = Field(default="", max_length=20)
+
+
+@router.post("/api/orders/{order_id}/dispatch/{fid}/driver")
+def name_driver(order_id: str, fid: str, body: DriverIn, user: dict = Depends(auth.current_user)):
+    """The seller names the rider: another courier's, one they arranged directly (such as a Favourite Driver booked in
+    Lalamove's own app), or a Lalamove booking that came without driver details. Kept as seller-reported."""
+    now = datetime.now(UTC)
+    return db.change(db.orders().document(order_id), lambda o: delivery.name_driver(o, fid, body.name, body.plate, user["email"], now))
+
+
+class EndReasonIn(BaseModel):
+    who: Literal["driver", "customer", "seller", "courier", "unknown"]
+    why: Literal["customer_unreachable", "wrong_pin", "refused", "driver_no_show", "damaged", "other"]
+    note: str = Field(default="", max_length=500)
+
+
+@router.post("/api/orders/{order_id}/dispatch/{fid}/end-reason")
+def end_reason(order_id: str, fid: str, body: EndReasonIn, user: dict = Depends(auth.current_user)):
+    """Why a shipment failed or was cancelled. Lalamove gives no reason, so the seller records one."""
+    now = datetime.now(UTC)
+    return db.change(db.orders().document(order_id), lambda o: delivery.end_reason(o, fid, body.who, body.why, body.note, user["email"], now))
+
+
+@router.get("/api/orders/{order_id}/shipments/{fid}/proof/{kind}")
+def proof_photo(order_id: str, fid: str, kind: Literal["pop", "pod"], user: dict = Depends(auth.current_user)):
+    """A courier's pickup or drop-off photo, as kept: a copy in the evidence bucket, or a demo sample."""
+    _, order = db.loaded(order_id)
+    found = delivery.shipments(order) + [r["shipment"] for r in order.get("returns", []) if r.get("shipment")]
+    image = (next((f for f in found if f["id"] == fid), None) or {}).get(kind, {}) or {}
+    image = image.get("image") or {}
+    if image.get("sample"):
+        data, kind_of = catalog.image(image["sample"]), "image/jpeg"
+    elif image.get("path"):
+        data, kind_of = db.bucket().blob(image["path"]).download_as_bytes(), image.get("content_type", "image/jpeg")
+    else:
+        raise HTTPException(404, "No photo kept")
+    return Response(data, media_type=kind_of, headers={"Cache-Control": "private, max-age=3600"})

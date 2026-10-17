@@ -13,6 +13,28 @@ type Finding = {
   withheld?: boolean
 }
 type Action = 'clarification' | 'refund' | 'partial_refund' | 'replacement' | 'redelivery' | 'escalation'
+type Cause = 'seller_error' | 'courier_transit' | 'customer' | 'unknown'
+/** The evidence chain from packing to return, read in code on every load. It suggests a cause; the seller decides. */
+type Custody = {
+  steps: { step: string; label: string; status: 'ok' | 'problem' | 'unclear' | 'missing' | 'noted'; note: string; evidence: string[] }[]
+  first_break: string | null
+  suggested_cause: Cause
+  reason: string
+  flags: string[]
+}
+export type Return = {
+  id: string
+  claim_id: string
+  status: 'requested' | 'shipping' | 'received' | 'inspected'
+  requested_at: string
+  sent: { courier: string; tracking: string | null; by: string; at: string } | null
+  received: { by: string; at: string } | null
+  photos: { id: string }[]
+  check: {
+    rows: { line: number; expected: { name: string; variant: string | null; quantity: number }; result: string; damage: string | null }[]
+  } | null
+  inspection: { result: string; condition: string; weight_g: number | null; seal_id: string | null; by: string; at: string } | null
+}
 export type Claim = {
   id: string
   type: string
@@ -44,7 +66,11 @@ export type Claim = {
     by: string
     at: string
     followed_ai: boolean
+    cause?: Cause
+    suggested_cause?: Cause
+    cause_history?: { from: Cause; to: Cause; by: string; at: string; note: string | null }[]
   } | null
+  custody?: Custody
   resolution: { how: string; note: string | null; by: string; at: string } | null
   escalation: { owner: string; next_action: string } | null
 }
@@ -69,6 +95,50 @@ const ACTIONS: Record<Action, string> = {
   redelivery: 'Deliver again',
   escalation: 'Escalate',
 }
+const CAUSES: Record<Cause, string> = {
+  courier_transit: 'Courier, in transit',
+  seller_error: 'Our error (packing or the item)',
+  customer: 'The customer',
+  unknown: 'Unknown',
+}
+const STEP_RESULT = { ok: 'pass', problem: 'fail', unclear: 'unreadable', missing: 'unreadable', noted: 'unreadable' }
+const STEP_STATUS = { ok: 'OK', problem: 'Problem', unclear: 'Unclear', missing: 'No evidence', noted: 'Noted' }
+const RETURN_RESULTS: Record<string, string> = {
+  same_item: 'The item we sent',
+  damaged_as_reported: 'Damaged as reported',
+  different_item: 'A different item',
+  unclear: 'Unclear',
+}
+
+/** Where in the chain the parcel first looked wrong. Missing evidence never counts against anyone. */
+function CustodyStrip({ custody }: { custody: Custody }) {
+  return (
+    <details className="custody" open={!!custody.first_break}>
+      <summary>
+        Custody check:{' '}
+        {custody.first_break
+          ? `first problem at ${custody.steps.find((s) => s.step === custody.first_break)?.label.toLowerCase()}`
+          : 'no problem found in the records'}
+        {' · '}suggests <strong>{CAUSES[custody.suggested_cause]}</strong>
+      </summary>
+      <ol>
+        {custody.steps.map((s) => (
+          <li key={s.step}>
+            <strong>{s.label}</strong> <span className={`result ${STEP_RESULT[s.status]}`}>{STEP_STATUS[s.status]}</span>{' '}
+            <small>{s.note}</small>
+          </li>
+        ))}
+      </ol>
+      <p>
+        <small>
+          {custody.reason} Decided in code from the records above. A missing photo or video is never held against the courier or the
+          customer. You record the cause.
+        </small>
+      </p>
+    </details>
+  )
+}
+
 const FINDING = { supported: 'Supported', conflicting: 'Conflicting', unverified: 'Unverified', insufficient_data: 'Insufficient data' }
 const REFUND: Record<string, string> = {
   submitting: 'Submitting to PayMongo',
@@ -153,6 +223,18 @@ function Review({ c, onDecide }: { c: Claim; onDecide: (a: Action, amount: numbe
 }
 
 function RefundPanel({ order, c, run }: { order: Order; c: Claim; run: (label: string, path: string, body?: object) => Promise<unknown> }) {
+  const back = order.returns?.find((r) => r.claim_id === c.id)
+  if (back && ['requested', 'shipping'].includes(back.status))
+    return (
+      <p>
+        Approved refund {peso(c.decision!.amount!)}. <strong>It waits for the returned item:</strong> mark the item received in the return
+        below, then refund.
+      </p>
+    )
+  return <RefundForm order={order} c={c} run={run} />
+}
+
+function RefundForm({ order, c, run }: { order: Order; c: Claim; run: (label: string, path: string, body?: object) => Promise<unknown> }) {
   const decided = c.decision!.amount!
   const mine = (order.refunds ?? []).filter((r) => r.claim_id === c.id)
   const held = mine.filter((r) => !['failed', 'api_refused', 'not_found'].includes(r.status)).reduce((s, r) => s + r.amount, 0)
@@ -238,10 +320,274 @@ function RefundPanel({ order, c, run }: { order: Order; c: Claim; run: (label: s
   )
 }
 
+function CauseLine({ c, run }: { c: Claim; run: (label: string, path: string, body?: object) => Promise<unknown> }) {
+  const d = c.decision!
+  const [changing, setChanging] = useState(false)
+  const [cause, setCause] = useState<Cause>(d.cause ?? 'unknown')
+  const [note, setNote] = useState('')
+  return (
+    <div>
+      <p>
+        Cause recorded: <strong>{CAUSES[d.cause ?? 'unknown']}</strong>
+        {d.suggested_cause && d.suggested_cause !== d.cause && (
+          <small> (the custody check suggested {CAUSES[d.suggested_cause].toLowerCase()})</small>
+        )}
+        {!!d.cause_history?.length && <small> · changed from {CAUSES[d.cause_history.at(-1)!.from].toLowerCase()}</small>}{' '}
+        {!changing && <button onClick={() => setChanging(true)}>Change cause</button>}
+      </p>
+      {changing && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            run('Saving…', '/cause', { cause, note }).then(() => setChanging(false))
+          }}
+        >
+          <label>
+            Cause
+            <select value={cause} onChange={(e) => setCause(e.target.value as Cause)}>
+              {Object.entries(CAUSES).map(([k, v]) => (
+                <option key={k} value={k}>
+                  {v}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Why it changed (optional)
+            <input maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} />
+          </label>
+          <button>Save cause</button>{' '}
+          <button type="button" onClick={() => setChanging(false)}>
+            Cancel
+          </button>
+        </form>
+      )}
+    </div>
+  )
+}
+
+/** The item comes back: asked for in the chat, sent back by the customer with a courier of their choice (the seller books
+ * nothing), received, then inspected. A refund on the claim waits until the item is received. */
+function ReturnPanel({
+  order,
+  c,
+  run,
+  write,
+}: {
+  order: Order
+  c: Claim
+  run: (label: string, path: string, body?: object | File) => Promise<unknown>
+  write: (t: string) => void
+}) {
+  const r = order.returns?.find((x) => x.claim_id === c.id)
+  const [courier, setCourier] = useState('')
+  const [tracking, setTracking] = useState('')
+  const [editing, setEditing] = useState(false)
+  const [inspection, setInspection] = useState({ result: 'same_item', condition: '', weight: '', seal: '' })
+  const packed = order.packing?.completed ? order.packing : null
+
+  // The message asks the customer to send it to the shop's address, from Settings (the demo shop's for the demo).
+  const ask = () =>
+    run('Saving…', '/return').then(() =>
+      load<{ name: string; address: string; phone: string } | null>('/settings/dispatch')
+        .then(
+          (shop) => shop,
+          () => null,
+        )
+        .then((shop) =>
+          write(
+            `Hi! Please send the ${order.draft.items.map((i) => i.name.toLowerCase()).join(' and ')} back to us in its box so we can check it` +
+              (shop ? `, to ${shop.name}, ${shop.address} (${shop.phone})` : '') +
+              `. Please use any courier you like and send us the courier's name and tracking number once it's on its way.`,
+          ),
+        ),
+    )
+
+  if (c.status === 'resolved' && !r) return null
+  if (!r)
+    return (
+      <p>
+        <button onClick={ask}>Ask for the item back</button>{' '}
+        <small>
+          {c.decision!.action.includes('refund') ? 'The refund then waits until you have the item. ' : ''}Writes a message for you to send
+          in the chat; the customer sends it back with a courier of their choice.
+        </small>
+      </p>
+    )
+
+  const path = `/returns/${r.id}`
+  const waiting = ['requested', 'shipping'].includes(r.status)
+  return (
+    <div className="packing">
+      <h4>Return · {r.status === 'requested' ? 'asked for' : r.status === 'shipping' ? 'sent back by the customer' : r.status}</h4>
+      {r.sent && !editing && (
+        <p>
+          The customer says they sent it by <strong>{r.sent.courier}</strong>
+          {r.sent.tracking && <>, tracking {r.sent.tracking}</>} <mark className="source customer_reported">Customer-reported</mark>{' '}
+          {waiting && (
+            <button onClick={() => (setCourier(r.sent!.courier), setTracking(r.sent!.tracking ?? ''), setEditing(true))}>Correct</button>
+          )}
+        </p>
+      )}
+      {waiting && (!r.sent || editing) && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            run('Saving…', `${path}/sent`, { courier, tracking }).then(() => setEditing(false))
+          }}
+        >
+          <label>
+            Courier the customer used
+            <input
+              required
+              maxLength={100}
+              placeholder="J&T, LBC, Lalamove…"
+              value={courier}
+              onChange={(e) => setCourier(e.target.value)}
+            />
+          </label>
+          <label>
+            Tracking number (optional)
+            <input maxLength={200} value={tracking} onChange={(e) => setTracking(e.target.value)} />
+          </label>
+          <button>Record what the customer sent</button>
+        </form>
+      )}
+      {waiting && (
+        <p>
+          <button className="primary" onClick={() => run('Saving…', `${path}/received`)}>
+            I have the item
+          </button>{' '}
+          <small>The customer saying it was sent is not enough: mark it when it is in your hands.</small>
+        </p>
+      )}
+      {r.received && (
+        <>
+          <p>
+            Received by {r.received.by}, {new Date(r.received.at).toLocaleString()}.
+          </p>
+          {r.photos.length > 0 && (
+            <div className="photos">
+              {r.photos.map((p, n) => (
+                <Photo
+                  key={p.id}
+                  path={`/orders/${order.id}${path}/photos/${p.id}`}
+                  alt={`Returned item photo ${n + 1}`}
+                  caption={`RP${n + 1}`}
+                />
+              ))}
+            </div>
+          )}
+          {r.photos.length < 8 && (
+            <label className="upload">
+              Add a photo of what came back
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => e.target.files?.[0] && run('Uploading…', `${path}/photos`, e.target.files[0])}
+              />
+            </label>
+          )}
+          {r.photos.length > 0 && (
+            <p>
+              <button onClick={() => run('Checking photos… about 15 seconds', `${path}/check`)}>
+                {r.check ? 'Check photos again' : 'Check the photos against the order'}
+              </button>
+            </p>
+          )}
+          {r.check && (
+            <ul>
+              {r.check.rows.map((row) => (
+                <li key={row.line}>
+                  {row.expected.quantity} × {row.expected.name}
+                  {row.expected.variant && ` (${row.expected.variant})`}:{' '}
+                  <span className={`result ${row.result === 'matched' ? 'pass' : row.result === 'conflict' ? 'fail' : 'unreadable'}`}>
+                    {row.result === 'matched' ? 'Matches the order' : row.result === 'conflict' ? 'Does not match' : 'Cannot tell'}
+                  </span>
+                  {row.damage && <small> · damage: {row.damage}</small>}
+                </li>
+              ))}
+            </ul>
+          )}
+          {r.inspection ? (
+            <p>
+              Inspected: <strong>{RETURN_RESULTS[r.inspection.result]}</strong>. {r.inspection.condition}
+              {r.inspection.weight_g && (
+                <>
+                  {' '}
+                  · {r.inspection.weight_g} g{packed?.weight_g && <> (packed at {packed.weight_g} g)</>}
+                </>
+              )}
+              {r.inspection.seal_id && (
+                <>
+                  {' '}
+                  · seal {r.inspection.seal_id}
+                  {packed?.seal_id && <> (packed with {packed.seal_id})</>}
+                </>
+              )}
+              . By {r.inspection.by}.
+            </p>
+          ) : (
+            r.photos.length > 0 && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  run('Saving…', `${path}/inspect`, {
+                    result: inspection.result,
+                    condition: inspection.condition,
+                    weight_g: inspection.weight ? Number(inspection.weight) : null,
+                    seal_id: inspection.seal,
+                  })
+                }}
+              >
+                <label>
+                  What came back
+                  <select value={inspection.result} onChange={(e) => setInspection({ ...inspection, result: e.target.value })}>
+                    {Object.entries(RETURN_RESULTS).map(([k, v]) => (
+                      <option key={k} value={k}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Its condition
+                  <input
+                    required
+                    maxLength={1000}
+                    value={inspection.condition}
+                    onChange={(e) => setInspection({ ...inspection, condition: e.target.value })}
+                  />
+                </label>
+                <label>
+                  Weight in grams (optional){packed?.weight_g && <small> · packed at {packed.weight_g} g</small>}
+                  <input
+                    inputMode="numeric"
+                    value={inspection.weight}
+                    onChange={(e) => setInspection({ ...inspection, weight: e.target.value.replace(/\D/g, '') })}
+                  />
+                </label>
+                <label>
+                  Seal ID (optional){packed?.seal_id && <small> · packed with {packed.seal_id}</small>}
+                  <input maxLength={60} value={inspection.seal} onChange={(e) => setInspection({ ...inspection, seal: e.target.value })} />
+                </label>
+                <button>Record inspection</button>{' '}
+                <small>
+                  A different item flags a possible swap after packing. It decides nothing by itself; update the cause if it changes.
+                </small>
+              </form>
+            )
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 function ClaimCard({ order, c, onChange, write }: { order: Order; c: Claim; onChange: (o: Order) => void; write: (t: string) => void }) {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
-  const [deciding, setDeciding] = useState<{ action: Action; amount: string; reason: string; reply: string }>()
+  const [deciding, setDeciding] = useState<{ action: Action; amount: string; reason: string; reply: string; cause: Cause }>()
   const [note, setNote] = useState('')
   const [escalating, setEscalating] = useState(false)
   const [owner, setOwner] = useState('')
@@ -250,7 +596,7 @@ function ClaimCard({ order, c, onChange, write }: { order: Order; c: Claim; onCh
   const run = (label: string, path: string, body?: object | File) => {
     setBusy(label)
     setError('')
-    const claimPath = path.startsWith('/refunds') ? path : `/claims/${c.id}${path}`
+    const claimPath = path.startsWith('/refunds') || path.startsWith('/returns') ? path : `/claims/${c.id}${path}`
     return load<Order>(`/orders/${order.id}${claimPath}`, {
       method: 'POST',
       ...(body instanceof File
@@ -261,7 +607,13 @@ function ClaimCard({ order, c, onChange, write }: { order: Order; c: Claim; onCh
       .finally(() => setBusy(''))
   }
   const decide = (action: Action, amount: number | null, reply: string) =>
-    setDeciding({ action, amount: amount ? (amount / 100).toFixed(2) : '', reason: '', reply })
+    setDeciding({
+      action,
+      amount: amount ? (amount / 100).toFixed(2) : '',
+      reason: '',
+      reply,
+      cause: c.custody?.suggested_cause ?? 'unknown',
+    })
   const open = c.status !== 'resolved'
   const act = c.decision?.action
 
@@ -310,6 +662,7 @@ function ClaimCard({ order, c, onChange, write }: { order: Order; c: Claim; onCh
         </label>
       )}
 
+      {c.custody && <CustodyStrip custody={c.custody} />}
       {c.review && <Review c={c} onDecide={decide} />}
       {open && !c.decision && (
         <p className="actions">
@@ -335,9 +688,13 @@ function ClaimCard({ order, c, onChange, write }: { order: Order; c: Claim; onCh
           onSubmit={(e) => {
             e.preventDefault()
             const amount = deciding.action === 'partial_refund' ? Math.round(parseFloat(deciding.amount) * 100) : null
-            run('Saving…', '/decide', { action: deciding.action, amount, reason: deciding.reason, reply: deciding.reply }).then(() =>
-              setDeciding(undefined),
-            )
+            run('Saving…', '/decide', {
+              action: deciding.action,
+              amount,
+              reason: deciding.reason,
+              reply: deciding.reply,
+              cause: deciding.cause,
+            }).then(() => setDeciding(undefined))
           }}
         >
           <label>
@@ -361,6 +718,17 @@ function ClaimCard({ order, c, onChange, write }: { order: Order; c: Claim; onCh
               />
             </label>
           )}
+          <label>
+            Where the problem started
+            {c.custody && <small> (the custody check suggests {CAUSES[c.custody.suggested_cause].toLowerCase()})</small>}
+            <select value={deciding.cause} onChange={(e) => setDeciding({ ...deciding, cause: e.target.value as Cause })}>
+              {Object.entries(CAUSES).map(([k, v]) => (
+                <option key={k} value={k}>
+                  {v}
+                </option>
+              ))}
+            </select>
+          </label>
           <label>
             Why (kept on record)
             <input required value={deciding.reason} onChange={(e) => setDeciding({ ...deciding, reason: e.target.value })} />
@@ -388,6 +756,10 @@ function ClaimCard({ order, c, onChange, write }: { order: Order; c: Claim; onCh
           {c.decision.followed_ai ? ' · same as the AI suggestion' : c.review ? ' · differs from the AI suggestion' : ''}.{' '}
           {c.decision.reply && <button onClick={() => write(c.decision!.reply!)}>Write the reply to the customer</button>}
         </p>
+      )}
+      {c.decision && <CauseLine c={c} run={run} />}
+      {c.decision && ['refund', 'partial_refund', 'replacement'].includes(c.decision.action) && (
+        <ReturnPanel order={order} c={c} run={run} write={write} />
       )}
       {open && (act === 'refund' || act === 'partial_refund') && <RefundPanel order={order} c={c} run={run} />}
       {open && (act === 'replacement' || act === 'redelivery') && !order.replacement && c.status === 'resolution_approved' && (

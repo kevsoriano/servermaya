@@ -100,9 +100,17 @@ async def lalamove_webhook(request: Request):
         return {"received": True}  # duplicate delivery of an event we already have
     o = (data or {}).get("order") or {}
     kind = event.get("eventType")
-    if o.get("orderId") and kind in ("ORDER_CREATED", "ORDER_STATUS_CHANGED", "DRIVER_ASSIGNED"):
+    # Proof events carry the order's stops; ORDER_REPLACED is kept as an event (a flag on the case), never as a status.
+    if o.get("orderId") and kind in (
+        "ORDER_CREATED",
+        "ORDER_STATUS_CHANGED",
+        "DRIVER_ASSIGNED",
+        "POP_STATUS_CHANGED",
+        "POD_STATUS_CHANGED",
+        "ORDER_REPLACED",
+    ):
         target = await run_in_threadpool(shipment_ref, o["orderId"], o.get("quotationId"))
-        raw_status = None if kind == "ORDER_CREATED" else (o.get("status") or kind)
+        raw_status = None if kind == "ORDER_CREATED" else "ORDER_REPLACED" if kind == "ORDER_REPLACED" else (o.get("status") or kind)
         if target:
             rule = deliveries.lalamove_rule(
                 o["orderId"], raw_status, f"lalamove:{event['eventId']}", lalamove.lalamove_time(data.get("updatedAt")), o

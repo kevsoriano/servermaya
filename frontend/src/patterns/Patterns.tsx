@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { load } from '../lib/firebase'
-import { CLAIM_TYPES as TYPES } from '../lib/format'
+import { CLAIM_TYPES as TYPES, peso } from '../lib/format'
 
 type Ratio = { numerator: number; denominator: number; rate: number | null; of: string }
 type Review = { status: string; reason?: string; by?: string; at?: string; was?: string }
@@ -36,6 +36,96 @@ const REVIEW: Record<string, string> = {
   dismissed: 'Dismissed',
 }
 const pct = (r: number | null) => (r == null ? 'n/a' : `${Math.round(r * 100)}%`)
+
+type Returns = {
+  days: number
+  delivered: number
+  samples: number
+  causes: Record<string, { count: number; rate: number | null; refunded: number; shipping: number; cost: number }>
+  by: Record<'courier' | 'vehicle' | 'product', Record<string, Record<string, number>>>
+}
+const CAUSES: Record<string, string> = {
+  courier_transit: 'Courier, in transit',
+  seller_error: 'Our error',
+  customer: 'The customer',
+  unknown: 'Unknown',
+}
+const ORDER = ['courier_transit', 'seller_error', 'customer', 'unknown']
+
+/** Claims that sent money or goods back, by the cause the seller recorded, with what they cost. */
+function ReturnsByCause({ r }: { r: Returns }) {
+  const causes = ORDER.filter((k) => r.causes[k])
+  const total = causes.reduce((n, k) => n + r.causes[k].count, 0)
+  return (
+    <div className="signal">
+      <p>
+        <strong>Returns by cause</strong> · {total} return(s) against {r.delivered} delivered shipment(s), last {r.days} days
+      </p>
+      {total === 0 ? (
+        <p>No refunds, replacements or redeliveries in this window.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Cause</th>
+              <th>Returns</th>
+              <th>Per delivered shipment</th>
+              <th>Refunded</th>
+              <th>Courier fees</th>
+              <th>Cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            {causes.map((k) => (
+              <tr key={k}>
+                <td>{CAUSES[k] ?? k}</td>
+                <td>{r.causes[k].count}</td>
+                <td>{pct(r.causes[k].rate)}</td>
+                <td>{peso(r.causes[k].refunded)}</td>
+                <td>{peso(r.causes[k].shipping)}</td>
+                <td>{peso(r.causes[k].cost)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {total > 0 && (
+        <details>
+          <summary>By courier, vehicle and product</summary>
+          {(['courier', 'vehicle', 'product'] as const).map((group) => (
+            <table key={group}>
+              <thead>
+                <tr>
+                  <th>{group[0].toUpperCase() + group.slice(1)}</th>
+                  {causes.map((k) => (
+                    <th key={k}>{CAUSES[k] ?? k}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(r.by[group]).map(([value, counts]) => (
+                  <tr key={value}>
+                    <td>{value}</td>
+                    {causes.map((k) => (
+                      <td key={k}>{counts[k] ?? 0}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ))}
+        </details>
+      )}
+      <p>
+        <small>
+          The cause is what you recorded on each claim; the custody check only suggests it. Cost is refunds made plus the courier fee of
+          replacement and return shipments.
+          {r.samples > 0 && ` Includes ${r.samples} sample orders with simulated riders, for the demo.`}
+        </small>
+      </p>
+    </div>
+  )
+}
 
 export function PatternCard({ card, compact, onReviewed }: { card: Card; compact?: boolean; onReviewed?: (r: Review) => void }) {
   const [status, setStatus] = useState('reviewing')
@@ -159,10 +249,12 @@ export default function Patterns() {
   const [state, setState] = useState('')
   const [result, setResult] = useState<{ days: number; cards: Card[] }>()
   const [error, setError] = useState('')
+  const [returns, setReturns] = useState<Returns>()
   const cards = result?.days === days ? result.cards : undefined
   const setCards = (c: Card[] | undefined) => c && setResult({ days, cards: c })
 
   useEffect(() => {
+    load<Returns>(`/patterns/returns?days=${days}`).then(setReturns, () => setReturns(undefined))
     load<Card[]>(`/patterns?days=${days}`).then(
       (c) => setResult({ days, cards: c }),
       (e) => setError(e.message),
@@ -213,6 +305,7 @@ export default function Patterns() {
           </label>
         </p>
         {error && <p role="alert">{error}</p>}
+        {returns?.days === days && <ReturnsByCause r={returns} />}
         {!cards && !error && <p>Loading…</p>}
         {cards && shown.length === 0 && <p>Nothing to look into for these filters.</p>}
         {shown.map((c) => (

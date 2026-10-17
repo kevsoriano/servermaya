@@ -567,3 +567,52 @@ def test_the_sellers_own_qr_is_saved_and_sent_after_the_gcash_instructions(monke
     (text, _), (image, files) = sent
     assert text["message"]["text"].startswith("To pay by GCash, send ₱500.00 to Ana Seller, 0917 111 2222")
     assert image["message"]["attachment"]["type"] == "image" and files["filedata"][1] == qr  # the very screenshot the seller saved
+
+
+def test_a_return_the_customer_sends_holds_the_refund_until_the_item_is_received(monkeypatch, seller):
+    from domain import delivery
+
+    report = pack.Report(
+        lines=[pack.Seen(line=1, visible=True, counts=[pack.Count(variant="blue", quantity=1)], damage="a crack", photos=[1], note="")],
+        suggestions=[],
+    )
+    gemini = type("G", (), {"models": type("M", (), {"generate_content": lambda self, **k: type("R", (), {"text": report.model_dump_json()})()})()})()
+    store, _ = fake_google(monkeypatch, gemini)
+    past = datetime.now(UTC) - timedelta(days=1)
+    shipped = {
+        "id": "f1",
+        "courier": "lalamove",
+        "status": "delivered",
+        "quotation": {"livemode": False},
+        "events": [delivery.event("e1", "provider", "COMPLETED", "delivered", past, past)],
+        "driver_id": None,
+        "pod": delivery.proof("DELIVERED", past, "demo", {"sample": "courier-dropoff-crushed"}),
+    }
+    put_order(store, fulfillment=shipped, manual_payment=None)
+    post = lambda path, **k: client.post(f"/api/orders/o1{path}", headers=SELLER, **k)
+
+    cid = post("/claims", json={"type": "damage", "narrative": "Box crushed, mug cracked"}).json()["claims"][0]["id"]
+    custody = client.get("/api/orders/o1", headers=SELLER).json()["claims"][0]["custody"]
+    assert [s["step"] for s in custody["steps"]][:4] == ["packed", "picked_up", "in_transit", "dropped_off"]
+    assert client.get("/api/orders/o1/shipments/f1/proof/pod", headers=SELLER).content == catalog.image("courier-dropoff-crushed")
+    assert post(f"/claims/{cid}/return").status_code == 409  # nothing approved yet
+    decided = post(f"/claims/{cid}/decide", json={"action": "refund", "reason": "Crushed in transit", "cause": "courier_transit"}).json()
+    assert decided["claims"][0]["decision"]["cause"] == "courier_transit"
+    rid = post(f"/claims/{cid}/return").json()["returns"][0]["id"]
+
+    r = post(f"/returns/{rid}/sent", json={"courier": "J&T", "tracking": "JT123"}).json()["returns"][0]
+    assert (r["status"], r["sent"]["source"]) == ("shipping", "customer_reported")
+    manual = {"claim_id": cid, "amount": 50000, "method": "outside_paymongo", "reference": "GC1"}
+    assert "waits for the returned item" in post("/refunds/manual", json=manual).json()["detail"]
+    post(f"/returns/{rid}/received")
+    assert post("/refunds/manual", json=manual).json()["refunds"][-1]["status"] == "seller_reported"
+
+    photo = catalog.image("damage-mug-blue")
+    upload = client.post(f"/api/orders/o1/returns/{rid}/photos", content=photo, headers={**SELLER, "Content-Type": "image/jpeg"})
+    assert upload.json()["returns"][0]["photos"]
+    check = post(f"/returns/{rid}/check").json()["returns"][0]["check"]
+    assert check["rows"][0]["result"] == "conflict"  # code decides: the item is damaged
+    inspection = {"result": "damaged_as_reported", "condition": "Cracked, the same blue mug", "weight_g": 320}
+    done = post(f"/returns/{rid}/inspect", json=inspection).json()
+    assert done["returns"][0]["status"] == "inspected"
+    assert done["claims"][0]["custody"]["steps"][-1]["status"] == "ok"

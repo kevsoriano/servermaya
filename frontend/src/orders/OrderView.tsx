@@ -6,7 +6,7 @@ import Signals from '../conversations/Signals'
 import Packing, { type PackingState } from './Packing'
 import GcashPayment, { type ManualPayment } from './GcashPayment'
 import Dispatch, { type Fulfillment } from './Dispatch'
-import Claims, { type Claim, type Refund } from './Claims'
+import Claims, { type Claim, type Refund, type Return } from './Claims'
 
 /** from_order: not in this chat, copied from the customer's earlier confirmed order with that id. */
 type Sourced = { value: string | null; sources: string[]; from_order?: string }
@@ -57,6 +57,7 @@ export type Order = {
   replacement?: { claim_id: string; action: string; fulfillment_id: string | null } | null
   claims?: Claim[]
   refunds?: Refund[]
+  returns?: Return[]
   refundable: number
   messages: { id: string; text: string; from_page: boolean; created_time: string; from_name?: string }[]
   draft: {

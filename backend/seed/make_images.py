@@ -31,6 +31,9 @@ REFERENCES = {
     "candle-lavender": "Catalog photo: one soy candle in a clear glass jar, pale lavender-purple wax, plain kraft paper label with no writing, "
     "plain light grey background.",
     "pouch-linen": "Catalog photo: one small natural beige linen drawstring pouch, front view, plain light grey background.",
+    # The courier's photos for the Lalamove sandbox demo, which has no real rider: the same sealed box at pickup and drop-off.
+    "courier-pickup-intact": "Phone photo a delivery rider takes at pickup: one closed brown cardboard box, about shoebox size, sealed "
+    "with clear packing tape, on a shop counter. The box is undamaged. No label, no writing on the box.",
 }
 
 # name: (reference it is made from, what to show)
@@ -44,6 +47,16 @@ FROM_REFERENCE = {
         "mug-blue",
         "The same mug as in this image, on a kitchen table next to opened packaging, with a clear crack running down its side "
         "and a small chip missing from the rim.",
+    ),
+    "courier-dropoff-intact": (
+        "courier-pickup-intact",
+        "The same sealed box as in this image, now on the floor in front of a closed apartment door, photographed by the "
+        "delivery rider. The box is undamaged and the tape is unbroken.",
+    ),
+    "courier-dropoff-crushed": (
+        "courier-pickup-intact",
+        "The same box as in this image, now on the floor in front of a closed apartment door, photographed by the delivery "
+        "rider. One top corner is crushed in and the side is visibly dented; the tape is still on.",
     ),
     "packing-tote-cream": (
         "tote-cream",

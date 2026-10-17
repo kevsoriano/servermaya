@@ -7,7 +7,7 @@ from google.cloud import firestore, storage
 
 from core import config
 from domain import catalog as shop
-from domain import delivery, refunds
+from domain import custody, delivery, refunds
 from domain import orders as rules
 from domain import packing as pack
 
@@ -57,8 +57,11 @@ def present(snap) -> dict:
         dispatch_blocked = None
     except rules.Refused as e:
         dispatch_blocked = str(e)
+    # Each claim's custody check, recomputed from the records on every read: code, never stored as a finding.
+    claims = [{**c, "custody": custody.check(order, c)} for c in order.get("claims", [])]
     return {
         **order,
+        **({"claims": claims} if claims else {}),
         "id": snap.id,
         "missing": rules.missing(order["draft"]),
         "packing": packing,

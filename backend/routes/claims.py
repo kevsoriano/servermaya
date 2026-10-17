@@ -9,11 +9,12 @@ from google.genai import types
 from pydantic import BaseModel, Field
 
 from core import auth, config, db
-from domain import claim_agent
+from domain import claim_agent, custody
 from domain import claims as cases
 from domain import orders as rules
 from domain import packing as pack
 from integrations import memory
+from seed import catalog
 from services import chats, customer_link
 
 router = APIRouter()
@@ -140,22 +141,29 @@ def review_claim(order_id: str, cid: str, user: dict = Depends(auth.current_user
         except HTTPException:
             pass  # the snapshot taken when the order was drafted
     blocks, images = cases.evidence(order, messages, c)
-    shown = []
+    shown, shas = [], {label: photo.get("sha256") for label, photo in images}
     for label, photo in images:
         if photo["content_type"].startswith("video/"):  # Gemini reads a video from the bucket, so its size never limits the request
             shown.append((label, types.Part.from_uri(file_uri=f"gs://{config.EVIDENCE_BUCKET}/{photo['path']}", mime_type=photo["content_type"])))
             continue
         try:
-            data = db.bucket().blob(photo["path"]).download_as_bytes()
+            data = catalog.image(photo["sample"]) if photo.get("sample") else db.bucket().blob(photo["path"]).download_as_bytes()
+            shas[label] = shas.get(label) or hashlib.sha256(data).hexdigest()
             shown.append((label, types.Part.from_bytes(data=data, mime_type=photo["content_type"])))
         except Exception:
             pass  # an image that cannot be loaded cannot be cited
-    videos = sum(label[:2] in ("CV", "KV") for label, _ in shown)
-    # the review (its tool turns count as one, like any other read) and one check per video; a kept check still counts
-    auth.ai_budget(user, 1 + videos)
+    checked = sum(label[:2] in ("CV", "KV") or label in cases.PROOFS for label, _ in shown)
+    # the review (its tool turns count as one, like any other read) and one check per video or courier photo; a kept check still counts
+    auth.ai_budget(user, 1 + checked)
     expect = (rules.code(order_id), order["draft"]["recipient_name"]["value"])
-    shas = {label: photo.get("sha256") for label, photo in images}
-    blocks += cases.video_records(db.clients()[0], config.GEMINI_MODEL, shown, expect, shas, db.store_doc().collection("videoChecks"))
+    video_checks: dict = {}
+    blocks += cases.video_records(db.clients()[0], config.GEMINI_MODEL, shown, expect, shas, db.store_doc().collection("videoChecks"), video_checks)
+    proofs = [(label, part, shas.get(label)) for label, part in shown if label in cases.PROOFS]
+    texts, parcel_checks = cases.parcel_records(db.clients()[0], config.GEMINI_MODEL, proofs, expect, db.store_doc().collection("photoChecks"))
+    blocks += texts
+    # The custody check reads the checks just made, so the review can cite where the chain first broke.
+    current = {**order, **cases.with_checks(order, cid, video_checks, parcel_checks)}
+    blocks.append(custody.record(custody.check(current, cases.claim(current, cid))))
     now = datetime.now(UTC)
     try:
         review = claim_agent.review(
@@ -172,7 +180,7 @@ def review_claim(order_id: str, cid: str, user: dict = Depends(auth.current_user
     cited = {e for f in review["findings"] for e in f["evidence"]} | set(review["recommendation"]["evidence"])
     texts = {b[1 : b.index("]")]: b for b in blocks} | {label: f"[{label}] {claim_agent.kind(p)}" for label, p in shown} | review.pop("recalled")
     review["sources"] = {k: v for k, v in texts.items() if k in cited}
-    return db.change(ref, lambda o: cases.record_review(o, cid, review, user["email"], now))
+    return db.change(ref, lambda o: cases.record_review(o, cid, review, user["email"], now, video_checks, parcel_checks))
 
 
 @router.post("/api/orders/{order_id}/claims/{cid}/wait")
@@ -184,10 +192,23 @@ def wait_claim(order_id: str, cid: str, user: dict = Depends(auth.current_user))
 @router.post("/api/orders/{order_id}/claims/{cid}/decide")
 def decide_claim(order_id: str, cid: str, body: cases.DecisionIn, tasks: BackgroundTasks, user: dict = Depends(auth.current_user)):
     now = datetime.now(UTC)
-    order = db.change(db.orders().document(order_id), lambda o: cases.decide(o, cid, body, user["email"], now))
+    suggested = lambda o: custody.check(o, cases.claim(o, cid))["suggested_cause"]
+    order = db.change(db.orders().document(order_id), lambda o: cases.decide(o, cid, body, user["email"], now, suggested(o)))
     # After the response: the shop's memory of how it decides claims, for later reviews (see claims.decision_fact).
     tasks.add_task(memory.remember, order, cases.decision_fact(order, cases.claim(order, cid)))
     return order
+
+
+class CauseIn(BaseModel):
+    cause: cases.Cause
+    note: str = Field(default="", max_length=500)
+
+
+@router.post("/api/orders/{order_id}/claims/{cid}/cause")
+def claim_cause(order_id: str, cid: str, body: CauseIn, user: dict = Depends(auth.current_user)):
+    """The seller changes the recorded cause, for example after the returned item is inspected. The earlier cause stays on record."""
+    now = datetime.now(UTC)
+    return db.change(db.orders().document(order_id), lambda o: cases.set_cause(o, cid, body.cause, body.note, user["email"], now))
 
 
 class EscalateIn(BaseModel):

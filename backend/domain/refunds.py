@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from .claims import claim, paid_amount, put
 from .orders import Refused
+from .returns import holds_refund
 
 HOLDING = ("submitting", "uncertain", "pending", "succeeded", "seller_reported", "awaiting_reconcile")
 STALLED = timedelta(minutes=2)
@@ -45,6 +46,8 @@ def approved(order: dict, cid: str, amount: int) -> dict:
     decision = c["decision"] or {}
     if decision.get("action") not in ("refund", "partial_refund") or c["status"] not in ("resolution_approved", "executing"):
         raise Refused("Approve a refund on this report first")
+    if held := holds_refund(order, cid):  # the item was asked back and has not arrived
+        raise Refused(held)
     already = sum(r["amount"] for r in order.get("refunds", []) if r.get("claim_id") == cid and r["status"] in HOLDING)
     if amount > decision["amount"] - already:
         raise Refused(f"The approved refund leaves ₱{(decision['amount'] - already) / 100:,.2f} to refund")

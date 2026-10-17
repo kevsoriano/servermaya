@@ -19,6 +19,9 @@ export type PackingState = {
   suggestions: string[]
   checked_at?: string
   completed: { by: string; at: string } | null
+  /** Optional, to compare with an item that comes back: the parcel's weight and the ID on a numbered seal. */
+  weight_g?: number | null
+  seal_id?: string | null
 }
 
 const RESULT = {
@@ -83,6 +86,8 @@ export default function Packing({ order, onChange }: { order: Order; onChange: (
   const [error, setError] = useState('')
   const [inspecting, setInspecting] = useState<number>()
   const [reason, setReason] = useState('')
+  const [weight, setWeight] = useState(order.packing?.weight_g ? String(order.packing.weight_g) : '')
+  const [seal, setSeal] = useState(order.packing?.seal_id ?? '')
 
   if (!packing)
     return order.status === 'confirmed' && order.packing_blocked ? <p className="packing">Packing: {order.packing_blocked}.</p> : null
@@ -129,6 +134,8 @@ export default function Packing({ order, onChange }: { order: Order; onChange: (
       {done && (
         <p role="status">
           Marked packed by {packing.completed!.by} on {new Date(packing.completed!.at).toLocaleString()}.
+          {packing.weight_g && <> Weighed {packing.weight_g} g.</>}
+          {packing.seal_id && <> Seal {packing.seal_id}.</>}
         </p>
       )}
       {!done && (
@@ -260,6 +267,30 @@ export default function Packing({ order, onChange }: { order: Order; onChange: (
       {stale && !done && <p>New photos were added since the last check.</p>}
       {error && <p role="alert">{error}</p>}
       {busy && <p role="status">{busy}</p>}
+      {!done && (
+        <form
+          className="actions"
+          onSubmit={(e) => {
+            e.preventDefault()
+            run('Saving…', '/details', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ weight_g: weight ? Math.round(Number(weight)) : null, seal_id: seal }),
+            })
+          }}
+        >
+          <label>
+            Parcel weight in grams (optional)
+            <input inputMode="numeric" value={weight} onChange={(e) => setWeight(e.target.value.replace(/\D/g, ''))} />
+          </label>
+          <label>
+            Seal ID (optional)
+            <input maxLength={60} value={seal} onChange={(e) => setSeal(e.target.value)} />
+          </label>
+          <button disabled={!!busy || (String(packing.weight_g ?? '') === weight && (packing.seal_id ?? '') === seal)}>Save</button>
+          <small> If an item comes back, its weight and seal are compared with these.</small>
+        </form>
+      )}
       {!done && (
         <p className="actions">
           <button
