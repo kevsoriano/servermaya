@@ -486,19 +486,6 @@ mark.status.confirmed {
   max-width: 80rem;
 }
 
-.profile {
-  display: grid;
-  justify-items: center;
-  gap: 0.5rem;
-  font-size: 1.1rem;
-}
-
-.profile .avatar {
-  width: 4rem;
-  height: 4rem;
-  font-size: 1.3rem;
-}
-
 /* Order */
 .order h2 {
   font-size: 1.1rem;
@@ -1125,9 +1112,72 @@ mark.source.provider {
   flex-basis: 100%;
 }
 
-/* An explanation kept in a tooltip, beside a heading. */
+/* An explanation kept in a tooltip, beside a heading. It opens at once on hover or keyboard focus, below the heading and as
+   wide as it, so it stays inside the narrow pane wherever the icon wraps. */
 .info {
   cursor: help;
   font-weight: normal;
   color: var(--muted);
+}
+
+h3:has(> .info) {
+  position: relative;
+}
+
+.info::after {
+  content: attr(data-tip);
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  margin-top: 0.35rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--surface);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  text-align: left;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.2);
+}
+
+.info:hover::after,
+.info:focus-visible::after {
+  display: block;
+}
+
+/* About this customer: the avatar beside their name, and the AI brief below both, at the top of the right pane. */
+.brief {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 0.75rem;
+  row-gap: 0.5rem;
+  align-items: center;
+}
+
+.brief .avatar {
+  width: 2.25rem;
+  height: 2.25rem;
+  font-size: 0.85rem;
+}
+
+.brief h3 {
+  margin: 0;
+  font-size: 1.2rem;
+  line-height: 1.2;
+}
+
+.brief .brief-text {
+  grid-column: 1 / -1;
+}
+
+.brief p {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--muted);
+  text-align: justify;
+  hyphens: auto;
 }

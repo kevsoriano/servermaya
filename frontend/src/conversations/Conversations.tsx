@@ -457,16 +457,15 @@ export default function Conversations({ replyHours, onOpenOrder }: { replyHours:
       </section>
       {openId && messages && (
         <aside className="pane side">
-          <div className="profile">
-            <Avatar name={name} src={customer?.picture} />
-            <strong>{name}</strong>
-          </div>
-          {orders && (
-            <CustomerBrief
-              conversationId={openId}
-              changed={`${messages.at(-1)?.id}|${orders.map((o) => `${o.id}:${o.status}:${o.version}:${o.receipt?.status ?? ''}:${(o.claims ?? []).map((c) => c.status).join()}`).join()}`}
-            />
-          )}
+          <CustomerBrief
+            conversationId={openId}
+            name={name}
+            avatar={<Avatar name={name} src={customer?.picture} />}
+            changed={
+              orders &&
+              `${messages.at(-1)?.id}|${orders.map((o) => `${o.id}:${o.status}:${o.version}:${o.receipt?.status ?? ''}:${(o.claims ?? []).map((c) => c.status).join()}`).join()}`
+            }
+          />
           {messages.length > 0 && <Signals conversationId={openId} messages={messages} latest={messages.at(-1)?.id} />}
           {order && <VerifyPanel order={order} onChange={orderChanged} onSent={reloadMessages} onOpen={onOpenOrder} chat={messages} />}
           {messages.length > 0 && orders && (!orders.length || customerWroteSince || drafting) && (

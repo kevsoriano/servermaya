@@ -85,7 +85,7 @@ export default function Signals({ conversationId, messages, latest }: Props) {
     <section className="signals" aria-label="Checks before shipping">
       <h3>
         Checks before shipping{signals && ` (${open.length} to verify)`}{' '}
-        <span className="info" tabIndex={0} role="img" aria-label={ABOUT} title={ABOUT}>
+        <span className="info" tabIndex={0} role="img" aria-label={ABOUT} data-tip={ABOUT}>
           ⓘ
         </span>
       </h3>
