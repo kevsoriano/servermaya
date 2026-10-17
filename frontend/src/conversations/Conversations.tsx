@@ -278,7 +278,7 @@ export default function Conversations({ replyHours }: { replyHours: number }) {
   // Demo chats are not polled, so refresh the list after anything that changes its snippet or order badges.
   const refreshDemoList = () => openId?.startsWith('demo_') && load<Conversation[]>('/conversations').then(setList, () => {})
 
-  // The customer page usually runs in another tab, so coming back here is when a demo chat's badges may have changed.
+  // PayMongo's checkout usually runs in another tab, so coming back here is when a demo chat's badges may have changed.
   useEffect(() => {
     if (!openId?.startsWith('demo_')) return
     const onFocus = () => load<Conversation[]>('/conversations').then(setList, () => {})

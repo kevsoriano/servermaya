@@ -20,7 +20,6 @@ async function json<T>(r: Response): Promise<T> {
 export const load = <T>(path: string, init?: RequestInit) => api(path, init).then((r) => json<T>(r))
 
 /** JSON from a customer-link route, which needs no sign-in. */
-export const loadPublic = <T>(path: string, init?: RequestInit) => fetch(`/api/public${path}`, init).then((r) => json<T>(r))
 
 /** fetch() against the backend with the signed-in user's ID token attached. */
 export async function api(path: string, init: RequestInit = {}) {

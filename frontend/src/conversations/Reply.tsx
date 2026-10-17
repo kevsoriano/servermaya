@@ -130,10 +130,7 @@ export default function Reply({ conversationId, text, setText, orderId, until, o
               'Not sent to Messenger.'
             )
           ) : closed ? (
-            <>
-              Messenger's window to reply after the customer's last message has closed{until && <> ({until.toLocaleString()})</>}. The
-              customer page link still works.
-            </>
+            <>Messenger's window to reply after the customer's last message has closed{until && <> ({until.toLocaleString()})</>}.</>
           ) : (
             until && <>You can reply until {until.toLocaleString()}.</>
           )}

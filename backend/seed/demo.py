@@ -82,7 +82,7 @@ RETURNING = (
         (False, "Hi! Do you have the scented soy candle in vanilla?"),
         (True, "Yes! The vanilla soy candle is ₱220."),
         (False, "I'll get 1. Leah Cruz, 0919 555 0177, 7 Sampaguita St., Brgy. Malamig, Mandaluyong City"),
-        (True, "Thanks, Leah! I'll send you the order link."),
+        (True, "Thanks, Leah! I'll send the order here so you can confirm it."),
         (False, "Sorry, something came up and I'll be out of town this week. Can I cancel?"),
         (True, "No problem, I've cancelled it. Message us anytime!"),
     ],
@@ -103,7 +103,7 @@ REPEAT = (
         (False, "Hi! Do you still have the cream tote bag?"),
         (True, "Yes! The cream tote is ₱250."),
         (False, "1 please. Rico Bautista, 0917 555 0166, 23 Kalayaan Ave., Brgy. Pinyahan, Quezon City"),
-        (True, "Noted, Rico! 1 cream tote, ₱250. I'll send you the order link."),
+        (True, "Noted, Rico! 1 cream tote, ₱250. I'll send the order here so you can confirm it."),
         (False, "Already paid via GCash ₱250, here's my receipt. Please ship today, I really need it tomorrow!"),
         (True, "Thanks! I'll check our GCash history first, then pack it."),
         (True, "Found your payment in our GCash. Your tote is on the way!"),
@@ -117,8 +117,8 @@ REPEAT = (
 )
 
 
-# A delivered order with a damage report waiting: the mug arrived cracked, and she sent a photo in the chat and through her
-# order link. The report is open and not yet reviewed, so the claim review is one click away. Her chat after delivery belongs
+# A delivered order with a damage report waiting: the mug arrived cracked, and she sent a photo and her unboxing video in the
+# chat. The report is open and not yet reviewed, so the claim review is one click away. Her chat after delivery belongs
 # to this order: it was not yet received.
 DAMAGED = (
     "Bea Villanueva",
@@ -126,7 +126,7 @@ DAMAGED = (
         (False, "Hi! Can I order 1 blue ceramic mug?"),
         (True, "Sure! The blue mug is ₱180."),
         (False, "Bea Villanueva, 0917 555 0188, 31 Molave St., Brgy. Bagong Ilog, Pasig City"),
-        (True, "Thanks, Bea! I'll send you the order link."),
+        (True, "Thanks, Bea! I'll send the order here so you can confirm it."),
         (False, "Sent ₱180 via GCash."),
         (True, "Found it in our GCash, thank you! Shipping today."),
     ],
@@ -146,7 +146,7 @@ TO_PACK = (
         (False, "Hi! I'd like 1 cream tote bag please."),
         (True, "Sure! The cream tote is ₱250."),
         (False, "Nico Ramos, 0918 555 0133, 9 Acacia Lane, Brgy. Kapitolyo, Pasig City"),
-        (True, "Thanks, Nico! I'll send you the order link."),
+        (True, "Thanks, Nico! I'll send the order here so you can confirm it."),
         (False, "Paid via GCash ₱250 just now."),
         (True, "Found it in our GCash, thank you! Packing your tote now."),
     ],
@@ -250,8 +250,8 @@ def seed(owner: str, now: datetime) -> list[dict]:
 
 
 def confirmed(owner: str, conversation_id: str, messages: list[dict], item: extraction.Item, details: list[str], source: int, at: datetime) -> dict:
-    """An order drafted from these messages through the same rules as a real one, sent, and confirmed through the customer's
-    link 30 s later. details: name, phone and address, all cited to message number `source` (from 1, as the draft step cites)."""
+    """An order drafted from these messages through the same rules as a real one, sent, and confirmed by the customer's tap
+    in the chat 30 s later. details: name, phone and address, all cited to message number `source` (from 1, as the draft step cites)."""
     text = lambda value, *sources: extraction.Text(value=value, sources=list(sources))
     name, phone, address = details
     raw = extraction.Extraction(  # what the draft step would read from these messages; finalize checks every citation and price
@@ -276,13 +276,13 @@ def confirmed(owner: str, conversation_id: str, messages: list[dict], item: extr
         "created_at": at,
     }
     order |= rules.send(order, secrets.token_urlsafe(32))
-    order |= rules.confirm(order, "customer", "confirmation_link", at + timedelta(seconds=30))
+    order |= rules.confirm(order, "customer", "chat", at + timedelta(seconds=30))
     return order
 
 
 def returning(owner: str, conversation_id: str, now: datetime) -> tuple[dict, dict]:
     """The returning customer's chat, and her earlier order, built through the same rules as a real one: drafted, confirmed
-    by her through the link, then cancelled by the seller when she asked."""
+    by her in the chat, then cancelled by the seller when she asked."""
     name, earlier, later = RETURNING
     old = thread(name, earlier, owner, now - timedelta(days=3))
     new = thread(name, later, owner, now - timedelta(hours=2 * len(SEED)))
@@ -307,8 +307,8 @@ def returning(owner: str, conversation_id: str, now: datetime) -> tuple[dict, di
 def repeat(
     owner: str, conversation_id: str, order_id: str, now: datetime, receipt: dict, photo: dict, pay_to: dict, reference: str
 ) -> tuple[dict, dict]:
-    """The repeat customer's chat and his first order, ten days ago, through the same rules as a real one: confirmed by his
-    link, a GCash payment the seller found in their own history, packed with the line checked by hand, sent by a courier the
+    """The repeat customer's chat and his first order, ten days ago, through the same rules as a real one: confirmed by him in
+    the chat, a GCash payment the seller found in their own history, packed with the line checked by hand, sent by a courier the
     seller reports, and received. receipt: his screenshot as a chat attachment. photo: the stored packing photo."""
     name, earlier, later = REPEAT
     old = thread(name, earlier, owner, now - timedelta(days=10))
@@ -332,7 +332,7 @@ def repeat(
     order |= delivery.start(order, f"f_{order_id}", "other", SHOP, at(6) - timedelta(seconds=20), tracking="Shop rider")
     order |= delivery.step(order, "picked_up", "seller_reported", SHOP, at(6))
     order |= delivery.step(order, "delivered", "seller_reported", SHOP, at(7) - timedelta(seconds=30))
-    order |= delivery.acknowledge(order, "customer_link", at(7))
+    order |= delivery.acknowledge(order, "customer_chat", at(7))
     return chat, order
 
 
@@ -348,7 +348,7 @@ def damaged(
     pay_to: dict,
     reference: str,
 ) -> tuple[dict, dict]:
-    """Her chat and order, two days ago: confirmed by her link, a GCash payment the seller found in their own history, packed
+    """Her chat and order, two days ago: confirmed by her in the chat, a GCash payment the seller found in their own history, packed
     with the mug checked by hand and filmed, sent by a courier the seller reports and delivered. Today she says in the chat it
     arrived cracked, with a photo and her unboxing video, and the seller opens a claim from those messages.
     packed: the stored packing photo and packing video. sent: her photo and video as chat attachments. claim_media: the same
@@ -392,7 +392,7 @@ def damaged(
 
 
 def to_pack(owner: str, conversation_id: str, now: datetime, photo: dict, pay_to: dict, reference: str) -> tuple[dict, dict]:
-    """His chat and order, today: confirmed by his link and paid by GCash, found by the seller, with one shaky packing photo."""
+    """His chat and order, today: confirmed by him in the chat and paid by GCash, found by the seller, with one shaky packing photo."""
     name, lines = TO_PACK
     chat = thread(name, lines, owner, now - timedelta(hours=2 * len(SEED) + 6))
     at = lambda n: datetime.fromisoformat(chat["messages"][n]["created_time"])

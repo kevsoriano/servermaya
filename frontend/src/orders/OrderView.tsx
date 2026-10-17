@@ -114,10 +114,9 @@ export default function OrderView({
   const [form, setForm] = useState<Form>()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [copied, setCopied] = useState<'link'>()
   const [message, setMessage] = useState('')
 
-  // The customer confirms and pays on their own page, usually in another tab, so reload the order on coming back.
+  // The customer pays on PayMongo's page, usually in another tab, so reload the order on coming back.
   useEffect(() => {
     const onFocus = () => load<Order>(`/orders/${order.id}`).then(onChange, () => {})
     window.addEventListener('focus', onFocus)
@@ -127,7 +126,6 @@ export default function OrderView({
   const { draft, messages } = order
   const confirmation = order.status === 'confirmed' ? order.confirmations.at(-1) : undefined
   const earlier = order.confirmations.filter((c) => c !== confirmation)
-  const link = order.confirm_token && `${location.origin}/c/${order.confirm_token}`
   const { payment } = order
   const paymentClaim = draft.claims.find((c) => c.kind === 'payment')
 
@@ -138,7 +136,6 @@ export default function OrderView({
       .then((o) => {
         onChange(o)
         setForm(undefined)
-        setCopied(undefined)
         if (sends) onSent?.()
       })
       .catch((e) => setError(e.message))
@@ -408,14 +405,7 @@ export default function OrderView({
           {(order.status === 'confirmed' || payment) && (
             <div className={payment?.status === 'verified' ? undefined : 'claim'}>
               <h3>Payment {payment?.livemode === false && <mark>TEST</mark>}</h3>
-              {!payment && (
-                <p>
-                  Not requested yet.{' '}
-                  {fromChat(order)
-                    ? 'Send the PayMongo link in the chat, or ask for direct GCash below.'
-                    : 'The customer pays from the link below.'}
-                </p>
-              )}
+              {!payment && <p>Not requested yet. Send the PayMongo link in the chat, or ask for direct GCash below.</p>}
               {fromChat(order) && order.status === 'confirmed' && (!payment || payment.status === 'expired') && (
                 <p>
                   <button className="primary" disabled={busy} onClick={() => call('/payment-link', { method: 'POST' }, true)}>
@@ -424,7 +414,7 @@ export default function OrderView({
                 </p>
               )}
               {payment?.status === 'pending' && <p>Waiting for payment of {peso(payment.amount)}. Nothing has been received.</p>}
-              {payment?.status === 'expired' && <p>The payment request expired unpaid. The customer can start again from the link.</p>}
+              {payment?.status === 'expired' && <p>The payment request expired unpaid. Send a new payment link in the chat.</p>}
               {payment?.status === 'verified' && (
                 <p>
                   <strong>Verified by PayMongo:</strong> {peso(payment.paid_amount ?? null)} received ({payment.payment_id}).
@@ -468,62 +458,20 @@ export default function OrderView({
           <Packing order={order} onChange={onChange} />
           <Dispatch order={order} onChange={onChange} onSent={onSent} chat={chat} />
           <Claims order={order} onChange={onChange} write={setMessage} chat={chat} />
-          {link && fromChat(order) && (
-            <details>
-              <summary>Customer page, if the chat can't be used</summary>
-              <p>
-                <small>
-                  For when Messenger's 24-hour reply window has closed: the same order summary, payment, delivery status and problem report,
-                  on a page of its own.
-                </small>
-                <br />
-                <input readOnly value={link} onFocus={(e) => e.target.select()} aria-label="Customer page link" />{' '}
-                <button onClick={() => navigator.clipboard.writeText(link).then(() => setCopied('link'))}>
-                  {copied === 'link' ? 'Copied' : 'Copy'}
-                </button>
-              </p>
-            </details>
-          )}
-          {link && !fromChat(order) && (
-            <p>
-              {order.status === 'confirmed' ? 'Customer link (order summary and payment):' : 'Send this link to the customer:'}
-              <br />
-              <input readOnly value={link} onFocus={(e) => e.target.select()} aria-label="Confirmation link" />{' '}
-              <button onClick={() => navigator.clipboard.writeText(link).then(() => setCopied('link'))}>
-                {copied === 'link' ? 'Copied' : 'Copy'}
-              </button>{' '}
-              <button
-                onClick={() =>
-                  setMessage(
-                    order.status === 'confirmed'
-                      ? `Thank you for confirming! You can pay ${peso(draft.total)} with QR Ph here: ${link}`
-                      : `Hi! Here is your order summary. Please check it and tap the button to confirm: ${link}`,
-                  )
-                }
-              >
-                Write link to customer
-              </button>
-            </p>
-          )}
           {fromChat(order) && message && (
             <Reply conversationId={order.source.conversation_id} orderId={order.id} text={message} setText={setMessage} onSent={onSent} />
           )}
           <p className="actions">
             <button onClick={() => setForm(toForm(draft))}>Edit</button>
-            {order.status === 'draft' &&
-              (fromChat(order) ? (
-                <button
-                  className="primary"
-                  disabled={busy || order.missing.length > 0}
-                  onClick={() => call('/ask-confirmation', { method: 'POST' }, true)}
-                >
-                  Send for confirmation in chat
-                </button>
-              ) : (
-                <button disabled={busy || order.missing.length > 0} onClick={() => call('/send-confirmation', { method: 'POST' })}>
-                  Create confirmation link
-                </button>
-              ))}
+            {order.status === 'draft' && fromChat(order) && (
+              <button
+                className="primary"
+                disabled={busy || order.missing.length > 0}
+                onClick={() => call('/ask-confirmation', { method: 'POST' }, true)}
+              >
+                Send for confirmation in chat
+              </button>
+            )}
             {order.status !== 'confirmed' && (
               <button
                 disabled={busy || order.missing.length > 0}
