@@ -17,10 +17,12 @@ type Props = {
   asCustomer?: boolean
   /** Demo chats only: this chat's order has a GCash request waiting, so sample receipts can be sent. */
   gcashWaiting?: boolean
+  /** PayMongo verified the payment: no receipt to send, so the sample GCash receipts are not offered. */
+  paid?: boolean
 }
 
 /** Sends one message as the Page. Nothing is sent without the seller pressing Send. In a demo chat the message is only stored. */
-export default function Reply({ conversationId, text, setText, orderId, until, onSent, asCustomer, gcashWaiting }: Props) {
+export default function Reply({ conversationId, text, setText, orderId, until, onSent, asCustomer, gcashWaiting, paid }: Props) {
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
   const [image, setImage] = useState<File>()
@@ -94,7 +96,11 @@ export default function Reply({ conversationId, text, setText, orderId, until, o
         disabled={closed}
       />
       {asCustomer &&
-        (gcashWaiting ? (
+        (paid ? (
+          <p className="samples">
+            <small>Paid through PayMongo and verified by its webhook: there is no GCash receipt to send.</small>
+          </p>
+        ) : gcashWaiting ? (
           <p className="samples">
             <small>Sample GCash receipt:</small>
             <button type="button" disabled={busy} onClick={() => sample('matching')}>

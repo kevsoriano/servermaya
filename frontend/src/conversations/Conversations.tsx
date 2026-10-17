@@ -470,6 +470,7 @@ export default function Conversations({ replyHours }: { replyHours: number }) {
               setText={setAsCustomer}
               asCustomer
               gcashWaiting={order?.manual_payment?.status === 'requested' || order?.manual_payment?.status === 'claimed'}
+              paid={order?.payment?.status === 'verified'}
               onSent={reloadMessages}
             />
             <Reply conversationId={openId} text={reply} setText={setReply} onSent={reloadMessages} />
