@@ -243,10 +243,15 @@ def conversation_signals(conversation_id: str, user: dict = Depends(auth.current
     else:
         if messages:
             auth.ai_budget(user)
-        try:
-            found = risk.detect(db.clients()[0], config.GEMINI_MODEL, messages) if messages else []
-        except Exception:
-            raise HTTPException(502, "Could not analyse this conversation")
+        found = None
+        for attempt in range(2):  # one quiet retry, as for the brief: a Vertex call occasionally fails
+            try:
+                found = risk.detect(db.clients()[0], config.GEMINI_MODEL, messages) if messages else []
+                break
+            except Exception as e:
+                log.warning("checks attempt %d failed: %r", attempt + 1, e)
+        if found is None:
+            raise HTTPException(502, "Could not read this conversation right now.")
         # merge keeps the seller's reviews across re-analysis
         ref.set({"signals": found, "latest_message_id": latest, "model": config.GEMINI_MODEL, "analysed_at": firestore.SERVER_TIMESTAMP}, merge=True)
     chat = [o for _, o in db.chat_orders(conversation_id)]

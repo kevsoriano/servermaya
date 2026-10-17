@@ -42,6 +42,7 @@ export default function Signals({ conversationId, messages, latest }: Props) {
   const [reviewing, setReviewing] = useState<string>()
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
+  const [tries, setTries] = useState(0) // Try again: checks that could not be read are never kept, so asking again retries
 
   useEffect(() => {
     let live = true
@@ -52,7 +53,7 @@ export default function Signals({ conversationId, messages, latest }: Props) {
     return () => {
       live = false
     }
-  }, [conversationId, latest])
+  }, [conversationId, latest, tries])
 
   const isOpen = (s: Signal) => !s.resolved && !s.reviewed && !s.earlier
   const current = signals?.filter((s) => !s.earlier)
@@ -89,7 +90,11 @@ export default function Signals({ conversationId, messages, latest }: Props) {
           ⓘ
         </span>
       </h3>
-      {error && <p role="alert">{error}</p>}
+      {error && (
+        <p role="alert">
+          {error} <button onClick={() => (setError(''), setTries((n) => n + 1))}>Try again</button>
+        </p>
+      )}
       {!signals && !error && <p>Reading the conversation…</p>}
       {found && (
         <ul className="checks">
