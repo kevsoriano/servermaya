@@ -18,6 +18,7 @@ from helpers import client, fake_google, fake_token, ready_order
 from integrations import lalamove, memory, messenger, paymongo
 from routes import dispatch
 from seed import catalog, demo
+from services import chats
 
 SELLER = {"Authorization": "Bearer x"}
 asked = []
@@ -205,6 +206,75 @@ def test_packing_delivery_claims_refunds_and_replacement(monkeypatch, seller):
     assert [f["claim_id"] for f in saved(store)["fulfillment_history"]] == [None]  # the first shipment stays on record
 
 
+def test_chat_confirm_payment_link_received_and_claim_from_chat(monkeypatch, seller):
+    store, _ = fake_google(monkeypatch)
+    put_order(store, status="draft", confirmations=[], payment=None, packing=None, source={"type": "messenger", "conversation_id": "t_1"})
+    monkeypatch.setattr(config, "PAGE_ID", "99")
+    now = datetime.now(UTC)
+    say = lambda mid, text, page=False, **k: {"id": mid, "text": text, "from_page": page, "created_time": now.isoformat(), "attachments": [], **k}
+    chat = [say("m1", "2 mugs please")]
+    sent = []
+    monkeypatch.setattr(messenger, "fetch_messages", lambda cid: chat)
+    monkeypatch.setattr(
+        messenger,
+        "graph",
+        lambda path, send=None, **k: (
+            {"participants": {"data": [{"id": "99"}, {"id": "psid7"}]}} if "fields" in k else sent.append(send) or {"message_id": "mid"}
+        ),
+    )
+    post = lambda path, **k: client.post(f"/api/orders/o1{path}", headers=SELLER, **k)
+    get = lambda: client.get("/api/orders/o1", headers=SELLER).json()
+
+    # The summary goes out with a Confirm button naming the order and version; only a tap with exactly that text confirms.
+    assert post("/ask-confirmation").json()["status"] == "awaiting_confirmation"
+    message = sent[-1]["message"]
+    assert "Total: ₱500.00" in message["text"] and message["quick_replies"][0]["title"] == "Confirm #o1 v1"
+    chat += [say("m2", "Confirm #o1 v0"), say("m3", "Confirm #o1 v1", page=True)]  # wrong version; the Page's own echo
+    assert get()["status"] == "awaiting_confirmation"
+    chat.append(say("m4", "Confirm #o1 v1"))
+    order = client.get("/api/conversations/t_1/orders", headers=SELLER).json()[0]
+    assert order["status"] == "confirmed" and order["confirmations"][-1] | {"at": None} == {
+        "version": 1,
+        "kind": "customer",
+        "by": "chat",
+        "message_id": "m4",
+        "at": None,
+    }
+
+    # The payment link goes in the chat; PayMongo sends the customer to a page that marks nothing paid.
+    def fake_paymongo(method, path, attributes=None):
+        assert attributes["success_url"].endswith("/paid?returned=1")
+        return {"id": "cs_1", "attributes": {"checkout_url": "https://pay/1", "livemode": False}}
+
+    monkeypatch.setattr(paymongo, "paymongo", fake_paymongo)
+    assert post("/payment-link").json()["payment"]["status"] == "pending"
+    assert sent[-1]["message"] == {"text": "Thank you for confirming! Pay ₱500.00 with QR Ph here: https://pay/1"}
+
+    # Received: only once it is on its way, and only a tap after the ask.
+    assert post("/ask-received").status_code == 409
+    saved(store)["fulfillment"] = {"id": "f1", "status": "picked_up", "courier": "simulator", "events": []}
+    chat.append(say("m5", "Received #o1"))  # before the ask: does not count
+    asked_at = post("/ask-received").json()["asked"]["received"]["at"]
+    assert sent[-1]["message"]["quick_replies"][0]["title"] == "Received #o1"
+    chat[-1]["created_time"] = (datetime.fromisoformat(asked_at) - timedelta(minutes=5)).isoformat()
+    assert get().get("receipt") is None
+    chat.append(say("m6", "Received #o1"))
+    assert get()["receipt"]["source"] == "customer_chat"
+
+    # A complaint in the chat: the seller picks the messages, and the claim takes the customer's words and photo.
+    photo = catalog.image("damage-mug-blue")
+    resp = type("R", (), {"content": photo, "headers": {"content-type": "image/jpeg"}, "raise_for_status": lambda self: None})()
+    monkeypatch.setattr(chats.requests, "get", lambda url, timeout: resp)
+    image = {"kind": "image", "url": "https://scontent.xx.fbcdn.net/c.jpg", "mime_type": "image/jpeg", "name": None, "preview_url": None}
+    chat += [say("m7", "One mug arrived cracked", attachments=[image]), say("m8", "So sorry!", page=True)]
+    chat.append(say("m9", "", attachments=[{**image, "url": "https://evil.example/x.jpg"}]))
+    assert post("/claims/from-chat", json={"type": "damage", "message_ids": ["m9"]}).status_code == 422  # not Meta's CDN
+    assert post("/claims/from-chat", json={"type": "damage", "message_ids": ["m8"]}).status_code == 422  # the seller's own message
+    claim = post("/claims/from-chat", json={"type": "damage", "message_ids": ["m7", "m8"]}).json()["claims"][0]
+    assert (claim["source"], claim["narrative"], claim["message_ids"]) == ("customer_chat", "One mug arrived cracked", ["m7"])
+    assert [p["source"] for p in claim["photos"]] == ["customer_chat"]
+
+
 def test_lalamove_quote_book_cancel_release_refresh_and_webhook(monkeypatch, seller):
     store, _ = fake_google(monkeypatch)
     put_order(store)
@@ -302,11 +372,30 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     packing = client.post(f"/api/orders/{nico['id']}/packing/check", headers=SELLER).json()["packing"]
     assert packing["rows"][0]["auto_result"] == "insufficient_visibility" and packing["suggestions"][0].startswith("Photo 1 is too blurry")
 
+    # Bea's claim was opened from her chat messages: her words and her photo.
+    assert (bea["claims"][0]["source"], len(bea["claims"][0]["message_ids"])) == ("customer_chat", 2)
+
+    # Ana, in the demo: the seller's summary carries the Confirm button, and tapping it as the customer confirms at once.
+    ana = chats["Ana Reyes"]["id"]
+    order = ready_order(status="draft", confirmations=[], payment=None, packing=None, source={"type": "demo", "conversation_id": ana, "owner": "u1"})
+    store.collection("stores").document(config.STORE).collection("orders").document("ana1").set(order)
+    assert client.post("/api/orders/ana1/ask-confirmation", headers=SELLER).json()["status"] == "awaiting_confirmation"
+    last = client.get(f"/api/conversations/{ana}", headers=SELLER).json()[-1]
+    assert last["from_page"] and last["quick_replies"] == ["Confirm #ana1 v1"]
+    client.post(f"/api/conversations/{ana}/customer", json={"text": "Confirm #ana1 v1"}, headers=SELLER)
+    assert client.get("/api/orders/ana1", headers=SELLER).json()["confirmations"][-1]["by"] == "chat"
+    # A photo she sends in the demo chat becomes the claim's photo, read from our storage.
+    photo = catalog.image("damage-mug-blue")
+    client.post(f"/api/conversations/{ana}/customer/image", content=photo, headers={**SELLER, "Content-Type": "image/jpeg"})
+    mid = client.get(f"/api/conversations/{ana}", headers=SELLER).json()[-1]["id"]
+    claim = client.post("/api/orders/ana1/claims/from-chat", json={"type": "damage", "message_ids": [mid]}, headers=SELLER).json()["claims"][0]
+    assert claim["narrative"] == "Sent photos only, no text." and claim["photos"][0]["sha256"] == hashlib.sha256(photo).hexdigest()
+
     # Their payments are in the sample GCash history; a reset deletes all four orders and seeds them again.
     history = client.get("/api/demo/sample-statement", headers=SELLER)
     assert history.status_code == 200 and history.headers["content-type"] == "application/pdf"
     assert len(store.docs[f"stores/{config.STORE}/demoUsers/u1"]["samples"]) == 3
-    assert client.post("/api/demo/reset", headers=SELLER).json() == {"deleted_chats": 8, "deleted_orders": 4}
+    assert client.post("/api/demo/reset", headers=SELLER).json() == {"deleted_chats": 8, "deleted_orders": 5}
     assert len(client.get("/api/orders", headers=SELLER).json()) == 4 and len(client.get("/api/conversations", headers=SELLER).json()) == 8
 
 

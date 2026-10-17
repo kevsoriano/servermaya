@@ -31,7 +31,7 @@ SEED = [
                 False,
                 "Great, I'll take 2. Ana Reyes, 0917 555 0142, 12 Mabini St., Brgy. San Antonio, Makati City. Please leave it with the guard if I'm out.",
             ),
-            (True, "Noted! 2 blue mugs, ₱360 total. I'll send you the order link so you can confirm."),
+            (True, "Noted! 2 blue mugs, ₱360 total. I'll send the order here so you can confirm it."),
         ],
     ),
     (
@@ -130,8 +130,8 @@ DAMAGED = (
     ],
     [
         (False, "Hi, the mug arrived today but it's cracked 😞 Here's a photo."),
-        (True, "So sorry, Bea! Please send a report through your order link so we can sort it out."),
-        (False, "Done, I sent the report with the photo."),
+        (False, "There's a crack down the side and a chip out of the rim."),
+        (True, "So sorry, Bea! I've opened a report and will check our packing records."),
     ],
 )
 
@@ -156,8 +156,10 @@ TO_PACK = (
 HINTS = {
     "Ana Reyes": {
         "short": "The whole flow, from draft order to delivery",
-        "steps": "A clean order: no checks should appear. Press + Create draft order, create the confirmation link and confirm it as "
-        "the customer, pay with PayMongo's Simulate payment, then check the packing photos and ship.",
+        "steps": "A clean order: no checks should appear. Press + Create draft order, then Send for confirmation. As the customer, "
+        "tap Confirm under the summary in the chat. Press Send payment link, open the link in the chat and pay with PayMongo's "
+        "Simulate payment, then check the packing photos, ship, and ask her to tap Received. Report a problem as her in the chat, "
+        "with a photo, and open a claim from those messages.",
     },
     "Mark Dizon": {
         "short": "Says he paid before any payment details were shared",
@@ -187,7 +189,8 @@ HINTS = {
     },
     "Bea Villanueva": {
         "short": "AI claim review with the shop's memory",
-        "steps": "Open her order and press Review with AI on the damage claim. The agent reads the order's records and the shop's "
+        "steps": "She reported the crack in the chat with a photo, and the claim was opened from those messages. Open her order "
+        "and press Review with AI. The agent reads the order's records and the shop's "
         "past decisions from Memory Bank, and cites each one. Approve an outcome to add it to the shop's memory.",
     },
     "Nico Ramos": {
@@ -221,7 +224,8 @@ def new_id() -> str:
     return "demo_" + secrets.token_hex(6)
 
 
-def message(from_page: bool, name: str, text: str, at: datetime, attachments: list[dict] | None = None) -> dict:
+def message(from_page: bool, name: str, text: str, at: datetime, attachments: list[dict] | None = None, button: str | None = None) -> dict:
+    """button: a quick reply under the seller's message, as Messenger shows it. Tapping it sends its text as the customer."""
     return {
         "id": "dm_" + secrets.token_hex(8),
         "text": text,
@@ -229,7 +233,7 @@ def message(from_page: bool, name: str, text: str, at: datetime, attachments: li
         "from_name": SHOP if from_page else name,
         "created_time": at.isoformat(),
         "attachments": attachments or [],
-    }
+    } | ({"quick_replies": [button]} if button else {})
 
 
 def thread(name: str, lines: list[tuple[bool, str]], owner: str, end: datetime) -> dict:
@@ -342,8 +346,8 @@ def damaged(
     reference: str,
 ) -> tuple[dict, dict]:
     """Her chat and order, two days ago: confirmed by her link, a GCash payment the seller found in their own history, packed
-    with the mug checked by hand, sent by a courier the seller reports and delivered. Today she reports it cracked, with a
-    photo. packed: the stored packing photo. sent: her damage photo as a chat attachment. claim_photo: the same photo as
+    with the mug checked by hand, sent by a courier the seller reports and delivered. Today she says in the chat it arrived
+    cracked, with a photo, and the seller opens a claim from those messages. packed: the stored packing photo. sent: her damage photo as a chat attachment. claim_photo: the same photo as
     stored with the report."""
     name, earlier, later = DAMAGED
     old = thread(name, earlier, owner, now - timedelta(days=2))
@@ -366,9 +370,18 @@ def damaged(
     order |= delivery.start(order, f"f_{order_id}", "other", SHOP, at(5) + timedelta(seconds=10), tracking="Shop rider")
     order |= delivery.step(order, "picked_up", "seller_reported", SHOP, at(5) + timedelta(hours=1))
     order |= delivery.step(order, "delivered", "seller_reported", SHOP, at(6) - timedelta(minutes=30))
-    narrative = "The mug arrived cracked: a crack down the side and a chip out of the rim."
+    # Opened by the seller from her two messages, as Open claim from the chat does: her words, her photo.
+    said = new["messages"][:2]
+    narrative = "\n".join(m["text"] for m in said)
     order |= cases.open_claim(
-        order, claim_id, cases.ClaimIn(type="damage", narrative=narrative), "customer_link", "customer", at(8) - timedelta(seconds=60), [claim_photo]
+        order,
+        claim_id,
+        cases.ClaimIn(type="damage", narrative=narrative),
+        "customer_chat",
+        SHOP,
+        at(8) - timedelta(seconds=30),
+        [claim_photo],
+        [m["id"] for m in said],
     )
     return chat, order
 

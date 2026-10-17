@@ -20,7 +20,16 @@ type Conversation = {
   /** Seeded demo chats: what to try in this one, as a line for the demo guide and steps for the open chat. */
   hint?: { short: string; steps: string } | null
 }
-type Message = { id: string; text: string; from_page: boolean; from_name: string; created_time: string; attachments: Attachment[] }
+type Message = {
+  id: string
+  text: string
+  from_page: boolean
+  from_name: string
+  created_time: string
+  attachments: Attachment[]
+  /** Demo chats: the quick-reply button under the seller's message, as Messenger shows it. */
+  quick_replies?: string[]
+}
 type Attachment = { kind: 'image' | 'video' | 'audio' | 'file'; name: string | null; url: string; preview_url: string | null }
 
 // Links come from Meta and expire, so an old thread may show broken media until it is reloaded.
@@ -51,6 +60,19 @@ function replyUntil(messages: Message[]) {
 }
 
 const HOUR = 3600 * 1000
+
+/** Links in a message open in a new tab, such as the payment link the seller sent. */
+function linked(text: string) {
+  return text.split(/(https:\/\/\S+)/).map((part, n) =>
+    n % 2 ? (
+      <a key={n} href={part} target="_blank" rel="noreferrer">
+        {part}
+      </a>
+    ) : (
+      part
+    ),
+  )
+}
 
 /** Demo chats live in this app only, so judges can try every step without Messenger. */
 function DemoTools({ onDone }: { onDone: (id?: string) => void }) {
@@ -219,6 +241,15 @@ export default function Conversations() {
 
   // Mark the open thread read when it loads and again whenever the customer sends something new while it is open.
   const lastFromCustomer = messages?.findLast((m) => !m.from_page)?.id
+
+  // Something new from the customer may be a tap on Confirm or Received, which the backend applies when the orders load.
+  useEffect(() => {
+    if (!openId || !lastFromCustomer) return
+    load<Order[]>(`/conversations/${openId}/orders`).then(
+      (l) => (setOrders(l), setOrder((o) => l.find((x) => x.id === o?.id) ?? l.find((x) => !done(x)) ?? l[0])),
+      () => {},
+    )
+  }, [openId, lastFromCustomer])
   useEffect(() => {
     if (!openId || !lastFromCustomer) return
     load(`/conversations/${openId}/seen`, { method: 'POST' }).then(
@@ -258,6 +289,19 @@ export default function Conversations() {
   const reloadMessages = () => {
     load<Message[]>(`/conversations/${openId}`).then(setMessages, (e) => setError(e.message))
     refreshDemoList()
+  }
+
+  // Demo: tapping a quick reply sends its text as the customer, as Messenger does.
+  const [tapping, setTapping] = useState(false)
+  const tap = (text: string) => {
+    setTapping(true)
+    load(`/conversations/${openId}/customer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    })
+      .then(reloadMessages, (e) => setError(e.message))
+      .finally(() => setTapping(false))
   }
 
   const orderChanged = (o: Order) => {
@@ -301,7 +345,15 @@ export default function Conversations() {
   const openOrder = orders?.find((o) => !done(o))
   // A new order reads only the messages after the last one any order was drafted from, so offer it once the customer wrote since.
   const lastDrafted = orders?.[0]?.messages.at(-1)?.created_time
-  const customerWroteSince = !!messages?.some((m) => !m.from_page && (!lastDrafted || Date.parse(m.created_time) > Date.parse(lastDrafted)))
+  // Taps on an order's Confirm or Received button answer that order; they are not the start of a new one.
+  const taps = new Set(orders?.flatMap((o) => [o.asked?.confirm?.text, o.asked?.received?.text]))
+  const customerWroteSince = !!messages?.some(
+    (m) => !m.from_page && !taps.has(m.text.trim()) && (!lastDrafted || Date.parse(m.created_time) > Date.parse(lastDrafted)),
+  )
+  // The chat as far as the selected order goes: a newer order's messages are about that one.
+  const newer = orders && order && orders[orders.findIndex((o) => o.id === order.id) - 1]
+  const cutoff = Date.parse(newer?.messages[0]?.created_time ?? '')
+  const orderChat = messages?.filter((m) => !(Date.parse(m.created_time) >= cutoff))
   const customer = thread?.customer
   const name = customer?.name ?? 'Unknown'
 
@@ -383,15 +435,29 @@ export default function Conversations() {
         {/* column-reverse keeps the scroll pinned to the newest message without JS */}
         <div className="scroll">
           <ol className="messages">
-            {messages?.map((m) => (
+            {messages?.map((m, k) => (
               <li key={m.id} className={m.from_page ? 'page' : 'customer'}>
                 <small>
                   {m.from_name} · {new Date(m.created_time).toLocaleString()}
                 </small>
-                {m.text && <p>{m.text}</p>}
+                {m.text && <p>{linked(m.text)}</p>}
                 {m.attachments.map((a, n) => (
                   <Media key={n} a={a} onOpen={() => setViewing({ a, m })} />
                 ))}
+                {/* Like Messenger, a quick reply is offered only until the next message. */}
+                {k === messages.length - 1 &&
+                  m.quick_replies?.map((q) => (
+                    <button
+                      key={q}
+                      type="button"
+                      className="quick-reply"
+                      disabled={tapping}
+                      onClick={() => tap(q)}
+                      title="Tap as the customer"
+                    >
+                      {q}
+                    </button>
+                  ))}
               </li>
             ))}
           </ol>
@@ -452,7 +518,7 @@ export default function Conversations() {
               </button>
             </div>
           )}
-          {order && <OrderView order={order} onChange={orderChanged} checks={false} />}
+          {order && <OrderView order={order} onChange={orderChanged} checks={false} chat={orderChat} onSent={reloadMessages} />}
           {messages.length > 0 && <Signals conversationId={openId} messages={messages} latest={messages.at(-1)?.id} />}
         </aside>
       )}

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { load } from '../lib/firebase'
 import { CLAIM_TYPES as TYPES, peso } from '../lib/format'
-import type { Order } from './OrderView'
+import type { ChatMessage, Order } from './OrderView'
 import { Photo } from './Packing'
 import { PatternCard, type Card } from '../patterns/Patterns'
 
@@ -17,7 +17,8 @@ export type Claim = {
   id: string
   type: string
   narrative: string
-  source: 'customer_link' | 'seller'
+  source: 'customer_link' | 'customer_chat' | 'seller'
+  message_ids?: string[]
   created_by: string
   created_at: string
   status: 'open' | 'awaiting_evidence' | 'under_review' | 'resolution_approved' | 'executing' | 'resolved' | 'escalated'
@@ -266,7 +267,12 @@ function ClaimCard({ order, c, onChange, write }: { order: Order; c: Claim; onCh
     <div className={`claim ${open ? '' : 'done'}`}>
       <p>
         <strong>{TYPES[c.type]}</strong> · {c.status.replace(/_/g, ' ')} · from{' '}
-        {c.source === 'customer_link' ? 'the customer (order link)' : c.created_by}, {new Date(c.created_at).toLocaleString()}
+        {c.source === 'customer_link'
+          ? 'the customer (order link)'
+          : c.source === 'customer_chat'
+            ? `the customer's chat messages, opened by ${c.created_by}`
+            : c.created_by}
+        , {new Date(c.created_at).toLocaleString()}
       </p>
       <blockquote>{c.narrative}</blockquote>
       {c.photos.length > 0 && (
@@ -428,11 +434,23 @@ function ClaimCard({ order, c, onChange, write }: { order: Order; c: Claim; onCh
   )
 }
 
-/** Claims on this order. Each review cites the order's records; the seller decides and carries out every outcome. */
-export default function Claims({ order, onChange, write }: { order: Order; onChange: (o: Order) => void; write: (t: string) => void }) {
+/** Claims on this order. Each review cites the order's records; the seller decides and carries out every outcome.
+ * chat: the live thread, so a complaint made there can become a claim in the customer's own words and photos. */
+export default function Claims({
+  order,
+  onChange,
+  write,
+  chat,
+}: {
+  order: Order
+  onChange: (o: Order) => void
+  write: (t: string) => void
+  chat?: ChatMessage[]
+}) {
   const [adding, setAdding] = useState(false)
   const [type, setType] = useState('damage')
   const [narrative, setNarrative] = useState('')
+  const [picked, setPicked] = useState<string[]>([])
   const [error, setError] = useState('')
   const [cards, setCards] = useState<Card[]>([])
   const claims = order.claims ?? []
@@ -444,15 +462,28 @@ export default function Claims({ order, onChange, write }: { order: Order; onCha
 
   if (order.status !== 'confirmed' && order.status !== 'cancelled') return null
 
+  // The customer's messages since the order was drafted, leaving out taps on Confirm or Received.
+  const taps = new Set([order.asked?.confirm?.text, order.asked?.received?.text])
+  const drafted = Date.parse(order.messages.at(-1)?.created_time ?? '')
+  const theirs = (chat ?? []).filter((m) => !m.from_page && Date.parse(m.created_time) > drafted && !taps.has(m.text.trim()))
+  // Written since it was sent (and since they said they received it) and not yet in a claim: maybe a problem to report.
+  const sentAt = Date.parse([order.fulfillment, ...(order.fulfillment_history ?? [])].find(Boolean)?.events[0]?.at ?? '')
+  const after = Math.max(sentAt, Date.parse(order.receipt?.at ?? '') || 0)
+  const inClaims = new Set(claims.flatMap((c) => c.message_ids ?? []))
+  const since = theirs.filter((m) => Date.parse(m.created_time) > after && !inClaims.has(m.id))
+
+  const startAdding = () => (setAdding(true), setPicked(since.map((m) => m.id)))
+
   const add = (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
-    load<Order>(`/orders/${order.id}/claims`, {
+    const [path, body] = picked.length ? ['/claims/from-chat', { type, message_ids: picked }] : ['/claims', { type, narrative }]
+    load<Order>(`/orders/${order.id}${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, narrative }),
+      body: JSON.stringify(body),
     }).then(
-      (o) => (onChange(o), setAdding(false), setNarrative('')),
+      (o) => (onChange(o), setAdding(false), setNarrative(''), setPicked([])),
       (e) => setError(e.message),
     )
   }
@@ -460,6 +491,12 @@ export default function Claims({ order, onChange, write }: { order: Order; onCha
   return (
     <section className="packing">
       <h3>Customer claims{count > 0 && ` · ${claims.filter((c) => c.status !== 'resolved').length} open`}</h3>
+      {!adding && since.length > 0 && (
+        <p className="claim">
+          The customer wrote in the chat since the order was sent. If it's about a problem, open a claim from those messages.{' '}
+          <button onClick={startAdding}>Open claim from the chat</button>
+        </p>
+      )}
       {cards.map((card) => (
         <PatternCard key={card.key} card={card} compact />
       ))}
@@ -478,17 +515,36 @@ export default function Claims({ order, onChange, write }: { order: Order; onCha
               ))}
             </select>
           </label>
-          <label>
-            In their words, or yours
-            <textarea required rows={3} maxLength={2000} value={narrative} onChange={(e) => setNarrative(e.target.value)} />
-          </label>
+          {theirs.length > 0 && (
+            <fieldset>
+              <legend>The customer's messages about it: their words and photos become the claim</legend>
+              {theirs.map((m) => (
+                <label key={m.id} className="pick">
+                  <input
+                    type="checkbox"
+                    checked={picked.includes(m.id)}
+                    onChange={(e) => setPicked((p) => (e.target.checked ? [...p, m.id] : p.filter((x) => x !== m.id)))}
+                  />{' '}
+                  {m.text || <em>No text</em>}
+                  {m.attachments.some((a) => a.kind === 'image') && <small> · photo</small>}{' '}
+                  <small>({new Date(m.created_time).toLocaleString()})</small>
+                </label>
+              ))}
+            </fieldset>
+          )}
+          {!picked.length && (
+            <label>
+              {theirs.length ? 'Or in your words' : 'In their words, or yours'}
+              <textarea required rows={3} maxLength={2000} value={narrative} onChange={(e) => setNarrative(e.target.value)} />
+            </label>
+          )}
           <button>Open claim</button>{' '}
           <button type="button" onClick={() => setAdding(false)}>
             Cancel
           </button>
         </form>
       ) : (
-        <button onClick={() => setAdding(true)}>Record a claim</button>
+        <button onClick={startAdding}>Record a claim</button>
       )}
       {error && <p role="alert">{error}</p>}
     </section>

@@ -1,6 +1,6 @@
 import hashlib
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -54,7 +54,7 @@ def conversations(user: dict = Depends(auth.current_user)):
                 "open_checks": cached_open_checks(c["id"]),
                 "unread": bool(at) and (c["id"] not in seen or seen[c["id"]] < at),
                 "awaiting_reply": waiting,
-                "reply_until": (at + REPLY_WINDOW).isoformat() if at else None,
+                "reply_until": (at + chats.REPLY_WINDOW).isoformat() if at else None,
                 "order_actions": actions.get(c["id"], []),
             }
         )
@@ -226,51 +226,10 @@ def review_signal(conversation_id: str, body: Review, user: dict = Depends(auth.
     return conversation_signals(conversation_id, user)
 
 
-REPLY_WINDOW = timedelta(hours=24)
-
-
-def reply_until(messages: list[dict]) -> datetime | None:
-    """Messenger only allows a normal reply within 24 hours of the customer's latest message."""
-    times = [datetime.fromisoformat(m["created_time"]) for m in messages if not m["from_page"]]
-    return max(times) + REPLY_WINDOW if times else None
-
-
-def customer_to_reply(conversation_id: str, user: dict) -> str:
-    """The customer's PSID, if the 24-hour reply window is still open."""
-    until = reply_until(conversation(conversation_id, user))
-    if not until or datetime.now(UTC) > until:
-        raise HTTPException(409, "Messenger only allows replies within 24 hours of the customer's last message.")
-    participants = messenger.graph(conversation_id, fields="participants").get("participants", {}).get("data", [])
-    customer = next((p["id"] for p in participants if p.get("id") != config.PAGE_ID), None)
-    if not customer:
-        raise HTTPException(409, "Could not find the customer in this conversation")
-    return customer
-
-
-def record_sent(conversation_id: str, order_id: str | None, sent: dict, user: dict, **what) -> dict:
-    # Meta shows the reply as coming from the Page; this records which seller sent it.
-    record = {
-        "conversation_id": conversation_id,
-        "order_id": order_id,
-        **what,
-        "message_id": sent.get("message_id"),
-        "sent_by": user["email"],
-        "sent_at": firestore.SERVER_TIMESTAMP,
-    }
-    db.clients()[1].collection("stores").document(config.STORE).collection("sentMessages").add(record)
-    return {"message_id": sent.get("message_id")}
-
-
 @router.post("/api/conversations/{conversation_id}/reply")
 def reply(conversation_id: str, body: chats.Reply, user: dict = Depends(auth.current_user)):
     """Send one text message as the Page. Only ever called from an explicit seller click."""
-    if demo.is_demo(conversation_id):
-        return chats.demo_post(conversation_id, True, body.text)
-    customer = customer_to_reply(conversation_id, user)
-    sent = messenger.graph(
-        f"{config.PAGE_ID}/messages", send={"recipient": {"id": customer}, "messaging_type": "RESPONSE", "message": {"text": body.text}}
-    )
-    return record_sent(conversation_id, body.order_id, sent, user, text=body.text)
+    return chats.send(conversation_id, body.text, user, body.order_id)
 
 
 REPLY_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif"}  # what Messenger shows as an image
@@ -289,7 +248,7 @@ async def reply_image(conversation_id: str, request: Request, order_id: str | No
         raise HTTPException(413, "Images must be under 10 MB")
     if order_id and not re.fullmatch(r"\w{1,64}", order_id):
         raise HTTPException(400, "Invalid order id")
-    customer = await run_in_threadpool(customer_to_reply, conversation_id, user)
+    customer = await run_in_threadpool(chats.customer_to_reply, conversation_id)
     sha = hashlib.sha256(data).hexdigest()
     path = f"stores/{config.STORE}/sent/{sha}"
     try:
@@ -307,12 +266,15 @@ async def reply_image(conversation_id: str, request: Request, order_id: str | No
         {"filedata": (f"image.{content_type.split('/')[1]}", data, content_type)},
     )
     image = {"path": path, "sha256": sha, "content_type": content_type, "size": len(data)}
-    return await run_in_threadpool(record_sent, conversation_id, order_id, sent, user, image=image)
+    return await run_in_threadpool(chats.record_sent, conversation_id, order_id, sent, user, image=image)
 
 
 @router.get("/api/conversations/{conversation_id}/orders")
 def list_chat_orders(conversation_id: str, user: dict = Depends(auth.current_user)):
-    """Every order made from this chat, newest first, so a returning customer's earlier orders stay in view."""
+    """Every order made from this chat, newest first, so a returning customer's earlier orders stay in view. Taps on
+    Confirm or Received in the chat are applied first."""
+    if demo.is_demo(conversation_id) or re.fullmatch(r"t_\d+", conversation_id):
+        chats.apply_answers(conversation_id)
     snaps = [
         d
         for d in db.orders().where(filter=firestore.FieldFilter("source.conversation_id", "==", conversation_id)).stream()

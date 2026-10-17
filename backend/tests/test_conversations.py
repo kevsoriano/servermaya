@@ -8,6 +8,7 @@ from core import auth, config, db
 from helpers import client
 from integrations import messenger
 from routes import conversations
+from services import chats
 
 
 def test_conversations(monkeypatch):
@@ -72,13 +73,13 @@ def test_reply_window_and_send(monkeypatch):
     iso = lambda d: d.strftime("%Y-%m-%dT%H:%M:%S+0000")
     msgs = [{"from_page": False, "created_time": iso(now - timedelta(hours=30))}, {"from_page": True, "created_time": iso(now - timedelta(hours=1))}]
     # Only the customer's messages open the window; the Page's own replies do not extend it.
-    assert conversations.reply_until(msgs) < now
-    assert conversations.reply_until([msgs[1]]) is None
+    assert chats.reply_until(msgs) < now
+    assert chats.reply_until([msgs[1]]) is None
 
     main.app.dependency_overrides[auth.current_user] = lambda: {"uid": "u1", "email": "s@example.com"}
     monkeypatch.setattr(config, "PAGE_ID", "99")
     sent, stored = [], []
-    monkeypatch.setattr(conversations, "conversation", lambda cid, user: msgs)
+    monkeypatch.setattr(messenger, "fetch_messages", lambda cid: msgs)
     monkeypatch.setattr(
         messenger,
         "graph",

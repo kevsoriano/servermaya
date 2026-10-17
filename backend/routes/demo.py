@@ -76,7 +76,9 @@ def demo_only(conversation_id: str):
 def demo_customer(conversation_id: str, body: chats.Reply, user: dict = Depends(auth.current_user)):
     """In a demo chat, the judge also plays the customer."""
     demo_only(conversation_id)
-    return chats.demo_post(conversation_id, False, body.text)
+    sent = chats.demo_post(conversation_id, False, body.text)
+    chats.apply_answers(conversation_id)  # a tap on Confirm or Received takes effect at once
+    return sent
 
 
 @router.post("/api/conversations/{conversation_id}/customer/image")

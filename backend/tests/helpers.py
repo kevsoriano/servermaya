@@ -84,6 +84,9 @@ class FakeCollection:
     def where(self, filter):
         return FakeCollection(self.db, self.path, self.filters + (filter,))
 
+    def add(self, data):
+        self.document().set(data)
+
     def limit(self, n):
         return self  # every query here asks for at most one match of a unique value
 

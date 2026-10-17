@@ -28,7 +28,9 @@ export type Order = {
   source: { type: string; conversation_id: string }
   created_at: string
   confirm_token: string | null
-  confirmations: { version: number; kind: 'customer' | 'seller_asserted'; by: string; at: string }[]
+  confirmations: { version: number; kind: 'customer' | 'seller_asserted'; by: string; at: string; message_id?: string }[]
+  /** What the seller asked in the chat, with the quick-reply button's text the customer taps to answer. */
+  asked?: { confirm?: { text: string; version: number; at: string }; received?: { text: string; at: string } }
   missing: string[]
   cancelled?: { by: string; at: string; reason: string | null }
   payment?: {
@@ -91,8 +93,23 @@ const toForm = (d: Order['draft']): Form => ({
   delivery_instructions: d.delivery_instructions.value ?? '',
 })
 
-/** checks: false inside a chat, which shows the chat's checks itself with every message, not just this order's snapshot. */
-export default function OrderView({ order, onChange, checks = true }: { order: Order; onChange: (o: Order) => void; checks?: boolean }) {
+export type ChatMessage = { id: string; text: string; from_page: boolean; created_time: string; attachments: { kind: string }[] }
+
+/** checks: false inside a chat, which shows the chat's checks itself with every message, not just this order's snapshot.
+ * chat: the live thread, when shown inside it. onSent: after a message went to the chat. */
+export default function OrderView({
+  order,
+  onChange,
+  checks = true,
+  chat,
+  onSent,
+}: {
+  order: Order
+  onChange: (o: Order) => void
+  checks?: boolean
+  chat?: ChatMessage[]
+  onSent?: () => void
+}) {
   const [form, setForm] = useState<Form>()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -124,7 +141,7 @@ export default function OrderView({ order, onChange, checks = true }: { order: O
     ...(draft.delivery_instructions.value ? [`Note: ${draft.delivery_instructions.value}`] : []),
   ].join('\n')
 
-  const call = (path: string, init: RequestInit) => {
+  const call = (path: string, init: RequestInit, sends = false) => {
     setBusy(true)
     setError('')
     return load<Order>(`/orders/${order.id}${path}`, init)
@@ -132,6 +149,7 @@ export default function OrderView({ order, onChange, checks = true }: { order: O
         onChange(o)
         setForm(undefined)
         setCopied(undefined)
+        if (sends) onSent?.()
       })
       .catch((e) => setError(e.message))
       .finally(() => setBusy(false))
@@ -203,7 +221,17 @@ export default function OrderView({ order, onChange, checks = true }: { order: O
       )}
       {confirmation?.kind === 'customer' && (
         <p role="status">
-          Customer confirmed version {confirmation.version} through the link on {new Date(confirmation.at).toLocaleString()}.
+          Customer confirmed version {confirmation.version}{' '}
+          {confirmation.by === 'chat' ? 'by tapping Confirm in the chat' : 'through the link'} on{' '}
+          {new Date(confirmation.at).toLocaleString()}.
+        </p>
+      )}
+      {order.status === 'awaiting_confirmation' && order.asked?.confirm?.version === order.version && (
+        <p role="status">
+          Sent for confirmation in the chat. Waiting for the customer to tap <strong>{order.asked.confirm.text}</strong>.{' '}
+          <button disabled={busy} onClick={() => call('/ask-confirmation', { method: 'POST' }, true)}>
+            Send again
+          </button>
         </p>
       )}
       {confirmation?.kind === 'seller_asserted' && (
@@ -390,7 +418,21 @@ export default function OrderView({ order, onChange, checks = true }: { order: O
           {(order.status === 'confirmed' || payment) && (
             <div className={payment?.status === 'verified' ? undefined : 'claim'}>
               <h3>Payment {payment?.livemode === false && <mark>TEST</mark>}</h3>
-              {!payment && <p>Not requested yet. The customer pays from the link below.</p>}
+              {!payment && (
+                <p>
+                  Not requested yet.{' '}
+                  {fromChat(order)
+                    ? 'Send the PayMongo link in the chat, or ask for direct GCash below.'
+                    : 'The customer pays from the link below.'}
+                </p>
+              )}
+              {fromChat(order) && order.status === 'confirmed' && (!payment || payment.status === 'expired') && (
+                <p>
+                  <button className="primary" disabled={busy} onClick={() => call('/payment-link', { method: 'POST' }, true)}>
+                    Send payment link in chat
+                  </button>
+                </p>
+              )}
               {payment?.status === 'pending' && <p>Waiting for payment of {peso(payment.amount)}. Nothing has been received.</p>}
               {payment?.status === 'expired' && <p>The payment request expired unpaid. The customer can start again from the link.</p>}
               {payment?.status === 'verified' && (
@@ -434,9 +476,25 @@ export default function OrderView({ order, onChange, checks = true }: { order: O
           )}
           <GcashPayment order={order} onChange={onChange} write={setMessage} />
           <Packing order={order} onChange={onChange} />
-          <Dispatch order={order} onChange={onChange} />
-          <Claims order={order} onChange={onChange} write={setMessage} />
-          {link && (
+          <Dispatch order={order} onChange={onChange} onSent={onSent} />
+          <Claims order={order} onChange={onChange} write={setMessage} chat={chat} />
+          {link && fromChat(order) && (
+            <details>
+              <summary>Customer page, if the chat can't be used</summary>
+              <p>
+                <small>
+                  For when Messenger's 24-hour reply window has closed: the same order summary, payment, delivery status and problem report,
+                  on a page of its own.
+                </small>
+                <br />
+                <input readOnly value={link} onFocus={(e) => e.target.select()} aria-label="Customer page link" />{' '}
+                <button onClick={() => navigator.clipboard.writeText(link).then(() => setCopied('link'))}>
+                  {copied === 'link' ? 'Copied' : 'Copy'}
+                </button>
+              </p>
+            </details>
+          )}
+          {link && !fromChat(order) && (
             <p>
               {order.status === 'confirmed' ? 'Customer link (order summary and payment):' : 'Send this link to the customer:'}
               <br />
@@ -457,19 +515,28 @@ export default function OrderView({ order, onChange, checks = true }: { order: O
               </button>
             </p>
           )}
-          {fromChat(order) && (message || link) && (
-            <Reply conversationId={order.source.conversation_id} orderId={order.id} text={message} setText={setMessage} />
+          {fromChat(order) && message && (
+            <Reply conversationId={order.source.conversation_id} orderId={order.id} text={message} setText={setMessage} onSent={onSent} />
           )}
           <p className="actions">
             <button onClick={() => setForm(toForm(draft))}>Edit</button>
             <button onClick={() => navigator.clipboard.writeText(details).then(() => setCopied('details'))}>
               {copied === 'details' ? 'Copied' : 'Copy order details'}
             </button>
-            {order.status === 'draft' && (
-              <button disabled={busy || order.missing.length > 0} onClick={() => call('/send-confirmation', { method: 'POST' })}>
-                Create confirmation link
-              </button>
-            )}
+            {order.status === 'draft' &&
+              (fromChat(order) ? (
+                <button
+                  className="primary"
+                  disabled={busy || order.missing.length > 0}
+                  onClick={() => call('/ask-confirmation', { method: 'POST' }, true)}
+                >
+                  Send for confirmation in chat
+                </button>
+              ) : (
+                <button disabled={busy || order.missing.length > 0} onClick={() => call('/send-confirmation', { method: 'POST' })}>
+                  Create confirmation link
+                </button>
+              ))}
             {order.status !== 'confirmed' && (
               <button
                 disabled={busy || order.missing.length > 0}

@@ -1,6 +1,6 @@
 """Order versioning, confirmation and payment rules. Pure functions: each takes the stored order and returns the fields to update."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from pydantic import BaseModel, Field
 
@@ -137,8 +137,9 @@ def send(order: dict, token: str) -> dict:
     return {"status": "awaiting_confirmation", "confirm_token": token}
 
 
-def confirm(order: dict, kind: str, by: str, now: datetime, token: str | None = None) -> dict:
-    """kind is 'customer' (they pressed Confirm on the link) or 'seller_asserted' (seller says they agreed)."""
+def confirm(order: dict, kind: str, by: str, now: datetime, token: str | None = None, message_id: str | None = None) -> dict:
+    """kind is 'customer' (they tapped Confirm in the chat, or pressed it on the link) or 'seller_asserted' (seller says they
+    agreed). message_id: the chat message that confirmed it."""
     if order["status"] == "confirmed":
         return {}
     allowed = ("awaiting_confirmation",) if kind == "customer" else ("draft", "awaiting_confirmation")
@@ -146,12 +147,81 @@ def confirm(order: dict, kind: str, by: str, now: datetime, token: str | None = 
         raise Refused("This order cannot be confirmed right now")
     if gaps := missing(order["draft"]):
         raise Refused("Fill in first: " + ", ".join(gaps))
-    record = {"version": order["version"], "kind": kind, "by": by, "at": now}
+    record = {"version": order["version"], "kind": kind, "by": by, "at": now} | ({"message_id": message_id} if message_id else {})
     # Appended, never replaced: earlier agreements stay on record.
     updates = {"status": "confirmed", "confirmations": order.get("confirmations", []) + [record]}
     if not order.get("confirm_token") and token:
         updates["confirm_token"] = token  # the customer still needs a link to pay
     return updates
+
+
+# Asking in the chat. The seller's message carries one quick-reply button. A tap comes back as an ordinary customer message
+# whose text is the button's title, which names the order (and, to confirm, the version), so code matches it exactly; no AI
+# reads it. Typing the same words counts too: it is the customer's own account either way.
+SKEW = timedelta(minutes=2)  # Meta's clock against ours
+
+
+def button(kind: str, order_id: str, order: dict) -> str:
+    """At most 20 characters, Messenger's limit for a quick-reply title."""
+    return f"Confirm #{order_id[:5]} v{order['version']}" if kind == "confirm" else f"Received #{order_id[:5]}"
+
+
+def ask(order: dict, kind: str, order_id: str, now: datetime) -> dict:
+    asked = order.get("asked") or {}
+    return {"asked": {**asked, kind: {"text": button(kind, order_id, order), "version": order["version"], "at": now}}}
+
+
+def peso(centavos: int | None) -> str:
+    return "to be confirmed" if centavos is None else f"₱{centavos / 100:,.2f}"
+
+
+def summary(order: dict) -> str:
+    """The order as the customer is asked to confirm it."""
+    d = order["draft"]
+    items = [
+        f"{i['quantity']} × {i['name']}{f' ({i["variant"]})' if i['variant'] else ''}: {peso(None if i['unit_price'] is None else i['unit_price'] * i['quantity'])}"
+        for i in d["items"]
+    ]
+    to = ", ".join(v for v in (d[f]["value"] for f in ("recipient_name", "phone", "address")) if v)
+    note = [f"Note: {d['delivery_instructions']['value']}"] if d["delivery_instructions"]["value"] else []
+    return "\n".join(
+        [
+            "Here is your order:",
+            *items,
+            f"Total: {peso(d['total'])}",
+            f"Deliver to: {to}",
+            *note,
+            "",
+            "If it's all correct, tap Confirm below. If anything is wrong, tell us here.",
+        ]
+    )
+
+
+def waiting_for(order: dict) -> list[str]:
+    """The taps this order is still waiting for: confirm (this version) and received (this shipment)."""
+    asked, f = order.get("asked") or {}, order.get("fulfillment") or {}
+    out = []
+    if "confirm" in asked and order["status"] == "awaiting_confirmation" and asked["confirm"]["version"] == order["version"]:
+        out.append("confirm")
+    if "received" in asked and f and (order.get("receipt") or {}).get("fulfillment_id") != f["id"]:
+        out.append("received")
+    return out
+
+
+def answer(order: dict, kind: str, messages: list[dict]) -> dict | None:
+    """The customer's first message after the latest ask whose text is that ask's button."""
+    a = (order.get("asked") or {}).get(kind)
+    if not a:
+        return None
+    since = a["at"] - SKEW
+    return next(
+        (
+            m
+            for m in messages
+            if not m["from_page"] and (m.get("text") or "").strip() == a["text"] and datetime.fromisoformat(m["created_time"]) >= since
+        ),
+        None,
+    )
 
 
 def cancel(order: dict, by: str, reason: str, now: datetime) -> dict:

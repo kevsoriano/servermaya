@@ -45,13 +45,13 @@ def claim_photo(order_id: str, cid: str, data: bytes, content_type: str, source:
     }
 
 
-def new_claim(ref, body: cases.ClaimIn, source: str, by: str) -> dict:
-    now, cid = datetime.now(UTC), secrets.token_hex(6)
+def new_claim(ref, body: cases.ClaimIn, source: str, by: str, cid: str | None = None, photos: list[dict] = (), message_ids: list[str] = ()) -> dict:
+    now, cid = datetime.now(UTC), cid or secrets.token_hex(6)
 
     def rule(o: dict) -> dict:
         if sum(c["status"] != "resolved" for c in o.get("claims", [])) >= MAX_OPEN_CLAIMS:
             raise rules.Refused("There are already several open reports on this order")
-        return cases.open_claim(o, cid, body, source, by, now)
+        return cases.open_claim(o, cid, body, source, by, now, photos, message_ids)
 
     return db.change(ref, rule)
 
@@ -85,6 +85,30 @@ async def seller_claim_photo(order_id: str, cid: str, request: Request, user: di
     photo = await run_in_threadpool(claim_photo, order_id, cid, data, request.headers.get("content-type", "").split(";")[0].strip().lower(), "seller")
     now = datetime.now(UTC)
     return await run_in_threadpool(db.change, db.orders().document(order_id), lambda o: cases.add_photos(o, cid, [photo], user["email"], now))
+
+
+class ChatClaimIn(BaseModel):
+    type: cases.ClaimType
+    message_ids: list[str] = Field(min_length=1, max_length=10)
+
+
+@router.post("/api/orders/{order_id}/claims/from-chat")
+def chat_claim(order_id: str, body: ChatClaimIn, user: dict = Depends(auth.current_user)):
+    """A claim the customer made in the chat, opened by the seller from the messages they pick. Its text is the customer's
+    own words and its photos are the images in those messages, so the review sees what the customer sent, not a retelling."""
+    ref, order = db.loaded(order_id)
+    if (order.get("source") or {}).get("type") not in ("messenger", "demo"):
+        raise HTTPException(409, "This order did not come from a chat")
+    picked = [m for m in chats.thread_messages(order["source"]["conversation_id"]) if m["id"] in body.message_ids and not m["from_page"]]
+    if not picked:
+        raise HTTPException(422, "Pick the customer's messages about the problem")
+    images = [a for m in picked for a in m.get("attachments") or [] if a["kind"] == "image" and a.get("name") != "sticker"]
+    if len(images) > cases.MAX_PHOTOS:
+        raise HTTPException(422, f"Up to {cases.MAX_PHOTOS} photos per report: pick fewer messages")
+    cid = secrets.token_hex(6)
+    photos = [claim_photo(order_id, cid, *chats.attachment_bytes(a), "customer_chat") for a in images]
+    narrative = "\n".join(m["text"].strip() for m in picked if m.get("text", "").strip())[:2000] or "Sent photos only, no text."
+    return new_claim(ref, cases.ClaimIn(type=body.type, narrative=narrative), "customer_chat", user["email"], cid, photos, [m["id"] for m in picked])
 
 
 @router.get("/api/orders/{order_id}/claims/{cid}/photos/{photo_id}")

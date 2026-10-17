@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { load } from '../lib/firebase'
-import { peso } from '../lib/format'
+import { fromChat, peso } from '../lib/format'
 import type { Order } from './OrderView'
 
 type Event = {
@@ -45,7 +45,7 @@ const NEXT: Record<string, string[]> = {
 }
 
 /** Dispatch is only offered once this version is confirmed, paid and packed. Booking needs the seller to approve a quote. */
-export default function Dispatch({ order, onChange }: { order: Order; onChange: (o: Order) => void }) {
+export default function Dispatch({ order, onChange, onSent }: { order: Order; onChange: (o: Order) => void; onSent?: () => void }) {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [pin, setPin] = useState('')
@@ -61,7 +61,7 @@ export default function Dispatch({ order, onChange }: { order: Order; onChange: 
   const run = (label: string, path: string, body?: object) => {
     setBusy(label)
     setError('')
-    return load<Order>(`/orders/${order.id}/dispatch${path}`, {
+    return load<Order>(path.startsWith('/ask') ? `/orders/${order.id}${path}` : `/orders/${order.id}/dispatch${path}`, {
       method: 'POST',
       ...(body && { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
     })
@@ -71,6 +71,8 @@ export default function Dispatch({ order, onChange }: { order: Order; onChange: 
 
   const expired = f?.quotation && Date.parse(f.quotation.expires_at) < openedAt // the backend re-checks when booking
   const live = f && !['cancelled', 'failed'].includes(f.status)
+  // Asked about this shipment, not an earlier one that was replaced
+  const askedReceived = f && order.asked?.received && Date.parse(order.asked.received.at) >= Date.parse(f.events[0]?.at ?? '')
 
   return (
     <section className="packing">
@@ -201,11 +203,26 @@ export default function Dispatch({ order, onChange }: { order: Order; onChange: 
           )}
           <p>
             {order.receipt?.fulfillment_id === f.id ? (
-              <strong>The customer confirmed they received it ({new Date(order.receipt.at).toLocaleString()}).</strong>
+              <strong>
+                The customer confirmed they received it{order.receipt.source === 'customer_chat' && ' by tapping Received in the chat'} (
+                {new Date(order.receipt.at).toLocaleString()}).
+              </strong>
             ) : f.status === 'delivered' ? (
               <em>Delivered, but the customer has not confirmed receipt.</em>
             ) : null}
           </p>
+          {fromChat(order) && order.receipt?.fulfillment_id !== f.id && ['picked_up', 'delivered'].includes(f.status) && (
+            <p>
+              {askedReceived && (
+                <>
+                  Asked in the chat. Waiting for the customer to tap <strong>{order.asked!.received!.text}</strong>.{' '}
+                </>
+              )}
+              <button disabled={!!busy} onClick={() => run('Sending…', '/ask-received').then(onSent)}>
+                {askedReceived ? 'Ask again in chat' : 'Ask the customer to confirm receipt in chat'}
+              </button>
+            </p>
+          )}
           {live && (
             <p className="actions">
               {f.courier === 'lalamove' && (

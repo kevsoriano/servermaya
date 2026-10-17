@@ -72,7 +72,7 @@ def packing_sample(order_id: str, data: bytes) -> dict:
 
 
 def claim_sample(order_id: str, claim_id: str, data: bytes) -> dict:
-    """A sample damage photo (JPEG), stored like one the customer sent with a report."""
+    """A sample damage photo (JPEG), stored like one copied from the customer's chat into a report."""
     sha = hashlib.sha256(data).hexdigest()
     path = f"stores/{config.STORE}/orders/{order_id}/claims/{claim_id}/{sha}"
     db.bucket().blob(path).upload_from_string(data, content_type="image/jpeg", if_generation_match=0)
@@ -82,6 +82,6 @@ def claim_sample(order_id: str, claim_id: str, data: bytes) -> dict:
         "sha256": sha,
         "content_type": "image/jpeg",
         "size": len(data),
-        "source": "customer",
+        "source": "customer_chat",
         "uploaded_at": datetime.now(UTC),
     }

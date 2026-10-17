@@ -27,8 +27,11 @@ CLOSED = ("resolved",)
 MAX_PHOTOS = 4
 
 
+ClaimType = Literal["missing_item", "wrong_item", "damage", "nonreceipt", "payment_issue", "cancellation", "other"]
+
+
 class ClaimIn(BaseModel):
-    type: Literal["missing_item", "wrong_item", "damage", "nonreceipt", "payment_issue", "cancellation", "other"]
+    type: ClaimType
     narrative: str = Field(min_length=1, max_length=2000)
 
 
@@ -47,8 +50,11 @@ def put(order: dict, updated: dict, by: str, now: datetime) -> dict:
     return {"claims": [updated if c["id"] == updated["id"] else c for c in order["claims"]]}
 
 
-def open_claim(order: dict, cid: str, body: ClaimIn, source: str, by: str, now: datetime, photos: list[dict] = ()) -> dict:
-    """A claim from the customer link or entered by the seller. It reopens the case even if the order looked finished."""
+def open_claim(
+    order: dict, cid: str, body: ClaimIn, source: str, by: str, now: datetime, photos: list[dict] = (), message_ids: list[str] = ()
+) -> dict:
+    """A claim from the customer link, from the customer's chat messages (message_ids), or entered by the seller. It reopens
+    the case even if the order looked finished."""
     if order["status"] not in ("confirmed", "cancelled"):
         raise Refused("Claims can be opened on confirmed or cancelled orders")
     shipment = order.get("fulfillment") or (order.get("fulfillment_history") or [None])[-1]
@@ -62,6 +68,7 @@ def open_claim(order: dict, cid: str, body: ClaimIn, source: str, by: str, now: 
         "fulfillment_id": shipment and shipment["id"],
         "order_version": order["version"],
         "photos": list(photos)[:MAX_PHOTOS],
+        "message_ids": list(message_ids),
         "status": "open",
         "history": [{"status": "open", "by": by, "at": now}],
         "review": None,

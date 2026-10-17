@@ -4,9 +4,9 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException
 from google.cloud import firestore
 
-from core import auth, db
+from core import auth, config, db
 from domain import orders as rules
-from services import payments
+from services import chats, payments
 
 router = APIRouter()
 
@@ -28,6 +28,10 @@ def get_order(order_id: str, user: dict = Depends(auth.current_user)):
     snap = db.orders().document(order_id).get()
     if not snap.exists:
         raise HTTPException(404, "Order not found")
+    order = snap.to_dict()
+    if rules.waiting_for(order):  # the customer may have tapped Confirm or Received in the chat since
+        chats.apply_answers(order["source"]["conversation_id"])
+        snap = snap.reference.get()
     return db.present(snap)
 
 
@@ -69,3 +73,56 @@ def check_payment(order_id: str, user: dict = Depends(auth.current_user)):
     if not payment:
         raise HTTPException(409, "No payment has been requested for this order")
     return payments.reconcile_session(payment["session_id"])
+
+
+# Asking in the chat. Each is one seller click that sends one message; the customer answers with the button under it. The
+# order is checked first and the ask recorded only after the message went out, so a refused send leaves nothing waiting.
+def chat_of(order_id: str) -> tuple:
+    ref, order = db.loaded(order_id)
+    if (order.get("source") or {}).get("type") not in ("messenger", "demo"):
+        raise HTTPException(409, "This order did not come from a chat")
+    return ref, order, order["source"]["conversation_id"]
+
+
+def checked(rule, order: dict) -> dict:
+    try:
+        return rule(order)
+    except rules.Refused as e:
+        raise HTTPException(409, str(e))
+
+
+@router.post("/api/orders/{order_id}/ask-confirmation")
+def ask_confirmation(order_id: str, user: dict = Depends(auth.current_user)):
+    """Send the order summary with a Confirm button. The customer page's link is made too, as a fallback."""
+    ref, order, cid = chat_of(order_id)
+    now, token = datetime.now(UTC), secrets.token_urlsafe(32)
+    rule = lambda o: (u := rules.send(o, token)) | rules.ask({**o, **u}, "confirm", order_id, now)
+    ask = checked(rule, order)["asked"]["confirm"]
+    chats.send(cid, rules.summary(order), user, order_id, ask["text"])
+    return db.change(ref, rule)
+
+
+@router.post("/api/orders/{order_id}/payment-link")
+def send_payment_link(order_id: str, user: dict = Depends(auth.current_user)):
+    """Send the PayMongo QR Ph link in the chat. Only PayMongo's webhook, or a recheck with PayMongo, marks it paid."""
+    ref, order, cid = chat_of(order_id)
+    url = payments.checkout(ref, f"{config.PUBLIC_URL}/paid")
+    chats.send(cid, f"Thank you for confirming! Pay {rules.peso(order['draft']['total'])} with QR Ph here: {url}", user, order_id)
+    return db.present(ref.get())
+
+
+@router.post("/api/orders/{order_id}/ask-received")
+def ask_received(order_id: str, user: dict = Depends(auth.current_user)):
+    """Send a Received button once the order is on its way. The courier's "delivered" never stands in for it."""
+    ref, order, cid = chat_of(order_id)
+    now = datetime.now(UTC)
+
+    def rule(o: dict) -> dict:
+        if (o.get("fulfillment") or {}).get("status") not in ("picked_up", "delivered"):
+            raise rules.Refused("The order has not been sent yet")
+        return rules.ask(o, "received", order_id, now)
+
+    ask = checked(rule, order)["asked"]["received"]
+    text = "Your order is on its way! Once it's in your hands, tap Received below. If anything is wrong, tell us here and send a photo."
+    chats.send(cid, text, user, order_id, ask["text"])
+    return db.change(ref, rule)

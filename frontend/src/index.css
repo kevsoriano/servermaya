@@ -399,6 +399,21 @@ mark.status.confirmed {
   color: #fff;
 }
 
+.messages li.page p a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+/* Messenger's quick reply: an outlined pill the customer taps */
+.messages .quick-reply {
+  margin-top: 0.4rem;
+  border: 1px solid var(--accent);
+  border-radius: 18px;
+  background: none;
+  color: var(--accent-text);
+  padding: 0.35rem 0.9rem;
+}
+
 .messages img,
 .messages video {
   display: block;
