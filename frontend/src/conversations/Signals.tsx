@@ -45,7 +45,8 @@ export default function Signals({ conversationId, messages, latest, onOpenCount 
   const [tries, setTries] = useState(0) // Try again: checks that could not be read are never kept, so asking again retries
 
   // One request at a time per chat: a refresh asked for while one is running waits for it, and by then the analysis is
-  // cached, so overlapping refreshes never start a second Gemini call. A refresh superseded while waiting is skipped.
+  // cached, so overlapping refreshes never start a second Gemini call. A refresh superseded while waiting is skipped, but a
+  // result already on its way is still shown (kept with its chat; the next one in line replaces it).
   const running = useRef<{ id: string; done: Promise<unknown> }>(undefined)
   useEffect(() => {
     let live = true
@@ -54,7 +55,7 @@ export default function Signals({ conversationId, messages, latest, onOpenCount 
       () =>
         live &&
         load<Signal[]>(`/conversations/${conversationId}/signals`).then(
-          (s) => live && (setLoaded({ id: conversationId, s }), setError('')),
+          (s) => (setLoaded({ id: conversationId, s }), live && setError('')),
           (e) => live && setError(e.message),
         ),
     )
