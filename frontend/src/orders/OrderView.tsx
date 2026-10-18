@@ -128,6 +128,8 @@ export default function OrderView({
   const earlier = order.confirmations.filter((c) => c !== confirmation)
   const { payment } = order
   const paymentClaim = draft.claims.find((c) => c.kind === 'payment')
+  // Paid by direct GCash for this version: the seller found it in their own GCash history, so PayMongo is not needed.
+  const gcashPaid = order.manual_payment?.status === 'seller_confirmed' && order.manual_payment.version === order.version
 
   const call = (path: string, init: RequestInit, sends = false) => {
     setBusy(true)
@@ -198,10 +200,11 @@ export default function OrderView({
     <>
       {order.missing.length > 0 && <p>Before asking the customer to confirm, fill in: {order.missing.join(', ')}.</p>}
       {(order.status === 'confirmed' || payment) && (
-        <div className={payment?.status === 'verified' ? undefined : 'claim'}>
+        <div className={payment?.status === 'verified' || gcashPaid ? undefined : 'claim'}>
           <h3>Payment {payment?.livemode === false && <mark>TEST</mark>}</h3>
-          {!payment && <p>Not requested yet. Send the PayMongo link in the chat, or ask for direct GCash below.</p>}
-          {fromChat(order) && order.status === 'confirmed' && (!payment || payment.status === 'expired') && (
+          {!payment && gcashPaid && <p>Paid by direct GCash: you found it in your own GCash history. See Direct GCash below.</p>}
+          {!payment && !gcashPaid && <p>Not requested yet. Send the PayMongo link in the chat, or ask for direct GCash below.</p>}
+          {fromChat(order) && order.status === 'confirmed' && !gcashPaid && (!payment || payment.status === 'expired') && (
             <p>
               <button className="primary" disabled={busy} onClick={() => call('/payment-link', { method: 'POST' }, true)}>
                 Send payment link in chat
@@ -224,7 +227,7 @@ export default function OrderView({
               {peso(payment.paid_amount ?? null)} ({payment.payment_id}).
             </p>
           )}
-          {paymentClaim && payment?.status !== 'verified' && (
+          {paymentClaim && payment?.status !== 'verified' && !gcashPaid && (
             <p>
               The customer says they already paid{paymentClaim.reference && <> (reference {paymentClaim.reference})</>}.{' '}
               <strong>No matching verified payment.</strong> Verify before you ship.

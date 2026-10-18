@@ -1,5 +1,6 @@
-/* Warm neutrals with an indigo accent. Green, amber and red stay for check results only (passes, to verify, fails), so the
-   accent never reads as one of them. */
+/* Suri's colors: cool neutrals with a navy ink, and the logo's deep teal as the accent (white text on it passes WCAG AA in both
+   themes). Green, amber and red stay for check results only (passes, to verify, fails); the green leans yellow so the teal
+   accent never reads as a pass. */
 :root {
   font-family:
     Inter,
@@ -11,25 +12,25 @@
   font-feature-settings: 'cv11', 'ss01';
   -webkit-font-smoothing: antialiased;
   color-scheme: light dark;
-  --bg: light-dark(#f4f3ef, #111014);
-  --surface: light-dark(#fff, #1a191f);
-  --hover: light-dark(#f2f0eb, #24232b);
-  --selected: light-dark(#efedff, #262242);
-  --line: light-dark(#e6e3dc, #2c2a34);
-  --text: light-dark(#1d1b22, #ecebf1);
-  --muted: light-dark(#6b6874, #a19eab);
-  --bubble: light-dark(#f2f0eb, #25232c);
-  --accent: light-dark(#5a45e0, #6e5cf0);
-  --accent-hover: light-dark(#4a36c9, #7d6df3);
-  --accent-text: light-dark(#4f3bd1, #aa9fff);
-  --accent-soft: light-dark(#efedff, #24203d);
+  --bg: light-dark(#f3f6f7, #0b111d);
+  --surface: light-dark(#fff, #131a28);
+  --hover: light-dark(#eef2f4, #1b2435);
+  --selected: light-dark(#e3f4f2, #12302e);
+  --line: light-dark(#e0e6ea, #243047);
+  --text: light-dark(#0f1b33, #e8edf5);
+  --muted: light-dark(#5b6678, #98a3b5);
+  --bubble: light-dark(#eef2f4, #1b2435);
+  --accent: light-dark(#0b6e66, #0f7a71);
+  --accent-hover: light-dark(#095a53, #12897f);
+  --accent-text: light-dark(#0b6e66, #3fd3c9);
+  --accent-soft: light-dark(#e3f4f2, #12302e);
   --warn: light-dark(#b45309, #f5a524);
   --warn-bg: light-dark(#fdf4e4, #2e2312);
-  --ok: light-dark(#15803d, #4ade80);
+  --ok: light-dark(#2f7d16, #8bd46a);
   --bad: light-dark(#b42318, #f87171);
   --demo: light-dark(#fbf1cf, #2d2814);
   --demo-text: light-dark(#6b5310, #e9d48a);
-  --shadow: 0 1px 2px rgb(30 25 50 / 0.05), 0 2px 8px rgb(30 25 50 / 0.04);
+  --shadow: 0 1px 2px rgb(15 27 51 / 0.05), 0 2px 8px rgb(15 27 51 / 0.04);
   --ring: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
   color: var(--text);
 }
@@ -182,14 +183,16 @@ main h1 {
   letter-spacing: -0.02em;
 }
 
-/* The sign-in card's mark, the same as the top bar's: Suri's logo (public/logo-128.png, made from public/logo.png). */
-main.card::before {
-  content: '';
+/* Suri's logo, in the top bar and on the sign-in card: public/header-light.png and header-dark.png, made from Suri-header.png. */
+.logo img {
   display: block;
-  width: 2.75rem;
-  height: 2.75rem;
-  margin-bottom: 1.25rem;
-  background: url('/logo-128.png') center / contain no-repeat;
+  height: 100%;
+  width: auto;
+}
+
+main.card h1.logo {
+  height: 3rem;
+  margin-bottom: 1rem;
 }
 
 main.card p:not(.actions) {
@@ -205,6 +208,7 @@ main.card .actions {
 .app {
   height: 100dvh;
   display: grid;
+  grid-template-columns: minmax(0, 1fr); /* never wider than the screen, whatever the tabs or a table want */
   grid-template-rows: auto 1fr;
   gap: 0.75rem;
   padding: 0.75rem;
@@ -231,18 +235,8 @@ main.card .actions {
 
 .brand {
   display: flex;
-  align-items: center;
-  gap: 0.55rem;
-  font-size: 1rem;
-  letter-spacing: -0.01em;
-  white-space: nowrap;
-}
-
-.brand::before {
-  content: '';
-  width: 1.75rem;
-  height: 1.75rem;
-  background: url('/logo-128.png') center / contain no-repeat;
+  flex-shrink: 0;
+  height: 1.9rem;
 }
 
 .tabs {
@@ -303,6 +297,7 @@ main.card .actions {
 .page {
   overflow-y: auto;
   display: grid;
+  grid-template-columns: minmax(0, 1fr); /* as .app: its cards shrink to the screen instead of running past it */
   align-content: start;
   gap: 0.75rem;
 }
@@ -1060,6 +1055,13 @@ mark.status.confirmed {
     flex-wrap: wrap;
   }
 
+  /* The tabs get their own row, and scroll sideways rather than widen the page on a phone. */
+  .tabs {
+    order: 3;
+    flex-basis: 100%;
+    overflow-x: auto;
+  }
+
   .inbox,
   .inbox.two {
     grid-template-columns: 1fr;
@@ -1512,8 +1514,6 @@ h3:has(> .info) {
   font-size: 0.85rem;
   line-height: 1.45;
   color: var(--muted);
-  text-align: justify;
-  hyphens: auto;
 }
 
 /* Patterns: a card per concentration or rise, and the rising card's bars by week. */
