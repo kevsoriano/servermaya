@@ -88,7 +88,14 @@ def photo_check(rows: list[dict], photos: list[tuple[bytes, str]]) -> pack.Repor
         response = db.clients()[0].models.generate_content(
             model=config.GEMINI_MODEL,
             contents=contents,
-            config={"system_instruction": pack.SYSTEM, "response_mime_type": "application/json", "response_schema": pack.Report, "temperature": 0},
+            # LOW, like every other call: the default thinking level was the slowest and costliest part of the check
+            config={
+                "system_instruction": pack.SYSTEM,
+                "response_mime_type": "application/json",
+                "response_schema": pack.Report,
+                "temperature": 0,
+                "thinking_config": {"thinking_level": "low"},
+            },
         )
         return pack.Report.model_validate_json(response.text)
     except Exception:

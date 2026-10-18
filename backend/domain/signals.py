@@ -22,6 +22,14 @@ SUGGESTED = {
     "receipt_image": "Treat the image as a claim, not proof. Only a PayMongo-verified payment, or a GCash payment you found in your own GCash history, counts.",
     # Never settled by a payment: a verified payment does not make sharing a code or opening someone's link safe.
     "account_request": "You don't need a new account, app or link to get paid. Never share a code, OTP or PIN. Use your usual GCash or the PayMongo link.",
+    # From Model Armor (integrations.armor), not Gemini: never in Kind, so Gemini cannot raise them
+    "instructions": "Read this message yourself and compare the draft order and checks with the chat. Text written to steer an AI never changes what was agreed.",
+    "unsafe_link": "Don't open the link or sign in through it. You never need a link to receive payment.",
+}
+
+SCREENED = {
+    "instructions": "Model Armor found text in this message that reads like instructions to an AI.",
+    "unsafe_link": "Model Armor flagged a link in this message as unsafe.",
 }
 
 SYSTEM = """You review a chat between a small online SELLER and a CUSTOMER and list things the seller should verify before shipping.
@@ -75,6 +83,24 @@ def finalize(found: Found, messages: list[dict]) -> list[dict]:
 
 def detect(client, model: str, messages: list[dict]) -> list[dict]:
     return finalize(extraction.ask(client, model, SYSTEM, Found, messages), messages)
+
+
+def screened(found: dict[str, list[str]], messages: list[dict]) -> list[dict]:
+    """Model Armor's findings as checks, one per finding per message. found: customer message id -> its findings."""
+    times = {m["id"]: m.get("created_time") for m in messages}
+    return [
+        {"kind": k, "summary": SCREENED[k], "sources": [mid], "check": SUGGESTED[k], "times": [times[mid]]}
+        for mid, ks in found.items()
+        if mid in times
+        for k in ks
+    ]
+
+
+def seller_only_since(messages: list[dict], analysed: str | None) -> bool:
+    """Whether the last analysis still stands: nothing new, or only seller messages since. Checks cite only customer
+    messages, so a seller's message alone never adds one; a check it settles stays until the customer writes again."""
+    ids = [m["id"] for m in messages]
+    return analysed in ids and all(m["from_page"] for m in messages[ids.index(analysed) + 1 :])
 
 
 def key(signal: dict) -> str:

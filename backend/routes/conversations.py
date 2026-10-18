@@ -1,5 +1,6 @@
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -14,7 +15,7 @@ from domain import brief, delivery, extraction
 from domain import orders as rules
 from domain import packing as pack
 from domain import signals as risk
-from integrations import messenger
+from integrations import armor, messenger
 from seed import demo
 from services import catalog, chats, deliveries, seeding
 
@@ -223,6 +224,7 @@ def write_brief(prompt: str) -> str:
             response_schema=brief.Brief,
             temperature=0,
             thinking_config=types.ThinkingConfig(thinking_level="LOW"),
+            http_options=types.HttpOptions(timeout=extraction.QUICK_TIMEOUT),
         ),
     )
     summary = brief.Brief.model_validate_json(r.text).summary.strip()
@@ -238,22 +240,38 @@ def conversation_signals(conversation_id: str, user: dict = Depends(auth.current
     latest = messages[-1]["id"] if messages else None
     ref = db.signal_docs().document(conversation_id)
     cached = ref.get().to_dict() or {}
-    if cached.get("latest_message_id") == latest and "signals" in cached:
+    if "signals" in cached and risk.seller_only_since(messages, cached.get("latest_message_id")):
         found = cached["signals"]
     else:
         if messages:
             auth.ai_budget(user)
         found = None
-        for attempt in range(2):  # one quiet retry, as for the brief: a Vertex call occasionally fails
-            try:
-                found = risk.detect(db.clients()[0], config.GEMINI_MODEL, messages) if messages else []
-                break
-            except Exception as e:
-                log.warning("checks attempt %d failed: %r", attempt + 1, e)
+        # Model Armor screens each customer message once, beside the Gemini call, so it adds no wait. Kept by message id.
+        screened = dict(cached.get("screened") or {})
+        new = [m for m in messages if not m["from_page"] and m["id"] not in screened and m.get("text")]
+        with ThreadPoolExecutor(8) as pool:
+            looks = pool.map(lambda m: armor.screen(m["text"]), new)
+            for attempt in range(2):  # one quiet retry, as for the brief: a Vertex call occasionally fails
+                try:
+                    found = risk.detect(db.clients()[0], config.GEMINI_MODEL, messages) if messages else []
+                    break
+                except Exception as e:
+                    log.warning("checks attempt %d failed: %r", attempt + 1, e)
+            screened |= {m["id"]: got for m, got in zip(new, looks) if got is not None}  # not screened: tried again next time
         if found is None:
             raise HTTPException(502, "Could not read this conversation right now.")
+        found += risk.screened(screened, messages)
         # merge keeps the seller's reviews across re-analysis
-        ref.set({"signals": found, "latest_message_id": latest, "model": config.GEMINI_MODEL, "analysed_at": firestore.SERVER_TIMESTAMP}, merge=True)
+        ref.set(
+            {
+                "signals": found,
+                "screened": screened,
+                "latest_message_id": latest,
+                "model": config.GEMINI_MODEL,
+                "analysed_at": firestore.SERVER_TIMESTAMP,
+            },
+            merge=True,
+        )
     chat = [o for _, o in db.chat_orders(conversation_id)]
     # The advice is fixed per kind, so a check kept from an earlier analysis shows today's wording.
     return [
@@ -335,9 +353,14 @@ def draft_order(conversation_id: str, user: dict = Depends(auth.current_user)):
     if not any(not m["from_page"] for m in messages):
         raise HTTPException(409, "The customer has not written since this chat's last order. To change that order, edit it.")
     auth.ai_budget(user)
-    try:
-        draft = extraction.extract(db.clients()[0], config.GEMINI_MODEL, messages, catalog.products(demo.is_demo(conversation_id)))
-    except Exception:
+    draft = None
+    for attempt in range(2):  # one quiet retry, as for the checks: a Vertex call occasionally fails or times out
+        try:
+            draft = extraction.extract(db.clients()[0], config.GEMINI_MODEL, messages, catalog.products(demo.is_demo(conversation_id)))
+            break
+        except Exception as e:
+            log.warning("draft attempt %d failed: %r", attempt + 1, e)
+    if draft is None:
         raise HTTPException(502, "Could not extract an order from this conversation")
     draft = rules.carry_over(draft, previous)
     source = {"type": "messenger", "conversation_id": conversation_id}

@@ -73,6 +73,21 @@ def check(name: str, result: str, detail: str) -> dict:
     return {"check": name, "result": result, "detail": detail}
 
 
+def screening(found: list[str] | None) -> list[dict]:
+    """Model Armor's screen of the screenshot (integrations.armor), only when it ran: not screened is never shown as a pass."""
+    if found is None:
+        return []
+    if found:
+        return [
+            check(
+                "screening",
+                "fail",
+                "Model Armor found text in the screenshot that reads like instructions to an AI. Compare what was read with the screenshot yourself.",
+            )
+        ]
+    return [check("screening", "pass", "Model Armor found no text aimed at an AI")]
+
+
 def masked(text: str) -> str:
     """GCash hides characters with * on some screens and • on others. Use * throughout, upper case, single spaces.
 

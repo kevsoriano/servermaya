@@ -31,6 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import httpx
 from google import genai
 from google.adk.models import Gemini
 from google.genai import types
@@ -1053,7 +1054,13 @@ def run_packing(client, case: dict) -> dict:
     response = client.models.generate_content(
         model=MODEL,
         contents=[f"<order>\n{checklist}\n</order>", *reference, "Photo 1:", types.Part.from_bytes(data=data, mime_type="image/png")],
-        config={"system_instruction": pack.SYSTEM, "response_mime_type": "application/json", "response_schema": pack.Report, "temperature": 0},
+        config={
+            "system_instruction": pack.SYSTEM,
+            "response_mime_type": "application/json",
+            "response_schema": pack.Report,
+            "temperature": 0,
+            "thinking_config": {"thinking_level": "low"},
+        },
     )
     seconds = time.monotonic() - start
     too_unclear = pack.unclear([data])  # as the packing route does
@@ -1322,9 +1329,12 @@ def run_claim(model: tuple[str, str], case: dict) -> dict:
     expect = (case.get("code", "ANA01"), order["draft"]["recipient_name"]["value"])
     client = genai.Client(vertexai=True, project=PROJECT, location="global")
     videos: dict = {}
-    blocks += cases.video_records(client, MODEL, shown, expect, out=videos)
-    texts, parcels = cases.parcel_records(client, MODEL, [(label, part, None) for label, part in shown if label in cases.PROOFS], expect)
-    blocks += texts
+    with ThreadPoolExecutor(2) as pool:  # at the same time, as the route does
+        checking = pool.submit(cases.video_records, client, MODEL, shown, expect, out=videos)
+        texts, parcels = pool.submit(
+            cases.parcel_records, client, MODEL, [(label, part, None) for label, part in shown if label in cases.PROOFS], expect
+        ).result()
+        blocks += checking.result() + texts
     current = {**order, **cases.with_checks(order, "c1", videos, parcels)}
     blocks.append(custody.record(custody.check(current, cases.claim(current, "c1"))))
     review = claim_agent.review(claim_agent.gemini(*model), MODEL, blocks, cases.photos_only(shown), NOW, recall=lambda: case.get("past", []))
@@ -1398,7 +1408,14 @@ def run_receipt(client, case: dict) -> dict:
     response = client.models.generate_content(
         model=MODEL,
         contents=["Screenshot:", types.Part.from_bytes(data=receipt(**case["image"]), mime_type="image/png")],
-        config={"system_instruction": gcash.SYSTEM, "response_mime_type": "application/json", "response_schema": gcash.Receipt, "temperature": 0},
+        config={
+            "system_instruction": gcash.SYSTEM,
+            "response_mime_type": "application/json",
+            "response_schema": gcash.Receipt,
+            "temperature": 0,
+            "thinking_config": {"thinking_level": "minimal"},
+            "http_options": {"timeout": extraction.QUICK_TIMEOUT},
+        },
     )
     seconds = time.monotonic() - start
     read = gcash.Receipt.model_validate_json(response.text)
@@ -1457,12 +1474,19 @@ def count_usage(client) -> None:
 def safely(fn, *args) -> dict:
     """One failed call fails its case, not the run. Vertex rate limits (429), cancellations (499) and server errors are retried
     with backoff; they say nothing about the model's answer. Each result carries the Gemini calls and tokens it used."""
+    lost = 0.0  # seconds spent on attempts the app would also have cut off and retried (the quick calls' timeout)
     for attempt in range(5):
         _usage.now = {"calls": 0, "in": 0, "out": 0}  # a refused (429) attempt is not billed
+        start = time.monotonic()
         try:
-            return {**fn(*args), "usage": _usage.now}
+            result = fn(*args)
+            return {**result, "seconds": result["seconds"] + lost, "usage": _usage.now} if "seconds" in result else {**result, "usage": _usage.now}
         except Exception as e:
-            transient = isinstance(e, genai.errors.ServerError) or any(t in str(e) for t in ("RESOURCE_EXHAUSTED", "429", "499 CANCELLED"))
+            if isinstance(e, httpx.TimeoutException):
+                lost += time.monotonic() - start
+            transient = isinstance(e, genai.errors.ServerError | httpx.TimeoutException) or any(
+                t in str(e) for t in ("RESOURCE_EXHAUSTED", "429", "499 CANCELLED")
+            )
             if not transient or attempt == 4:
                 return {"case": args[-1], "error": f"{type(e).__name__}: {e}"[:200]}
             time.sleep(5 * 2**attempt)

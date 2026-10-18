@@ -24,6 +24,12 @@ const LABEL: Record<string, string> = {
   account_request: 'Asked you to open an account, use a link or share a code',
 }
 
+/** From Model Armor, only when it is on, so never listed as "not seen". */
+const SCREENED: Record<string, string> = {
+  instructions: 'Message reads like instructions to the AI',
+  unsafe_link: 'Sent a link flagged as unsafe',
+}
+
 type Props = {
   conversationId: string
   /** Messages to quote from, by id. */
@@ -48,10 +54,15 @@ export default function Signals({ conversationId, messages, latest, onOpenCount 
   // cached, so overlapping refreshes never start a second Gemini call. A refresh superseded while waiting is skipped, but a
   // result already on its way is still shown (kept with its chat; the next one in line replaces it).
   const running = useRef<{ id: string; done: Promise<unknown> }>(undefined)
+  // A refresh for a new message in the chat already shown waits 2 s, so a burst of messages makes one Gemini call. Opening
+  // a chat or Try again loads at once. The wait runs beside the queue, so it never adds up across a burst.
+  const shown = useRef<{ id: string; tries: number }>(undefined)
   useEffect(() => {
     let live = true
+    const settle = shown.current?.id === conversationId && shown.current.tries === tries ? 2000 : 0
+    shown.current = { id: conversationId, tries }
     const before = running.current?.id === conversationId ? running.current.done : Promise.resolve()
-    const done = before.then(
+    const done = Promise.all([before, new Promise((r) => setTimeout(r, settle))]).then(
       () =>
         live &&
         load<Signal[]>(`/conversations/${conversationId}/signals`).then(
@@ -115,7 +126,7 @@ export default function Signals({ conversationId, messages, latest, onOpenCount 
                 {isOpen(s) ? '!' : '✓'}
               </span>
               <div>
-                <strong>{LABEL[s.kind] ?? s.kind}</strong>
+                <strong>{LABEL[s.kind] ?? SCREENED[s.kind] ?? s.kind}</strong>
                 {s.resolved ? (
                   <p>Settled: {s.resolved}.</p>
                 ) : s.reviewed ? (
@@ -180,7 +191,7 @@ export default function Signals({ conversationId, messages, latest, onOpenCount 
                   {s.resolved || s.reviewed ? '✓' : '–'}
                 </span>
                 <div>
-                  <strong>{LABEL[s.kind] ?? s.kind}</strong>
+                  <strong>{LABEL[s.kind] ?? SCREENED[s.kind] ?? s.kind}</strong>
                   {s.sources.slice(0, 1).map((id) => quote(id) && <blockquote key={id}>{quote(id)}</blockquote>)}
                   <p>
                     {s.resolved

@@ -25,6 +25,7 @@ export const LABEL: Record<string, string> = {
   recipient_name: 'Recipient name',
   recipient_mobile: 'Recipient number or account',
   duplicate: 'Not a copy',
+  screening: 'No text aimed at the AI',
 }
 
 /** What the screenshot shows for each check, as Gemini copied it down. */

@@ -2,6 +2,7 @@ import hashlib
 import io
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 import pypdf
@@ -14,9 +15,11 @@ from google.genai import types
 from pydantic import BaseModel, Field
 
 from core import auth, config, db
+from domain import extraction
 from domain import orders as rules
 from domain import packing as pack
 from domain import receipts as gcash
+from integrations import armor
 from seed import samples
 from services import chats
 
@@ -154,7 +157,15 @@ def transcribe(data: bytes, content_type: str, system: str, schema: type[BaseMod
             response = db.clients()[0].models.generate_content(
                 model=config.GEMINI_MODEL,
                 contents=["Screenshot:", types.Part.from_bytes(data=data, mime_type=content_type)],
-                config={"system_instruction": system, "response_mime_type": "application/json", "response_schema": schema, "temperature": 0},
+                # MINIMAL: reading a screenshot is transcription; code does every check
+                config={
+                    "system_instruction": system,
+                    "response_mime_type": "application/json",
+                    "response_schema": schema,
+                    "temperature": 0,
+                    "thinking_config": {"thinking_level": "minimal"},
+                    "http_options": {"timeout": extraction.QUICK_TIMEOUT},
+                },
             )
             return schema.model_validate_json(response.text)
         except Exception as e:
@@ -188,7 +199,9 @@ def read_receipt(order_id: str, manual: dict, message: dict, attachment: dict, n
         db.bucket().blob(path).upload_from_string(data, content_type=content_type, if_generation_match=0)
     except PreconditionFailed:
         pass  # the same file is already stored
-    receipt = transcribe(data, content_type, gcash.SYSTEM, gcash.Receipt)
+    with ThreadPoolExecutor(1) as pool:  # Model Armor screens the screenshot while Gemini reads it, so it adds no wait
+        looks = pool.submit(armor.screen, image=(data, content_type))
+        receipt = transcribe(data, content_type, gcash.SYSTEM, gcash.Receipt)
     ref = gcash.reference(receipt.reference)
     # Copies are caught three ways: the same file, the same reference, or the same amount and minute under another reference (an edited copy).
     reused = first_seen("gcashImages", scope + sha, order_id)["order_id"] != order_id
@@ -200,6 +213,7 @@ def read_receipt(order_id: str, manual: dict, message: dict, attachment: dict, n
     received_at = datetime.fromisoformat(message["created_time"])
     start, since = gcash.window(manual)
     checks = gcash.check_receipt(receipt, manual["amount"], start, received_at, manual["pay_to"], used_elsewhere, reused, twin_reference, since)
+    checks += gcash.screening(looks.result())
     return {
         "id": sha[:16],
         "message_id": message["id"],

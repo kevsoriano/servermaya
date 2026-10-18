@@ -38,8 +38,16 @@ GRAPH = "https://graph.facebook.com"
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 
 
+# The demo's AI customer only writes chat lines in character (code decides taps and receipts), so it runs on the Lite model.
+GEMINI_DEMO_MODEL = os.environ.get("GEMINI_DEMO_MODEL", "gemini-3.5-flash-lite")
+
+
 # Memory Bank for past claim decisions: projects/.../locations/global/reasoningEngines/... from `make memory-bank`. Empty turns it off.
 MEMORY_BANK = os.environ.get("MEMORY_BANK", "")
+
+
+# Model Armor screens customer messages and GCash receipt screenshots: projects/.../locations/us/templates/... Empty turns it off.
+MODEL_ARMOR_TEMPLATE = os.environ.get("MODEL_ARMOR_TEMPLATE", "")
 
 
 # ponytail: one store, add real store ids when a second seller onboards

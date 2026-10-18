@@ -150,6 +150,11 @@ def inline(text: str | None) -> str:
     return " / ".join(line.strip() for line in (text or "").translate(FORGERY).splitlines() if line.strip())
 
 
+# 25 s for the short calls (draft, checks, brief, receipts, demo customer), each retried once by its caller: a stuck call is
+# cut off and retried rather than held to the client's 90 s. Their median is 2-5 s.
+QUICK_TIMEOUT = 25_000
+
+
 def ask(client, model: str, system: str, schema, messages: list[dict], context: str = ""):
     """Send the numbered chat to Gemini as data and parse the reply into `schema`. context: other tagged data before the chat."""
     chat = "\n".join(
@@ -167,6 +172,7 @@ def ask(client, model: str, system: str, schema, messages: list[dict], context: 
             "temperature": 0,
             # Default thinking took ~12s on a six-message chat; low gave the same result in ~5s.
             "thinking_config": {"thinking_level": "low"},
+            "http_options": {"timeout": QUICK_TIMEOUT},
         },
     )
     return schema.model_validate_json(response.text)

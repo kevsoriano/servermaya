@@ -1,5 +1,6 @@
 import hashlib
 import secrets
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
@@ -157,10 +158,15 @@ def review_claim(order_id: str, cid: str, user: dict = Depends(auth.current_user
     auth.ai_budget(user, 1 + checked)
     expect = (rules.code(order_id), order["draft"]["recipient_name"]["value"])
     video_checks: dict = {}
-    blocks += cases.video_records(db.clients()[0], config.GEMINI_MODEL, shown, expect, shas, db.store_doc().collection("videoChecks"), video_checks)
     proofs = [(label, part, shas.get(label)) for label, part in shown if label in cases.PROOFS]
-    texts, parcel_checks = cases.parcel_records(db.clients()[0], config.GEMINI_MODEL, proofs, expect, db.store_doc().collection("photoChecks"))
-    blocks += texts
+    # The video and courier-photo checks don't depend on each other, so they run at the same time.
+    with ThreadPoolExecutor(2) as pool:
+        videos = pool.submit(
+            cases.video_records, db.clients()[0], config.GEMINI_MODEL, shown, expect, shas, db.store_doc().collection("videoChecks"), video_checks
+        )
+        parcels = pool.submit(cases.parcel_records, db.clients()[0], config.GEMINI_MODEL, proofs, expect, db.store_doc().collection("photoChecks"))
+        texts, parcel_checks = parcels.result()
+        blocks += videos.result() + texts
     # The custody check reads the checks just made, so the review can cite where the chain first broke.
     current = {**order, **cases.with_checks(order, cid, video_checks, parcel_checks)}
     blocks.append(custody.record(custody.check(current, cases.claim(current, cid))))

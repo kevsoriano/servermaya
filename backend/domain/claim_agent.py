@@ -46,7 +46,8 @@ TOOLS = """
 You start with the claim [C], any photos the customer sent with it [CP1, CP2, ...], the check of each video they sent [CV1C, ...]
 and the custody check [COC]. The order's records are not in the
 message: fetch them with the tools read_order, read_chat, read_packing and read_delivery. Call every tool whose records could
-support or contradict the claim; when unsure, call it. You can cite only IDs you were given or fetched; any other is dropped.
+support or contradict the claim; when unsure, call it. Call all of them in your first turn, together, rather than one at a
+time. You can cite only IDs you were given or fetched; any other is dropped.
 read_past_decisions recalls how this shop decided similar claims from other customers [P1, ...]. Use it to suggest an outcome
 consistent with the shop's practice and cite it when you do. Past decisions say nothing about this customer or this order:
 never use them as evidence for or against the claim."""

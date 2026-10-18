@@ -120,3 +120,14 @@ def test_payment_claim_says_whether_payment_details_were_shared_first():
     # A check on the first order is history and gets no line.
     [first] = risk.resolve([claim(chat["messages"][4])], [old])
     assert risk.payment_context(first, chat["messages"], [old]) == []
+
+
+def test_checks_are_not_reanalysed_for_seller_messages_alone():
+    from domain import signals as risk
+
+    msgs = [{"id": "c1", "from_page": False}, {"id": "s1", "from_page": True}, {"id": "s2", "from_page": True}]
+    assert risk.seller_only_since(msgs, "s2")  # nothing new
+    assert risk.seller_only_since(msgs, "c1")  # only the seller wrote since
+    assert not risk.seller_only_since(msgs + [{"id": "c2", "from_page": False}], "c1")  # the customer wrote again
+    assert not risk.seller_only_since(msgs, None)  # never analysed
+    assert not risk.seller_only_since(msgs, "gone")  # the analysed message is no longer in the chat
