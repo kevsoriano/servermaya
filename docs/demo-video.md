@@ -4,9 +4,12 @@ Four scripted flows for the demo video (up to 4 minutes), recorded with Playwrig
 the **Patterns** tab, showing a pattern the seller's own action just added to. Each run gives an MP4 that starts on the
 loaded chat list (sign-in is cut), one screenshot per step and a timing file.
 
-Every flow opens with a short look at Patterns, the "before". The tab remembers each card's count in the browser, so at
-the end a card shows **Up from 3 since your last look** or **Appeared since your last look**. Cut the opening look in
-editing if the previous flow already showed the "before".
+Each video starts on the chat list and goes straight into its chat; Patterns appears only at the end. Before the cut, the
+recorder opens Patterns once, unseen: the tab remembers each card's count in the browser, so the last step's card still
+shows **Up from 3 since your last look** or **Appeared since your last look**.
+
+Warm up before recording (the warm-up section below): the first session after the servers start compiles the frontend and
+opens the backend's connections, and costs a take 10–15 s.
 
 The script only acts as the seller. Demo customers are played by AI and answer on their own after each seller message
 (Mark in A, Dan in B), with a "typing" indicator while Gemini writes. Code, not the AI, decides when they tap a button and
@@ -15,13 +18,14 @@ persona's words, so it can fail to come in a take: re-record.
 
 | Flow | Chat | What it shows | On Patterns | Last length |
 |---|---|---|---|---|
-| A | Mark | The brief and the checks alert, a draft order, Mark taps Confirm in chat, "Already paid by GCash" and Mark answers with a receipt paid to someone else; the receipt check shows the recipient does not fit | **Count goes up**: "Receipts that don't fit the order or your GCash account" from 3 to 4 (Mark, Paolo, Grace, Jerome), each with a push to ship first | 1:00 |
-| B | Dan | A new customer, Binance and a code request, the checks; the seller says GCash only and Dan threatens to post about the shop in Facebook groups and report the page, which the checks add | **New card**: "Asked you to open an account or share a code", 3 chats (Dan, Kim's Maya code, Ramon's OTP link) against 0 before | 0:56 |
-| C | Bea | Her photo and unboxing video of a cracked mug; the seller opens a claim from her messages, then Review with AI (the packing video shows it whole, her video shows it sealed, then cracked) | **New card**: "Damage reports", 3 this week (Bea, Nico, Lito) against 1 a week before; below it, Sample Rider 2 carried most of them | 1:18 |
-| D | Carla | Her box arrived with only crumpled paper inside; the seller opens a Missing item claim from her messages, with the custody check beside it | **Count goes up**: "Missing or replaced contents" on Sample Rider 3, from 2 to 3 parcels (Mark, Rico, Carla), against 0 of 13 for other drivers | 0:47 |
+| A | Mark | The brief and the checks alert, a draft order, Mark taps Confirm in chat, "Already paid by GCash" and Mark answers with a receipt paid to someone else; the receipt check shows the recipient does not fit | **Count goes up**: "Receipts that don't fit the order or your GCash account" from 3 to 4 (Mark, Paolo, Grace, Jerome), each with a push to ship first | 1:19 |
+| B | Dan | A new customer, Binance and a code request, the checks; the seller says GCash only and Dan threatens to post about the shop in Facebook groups and report the page, which the checks add | **New card**: "Asked you to open an account or share a code", 3 chats (Dan, Kim's Maya code, Ramon's OTP link) against 0 before | 0:55 |
+| C | Bea | Her photo and unboxing video of a cracked mug; the seller opens a claim from her messages, then Review with AI (the packing video shows it whole, her video shows it sealed, then cracked) | **New card**: "Damage reports", 3 this week (Bea, Nico, Lito) against 1 a week before; below it, Sample Rider 2 carried most of them | 1:02 |
+| D | Carla | Her box arrived with only crumpled paper inside; the seller opens a Missing item claim from her messages, with the custody check beside it | **Count goes up**: "Missing or replaced contents" on Sample Rider 3, from 2 to 3 parcels (Mark, Rico, Carla), against 0 of 13 for other drivers | 0:34 |
 
 Lengths are untrimmed, with pauses standing in for narration (halved in A). Gemini waits (the draft, the claim review) and
-the Patterns tab loading (2–3 s) are worth trimming. Together the four flows are about 4:00 untrimmed; if they don't fit
+the Patterns tab loading (2–3 s) are worth trimming. Together the four flows are about 3:50 untrimmed. A's receipt check took 33 s in its take, against 5–6 s on a good day, while
+Vertex was slow reading images: the viewer only waits on "Not checked yet" meanwhile, so cut it down; if they don't fit
 with an intro, drop C or D first, since both end on a driver card.
 
 The cards never say a customer did anything wrong. Narrate what they show: receipts that don't fit, requests to open an
@@ -48,7 +52,7 @@ are stored when the demo is seeded, so the counts are the same on every run. The
 Paste this into Claude Code from the repo root:
 
 > Re-record the demo video flows A, B, C and D by following docs/demo-video.md. Set up the recorder in your scratchpad, run
-> the backend without --reload and the frontend dev server, record the flows one after the other, and check the screenshots
+> the backend without --reload and the frontend dev server, run warmup.mjs once, record the flows one after the other, and check the screenshots
 > of the key steps (listed in the doc) before reporting. If a step fails because the UI changed, update the script's
 > selectors or waits rather than the app, and tell me what you changed. Report each video's path and length, and stop the
 > servers you started when done.
@@ -60,7 +64,7 @@ mkdir rec && cd rec
 echo '{"type":"module"}' > package.json
 npm install playwright@1.64.1 ffmpeg-static@5.3.0
 npx playwright install chromium
-# then save the script below as record.mjs
+# then save the two scripts at the end of this doc as record.mjs and warmup.mjs
 ```
 
 ## Run
@@ -74,7 +78,8 @@ files under `backend/` (most in `.venv`) and made every request about 5× slower
 cd backend && uv run --env-file .env uvicorn main:app --port 8000
 # terminal 2
 cd frontend && npm run dev          # http://localhost:5173 (the Firebase key allows only this origin locally)
-# terminal 3, in the rec folder: one after the other, not in parallel
+# terminal 3, in the rec folder: warm up once, then record one after the other, not in parallel
+node warmup.mjs          # the script below record.mjs: compiles the frontend, connects the backend, caches the briefs
 node record.mjs A out-A
 node record.mjs B out-B
 node record.mjs C out-C
@@ -92,27 +97,26 @@ step's action finishes) and `flow-A-timing.json` (step start times in the trimme
 The script prints each step's time and `FAILED` on a failure; a failed step still continues, so read the log. Then look
 at these screenshots:
 
-- **A-01**: Patterns, "Receipts that don't fit…" with 3 chats: Paolo, Grace, Jerome.
-- **A-02**: Mark's brief and the orange "2 to verify before shipping" alert.
-- **A-05**: Mark's own "Confirm #… v1" under the summary, and the Confirmed row "By the customer".
-- **A-06**: Mark's words (in character, such as "Here is the screenshot. Please ship it today!") and his receipt below them.
-- **A-08**: the viewer with Recipient name ✗ and Recipient number ✗ (MA\*\*A S\*\*\*\*S, +63 918 555 \*\*\*\*), Amount ✓.
-- **A-10**: the same card with **Up from 3 since your last look**, 4 chats, Mark Dizon listed "today".
-- **B-01**: Patterns with no "Asked you to open an account" card.
-- **B-04**: Dan's card "Asked you to open an account, use a link or share a code" with its What to do.
-- **B-05**: the seller's "we only accept GCash" and Dan's answer below it, a threat to post about the shop or report the
-  page (in character, such as "If you won't do it, I'll just report this page and post about you in Facebook groups").
-- **B-06**: Dan's checks with "Threatened to post about you or report your page", quoting him, and its What to do.
-- **B-07**: "Asked you to open an account or share a code" with **Appeared since your last look**: Dan today, Kim, Ramon.
-- **C-02**: Bea's chat: her photo and unboxing video.
-- **C-04**: the new Damaged claim with her words, photo and video.
-- **C-05**: the AI review's findings beside the claim (for example "Supported: … damaged …" and a suggested action).
-- **C-06**: "Damage reports" with **Appeared since your last look**, 3 reports: Bea today, Nico, Lito. Bars 2 / 1 / 0 / 3.
-- **C-07**: "Damage and non-receipt concentration · Driver Sample Rider 2", higher than the rest of the store.
-- **D-01**: "Missing or replaced contents · Driver Sample Rider 3", 2 of 6 delivered shipments.
-- **D-02**: Carla's chat: the open box with crumpled paper.
-- **D-04**: the Missing item claim, her words and photo, "Custody check: … suggests Unknown".
-- **D-05**: the same card with **Up from 2 since your last look**, 3 of 6: Mark, Carla, Rico.
+- **A-01**: Mark's brief and the orange "2 to verify before shipping" alert.
+- **A-04**: Mark's own "Confirm #… v1" under the summary, and the Confirmed row "By the customer".
+- **A-05**: Mark's words (in character, such as "Here is the screenshot. Please ship it today!") and his receipt below them.
+- **A-07**: the viewer with Recipient name ✗ and Recipient number ✗ (MA\*\*A S\*\*\*\*S, +63 918 555 \*\*\*\*), Amount ✓, and
+  Model Armor's "No text aimed at the AI" ✓.
+- **A-09**: "Receipts that don't fit…" with **Up from 3 since your last look**, 4 chats, Mark Dizon listed "today".
+- **B-03**: Dan's card "Asked you to open an account, use a link or share a code" with its What to do.
+- **B-04**: the seller's "we only accept GCash" and Dan's answer below it, a threat to post about the shop or report the
+  page (in character, such as "Otherwise I'll report this page and post about your shop in Facebook groups").
+- **B-05**: Dan's checks with "Threatened to post about you or report your page", quoting him, and its What to do.
+- **B-06**: "Asked you to open an account or share a code" with **Appeared since your last look**: Dan today, Kim, Ramon.
+- **C-01**: Bea's chat: her photo and unboxing video.
+- **C-03**: the new Damaged claim with her words, photo and video.
+- **C-04**: the AI review's findings (for example "Supported: … damaged …") and its suggested action.
+- **C-05**: "Damage reports" with **Appeared since your last look**, 3 reports: Bea today, Nico, Lito. Bars 2 / 1 / 0 / 3.
+- **C-06**: "Damage and non-receipt concentration · Driver Sample Rider 2", higher than the rest of the store.
+- **D-01**: Carla's chat: the open box with crumpled paper.
+- **D-03**: the Missing item claim, her words and photo, "Custody check: … suggests Unknown".
+- **D-04**: "Missing or replaced contents · Driver Sample Rider 3" with **Up from 2 since your last look**, 3 of 6: Mark,
+  Carla, Rico.
 
 Each run is a new demo visitor, so it starts from the seeded state. Gemini times vary: the same step can take 4 s or 60 s
 (the draft order took 57 s once). Mark's and Dan's words change from take to take; Mark's taps and receipts do not.
@@ -231,13 +235,19 @@ await page.goto(URL)
 await click('button:has-text("Try the demo")')
 await chat('Mark Dizon').waitFor({ timeout: 120_000 })
 await page.waitForTimeout(500) // the list's previews and avatars settle
+// Patterns, unseen: one visit before the cut, so each flow's last step can show what its action changed ("Up from 3 since
+// your last look", "Appeared since your last look") without spending video time on the cards as they were.
+await click('nav.tabs button:has-text("Patterns")')
+await page.locator('.signal.pattern').first().waitFor({ timeout: 90_000 })
+await click('nav.tabs button:has-text("Conversations")')
+await chat('Mark Dizon').waitFor({ timeout: 60_000 })
+await page.waitForTimeout(500)
 const cut = (Date.now() - t0) / 1000
 console.log(`video starts at ${cut.toFixed(1)}s (signed in, chats loaded)`)
 // The video's clock starts a little after the page opens, so the cut lands slightly late: hold the loaded list on screen first.
 await page.waitForTimeout(1500)
 
-// Patterns, before and after: each flow looks at the tab first, so its last step can show what the seller's action changed
-// ("Up from 3 since your last look", or a card that appeared).
+// Patterns at the end of each flow: the card the seller's action changed, marked against the unseen visit before the cut.
 const patternsTab = async () => {
   await click('nav.tabs button:has-text("Patterns")')
   await page.locator('.signal.pattern').first().waitFor({ timeout: 90_000 })
@@ -248,7 +258,6 @@ const showCard = async (text) => {
   await card.evaluate((el) => el.scrollIntoView({ block: 'start', behavior: 'smooth' }))
   await page.waitForTimeout(800)
 }
-const conversationsTab = () => click('nav.tabs button:has-text("Conversations")')
 const openBrief = async (name) => {
   await chat(name).click()
   await page.locator('.brief .brief-text p:not(.muted)').waitFor({ timeout: 90_000 })
@@ -276,12 +285,7 @@ const openClaim = async () => {
 }
 
 if (flow === 'A') {
-  await step('Patterns: 3 receipts that did not fit this week', async () => {
-    await patternsTab()
-    await showCard("Receipts that don't fit")
-  }, 4000)
   await step('Open Mark: AI brief, and an alert: 2 to verify', async () => {
-    await conversationsTab()
     await openBrief('Mark Dizon')
     await page.locator('.checks-alert').waitFor({ timeout: 90_000 })
   }, 4000)
@@ -315,12 +319,7 @@ if (flow === 'A') {
     await showCard('Up from 3')
   }, 7000)
 } else if (flow === 'B') {
-  await step('Patterns: no card for account requests yet', async () => {
-    await patternsTab()
-    await page.waitForTimeout(500)
-  }, 3000)
   await step('Open Dan: AI brief (new customer, Binance, code)', async () => {
-    await conversationsTab()
     await openBrief('Dan Cortez')
   }, 4000)
   await step('Click the alert: his checks before shipping', async () => {
@@ -348,12 +347,7 @@ if (flow === 'A') {
     await showCard('Asked you to open an account')
   }, 7000)
 } else if (flow === 'C') {
-  await step('Patterns: no rise in damage reports yet', async () => {
-    await patternsTab()
-    await page.waitForTimeout(500)
-  }, 3000)
   await step('Open Bea: her photo and unboxing video of a cracked mug', async () => {
-    await conversationsTab()
     await openBrief('Bea Villanueva')
     await page.locator('.chat .scroll').evaluate((el) => el.scrollTo(0, el.scrollHeight))
   }, 4000)
@@ -363,7 +357,11 @@ if (flow === 'A') {
     const reviewed = page.waitForResponse((r) => /\/claims\/[^/]+\/review$/.test(r.url()) && r.request().method() === 'POST', { timeout: 180_000 })
     await click('section.packing div.claim:not(.done) button:has-text("Review with AI")')
     await reviewed
-    await showClaim()
+    // The findings, not the top of the claim: her photo and video above them fill the screen.
+    const review = page.locator('section.packing div.claim:not(.done) .review').first()
+    await review.waitFor({ timeout: 30_000 })
+    await review.evaluate((el) => el.scrollIntoView({ block: 'start' }))
+    await page.waitForTimeout(600)
   }, 7000)
   await step('Patterns: a new card, 3 damage reports this week', async () => {
     await patternsTab()
@@ -371,12 +369,7 @@ if (flow === 'A') {
   }, 6000)
   await step('Below: the same rider carried most of them', () => showCard('Driver Sample Rider 2'), 5000)
 } else {
-  await step('Patterns: Sample Rider 3, 2 parcels with missing or replaced contents', async () => {
-    await patternsTab()
-    await showCard('Missing or replaced contents')
-  }, 4000)
   await step('Open Carla: the box arrived with only paper inside', async () => {
-    await conversationsTab()
     await openBrief('Carla Villamor')
     await page.locator('.chat .scroll').evaluate((el) => el.scrollTo(0, el.scrollHeight))
   }, 4000)
@@ -400,4 +393,38 @@ const total = (Date.now() - t0) / 1000 - cut
 const steps = log.map((s) => ({ ...s, start: +(s.start - cut).toFixed(1) }))
 fs.writeFileSync(`${out}/flow-${flow}-timing.json`, JSON.stringify({ total, cut, steps }, null, 2))
 console.log(`total ${total.toFixed(1)}s after the cut`)
+```
+
+## warmup.mjs
+
+Run once after starting the servers, before the takes. Each line prints ok or FAIL with the time; fix a FAIL before
+recording.
+
+```js
+// A throwaway demo session before the takes: compiles the frontend, opens the backend's Firestore and Gemini connections,
+// and writes the briefs of the four flows' customers (briefs are shared by every visitor with the same chat history).
+import { chromium } from 'playwright'
+const b = await chromium.launch()
+const p = await (await b.newContext({ viewport: { width: 1440, height: 900 } })).newPage()
+p.on('console', (m) => m.type() === 'error' && console.log('CONSOLE', m.text().slice(0, 160)))
+const s = Date.now(), t = () => `${((Date.now() - s) / 1000).toFixed(1)}s`
+const ok = async (label, fn) => {
+  try { await fn(); console.log(`ok   ${label.padEnd(30)} ${t()}`) } catch (e) { console.log(`FAIL ${label.padEnd(30)} ${t()} ${e.message.split('\n')[0]}`) }
+}
+await p.goto('http://localhost:5173')
+await ok('sign in and seed', async () => {
+  await p.locator('button:has-text("Try the demo")').click()
+  await p.locator('.threads button:has-text("Mark Dizon")').first().waitFor({ timeout: 120000 })
+})
+for (const name of ['Mark Dizon', 'Dan Cortez', 'Bea Villanueva', 'Carla Villamor'])
+  await ok(`brief: ${name}`, async () => {
+    await p.locator(`.threads button:has-text("${name}")`).first().click()
+    await p.locator('.brief .brief-text p:not(.muted)').waitFor({ timeout: 120000 })
+  })
+await ok('checks (Gemini) on Carla', () => p.locator('section.signals').first().waitFor({ timeout: 120000 }))
+await ok('Patterns', async () => {
+  await p.locator('nav.tabs button:has-text("Patterns")').click()
+  await p.locator('.signal.pattern').first().waitFor({ timeout: 90000 })
+})
+await b.close()
 ```

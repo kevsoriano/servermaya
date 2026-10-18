@@ -1,4 +1,4 @@
-import { GoogleAuthProvider, onAuthStateChanged, signInAnonymously, signInWithPopup, signOut, type User } from 'firebase/auth'
+import { onAuthStateChanged, signInAnonymously, signOut, type User } from 'firebase/auth'
 import { useEffect, useState } from 'react'
 import Boundary from './lib/Boundary'
 import { setMapsConfig } from './lib/maps'
@@ -60,7 +60,6 @@ export default function App() {
     [],
   )
 
-  const signIn = () => signInWithPopup(auth, new GoogleAuthProvider()).catch((e) => setError(e.message))
   const tryDemo = () => signInAnonymously(auth).catch((e) => setError(e.message))
   // A demo visitor who signs out cannot come back to the same demo, so say so first.
   const leave = () => (!me?.demo || confirm('Signing out ends this demo. Your demo chats and orders will not come back.')) && signOut(auth)
@@ -86,7 +85,6 @@ export default function App() {
               <button className="primary" onClick={tryDemo}>
                 Try the demo
               </button>
-              <button onClick={signIn}>Seller sign-in with Google</button>
             </p>
           </>
         )}
