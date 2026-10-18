@@ -1,4 +1,4 @@
-# Seller Evidence Assistant — End-to-End Product Requirements
+# Suri — End-to-End Product Requirements
 
 Version 0.5 · 12 October 2026 · Hackathon MVP proposal
 

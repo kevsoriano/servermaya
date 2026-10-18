@@ -60,7 +60,7 @@ export default function App() {
   if (!me)
     return (
       <main className="card">
-        <h1>Seller Evidence Assistant</h1>
+        <h1>Suri</h1>
         {error && <p role="alert">{error}</p>}
         {user ? (
           <button onClick={() => signOut(auth)}>Sign out</button>
@@ -84,7 +84,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <strong className="brand">Seller Evidence Assistant</strong>
+        <strong className="brand">Suri</strong>
         <nav className="tabs">
           <button onClick={() => (setChatId(undefined), setTab('conversations'))} aria-current={tab === 'conversations'}>
             Conversations

@@ -37,6 +37,14 @@ export default function Orders({ initial }: { initial?: string }) {
   const conversation = open && fromChat(open) ? open.source.conversation_id : undefined
   // The live chat, so a complaint there can become a claim and a pin the customer sent can be used. Reloaded after a send.
   const [sends, setSends] = useState(0)
+  // A demo customer who could not answer, for this order, so the seller can ask again instead of waiting for a reply
+  const [replyError, setReplyError] = useState<{ order: string; message: string }>()
+  const answer = (order: string, conversationId: string) => {
+    setReplyError(undefined)
+    customerReply(conversationId)
+      .catch((e) => setReplyError({ order, message: e.message }))
+      .finally(() => setSends((n) => n + 1))
+  }
   useEffect(() => {
     if (!conversation) return
     load<ChatMessage[]>(`/conversations/${conversation}`).then(
@@ -78,6 +86,14 @@ export default function Orders({ initial }: { initial?: string }) {
         </ul>
       </aside>
       <section className="pane side wide">
+        {open && conversation && replyError?.order === open.id && (
+          <p className="turn-error" role="alert">
+            {replyError.message}{' '}
+            <button type="button" onClick={() => answer(open.id, conversation)}>
+              Try again
+            </button>
+          </p>
+        )}
         {open ? (
           <OrderView
             key={open.id}
@@ -87,7 +103,7 @@ export default function Orders({ initial }: { initial?: string }) {
             onSent={() => {
               setSends((n) => n + 1)
               // A demo customer answers here too; the chat reloads once they have.
-              if (conversation?.startsWith('demo_')) customerReply(conversation).finally(() => setSends((n) => n + 1))
+              if (conversation?.startsWith('demo_')) answer(open.id, conversation)
             }}
           />
         ) : (

@@ -1,4 +1,4 @@
-# Seller Evidence Assistant
+# Suri
 
 An assistant for small sellers who take orders in Messenger and get paid by GCash. It turns a chat into an order, then checks every claim before the seller ships or refunds: payments, packing, delivery, and customer complaints. Each check shows what was claimed, what was verified, and what is still missing.
 
