@@ -35,7 +35,7 @@ A small Philippine online seller keeps the order in a Messenger thread, the paym
 | **Claims** | The customer reports a problem with photos. An ADK agent starts from the claim and the customer's photos, fetches the order's records with read-only tools (the order and payment, the chat, packing with its photos, delivery events), recalls how the shop decided similar claims from Memory Bank, and recommends an outcome, citing evidence IDs. None of its tools can change anything. Its after-agent callback runs code that drops any citation to a record it was not given or did not fetch, and holds back findings left without one. |
 | **Custody check and cause** | Each claim's evidence chain (packed, picked up, in transit, dropped off, opened, returned) is read in code on every load. The courier's pickup and drop-off photos each get a narrow Gemini check (the parcel's outside, its seal, its label, which code compares). The first step where the parcel looks wrong suggests a cause: the seller's error, the courier in transit, the customer, or unknown. The seller records the cause with the decision. A missing photo or video never counts against the courier or the customer. |
 | **Refunds, replacements and returns** | Separate, explicit seller actions after a decision: a PayMongo API refund, a recorded manual refund, or a replacement shipment. The seller can ask for the item back: the customer sends it with a courier of their choice and the seller records the courier and tracking number they give, then marks it received, photographs it, checks it against the order and records what came back. The seller books nothing. A refund on that claim waits, in code, until the item is received. Old records are kept, never overwritten. |
-| **Patterns** | Store-wide cards. **Rising this week** compares the last 7 days with the 3 weeks before: receipts that don't fit the order or the shop's GCash, requests to open an account or share a code (from the chat checks), and damage reports. Below are concentrations: a payment reference reused across orders, repeated claims, damage concentrated on a courier, vehicle, area, driver or product, and missing or replaced contents on one driver. Only claims recorded as transit or unknown count against a courier or driver. Returns by cause shows counts, rates and cost. Each card shows its counts, the rest of the store for comparison, and its limitations. Cards never block anything. In the demo, seven chats from the past week feed these cards, and most chats come with earlier orders from the last few weeks, delivered by simulated sandbox riders, some with a claim decided and refunded, so Orders and Patterns have history to show. |
+| **Patterns** | Cards across the shop's orders; in the demo, each session's cards come from its own demo chats and orders. **Rising this week** compares the last 7 days with the 3 weeks before: receipts that don't fit the order or the shop's GCash, requests to open an account or share a code (from the chat checks), and damage reports. Below are concentrations: a payment reference reused across orders, repeated claims, damage concentrated on a courier, vehicle, area, driver or product, and missing or replaced contents on one driver. Only claims recorded as transit or unknown count against a courier or driver. Returns by cause shows counts, rates and cost. Each card shows its counts, the rest of the store for comparison, and its limitations. Cards never block anything. In the demo, seven chats from the past week feed these cards, and most chats come with earlier orders from the last few weeks, delivered by simulated sandbox riders, some with a claim decided and refunded, so Orders and Patterns have history to show. |
 
 ## Design rules
 
@@ -95,14 +95,14 @@ backend/    FastAPI on Cloud Run
   tests/            unit tests by area (make test)
   evals/run.py      live evaluation against Gemini (make eval)
 frontend/   React + Vite on Firebase Hosting
-  src/App.tsx         sign-in and the four tabs
+  src/App.tsx         the access code and the four tabs
   src/conversations/  chat list, thread, reply box, checks before shipping, image viewer
   src/orders/         order list and order panel: GCash, packing, dispatch, claims and refunds
   src/settings/       catalog, GCash account and pickup address
   src/patterns/       store-wide pattern cards
   src/customer/       the page a customer sees after paying with PayMongo
   src/lib/            Firebase and API calls, display formatting, receipt check labels, maps, the per-tab error boundary
-docs/       product requirements (suri-prd.md), the demo video recording guide (demo-video.md), eval results and the submission deck
+docs/       product requirements (suri-prd.md), eval results and the submission deck
 ```
 
 ## Running locally
@@ -118,7 +118,7 @@ make eval    # live Gemini evaluation, writes docs/eval-results.md
 
 The demo chats are defined in [backend/seed/demo.py](backend/seed/demo.py) and the evaluation cases in [backend/evals/run.py](backend/evals/run.py), with the latest results in [docs/eval-results.md](docs/eval-results.md).
 
-Fill in `backend/.env` with your own keys. It is ignored by git.
+Fill in `backend/.env` with your own keys, and set `ACCESS_CODE` to the code you will enter in the app; the Firebase project needs Anonymous sign-in turned on. The file is ignored by git.
 
 ## Roadmap
 
