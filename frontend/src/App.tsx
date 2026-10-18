@@ -104,10 +104,8 @@ export default function App() {
         <h1 className="logo">
           <Logo />
         </h1>
-        <p>
-          You are the seller: demo chats where AI plays each customer, and the shop's Messenger inbox. Nothing reaches real money. Enter the
-          access code that came with the submission.
-        </p>
+        <p>You are the seller: demo chats where AI plays each customer, and the shop's Messenger inbox. Nothing reaches real money.</p>
+        <p>To get in, enter the access code from the "Try it" section of the GitHub repository's README.</p>
         {error && <p role="alert">{error}</p>}
         <form className="actions" onSubmit={enter}>
           <label>
