@@ -1359,7 +1359,7 @@ def run_claim(model: tuple[str, str], case: dict) -> dict:
     shown = [(label, types.Part.from_bytes(data=media[label]()[0], mime_type=media[label]()[1])) for label, _ in images if label in media]
     start = time.monotonic()
     expect = (case.get("code", "ANA01"), order["draft"]["recipient_name"]["value"])
-    client = genai.Client(vertexai=True, project=PROJECT, location="global")
+    client = genai.Client(vertexai=True, project=PROJECT, location="global", http_options={"timeout": 90_000})  # as main's: a hung call fails
     videos: dict = {}
     with ThreadPoolExecutor(2) as pool:  # at the same time, as the route does
         checking = pool.submit(cases.video_records, client, MODEL, shown, expect, out=videos)
