@@ -9,7 +9,7 @@ MIN_INSTANCES ?= 1
 # for up to 90 s, Cloud Run starts another instance instead of queueing requests inside a busy one.
 CONCURRENCY ?= 30
 # read from backend/.env, but sent to Cloud Run through Secret Manager instead of as plain env vars
-SECRETS := MESSENGER_PAGE_TOKEN PAYMONGO_SECRET_KEY PAYMONGO_WEBHOOK_SECRET LALAMOVE_API_KEY LALAMOVE_API_SECRET
+SECRETS := ACCESS_CODE MESSENGER_PAGE_TOKEN PAYMONGO_SECRET_KEY PAYMONGO_WEBHOOK_SECRET LALAMOVE_API_KEY LALAMOVE_API_SECRET
 # sent the same way when set; while empty, the Messenger webhook (or the Maps address lookup) stays off
 # MAPS_BROWSER_KEY and MAPS_MAP_ID reach every browser through /api/me; they are kept here only so no key sits in plain env vars
 OPTIONAL_SECRETS := MESSENGER_APP_SECRET MESSENGER_VERIFY_TOKEN MAPS_SERVER_KEY MAPS_BROWSER_KEY MAPS_MAP_ID
@@ -39,7 +39,7 @@ setup: backend/.env
 
 backend/.env:
 	cp backend/.env.example $@
-	@echo "Created $@ - set ALLOWLIST_EMAIL"
+	@echo "Created $@ - set ACCESS_CODE"
 
 dev:
 	@$(MAKE) -j2 dev-backend dev-frontend
@@ -62,7 +62,7 @@ memory-bank: backend/.env
 
 deploy: deploy-backend deploy-frontend
 
-# ^;^ switches gcloud's list delimiter to ';' so the comma-separated allowlist survives
+# ^;^ switches gcloud's list delimiter to ';' so a value with a comma in it survives
 deploy-backend: runtime-sa secrets
 	gcloud run deploy api --source backend --project $(PROJECT) --region $(REGION) \
 		--service-account $(RUN_SA) --allow-unauthenticated --min-instances $(MIN_INSTANCES) --concurrency $(CONCURRENCY) \

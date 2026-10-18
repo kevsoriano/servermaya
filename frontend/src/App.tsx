@@ -1,5 +1,5 @@
 import { onAuthStateChanged, signInAnonymously, signOut, type User } from 'firebase/auth'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Boundary from './lib/Boundary'
 import { setMapsConfig } from './lib/maps'
 import Conversations from './conversations/Conversations'
@@ -16,6 +16,8 @@ type Me = {
   email: string
   name: string | null
   demo: boolean
+  /** this session has entered the access code: the only way in */
+  admitted: boolean
   reply_hours?: number
   maps?: { key: string; map_id: string } | null
 }
@@ -39,55 +41,80 @@ export default function App() {
   const [orderId, setOrderId] = useState<string>() // the order to open in the Orders tab, such as one opened from its chat
   const [chatId, setChatId] = useState<string>() // the chat to open in Conversations, such as one opened from a pattern
 
+  const [code, setCode] = useState('')
+  const [busy, setBusy] = useState(false)
+  const loads = useRef(0) // only the newest answer counts: an older one must not undo an access code just entered
+
+  const loadMe = async () => {
+    const n = ++loads.current
+    try {
+      const r = await api('/me', { signal: AbortSignal.timeout(20_000) })
+      if (n !== loads.current) return
+      if (r.ok) {
+        const m: Me = await r.json()
+        setMapsConfig(m.maps) // Google Maps for delivery pins, when the backend has a key
+        setMe(m)
+      } else setError(`Backend returned ${r.status}.`)
+    } catch {
+      if (n === loads.current) setError('Could not reach the backend.')
+    }
+  }
+
   useEffect(
     () =>
-      onAuthStateChanged(auth, async (u) => {
+      onAuthStateChanged(auth, (u) => {
         setUser(u)
         setMe(undefined)
         setError('')
-        if (!u) return
-        try {
-          const r = await api('/me', { signal: AbortSignal.timeout(20_000) })
-          if (r.ok) {
-            const m: Me = await r.json()
-            setMapsConfig(m.maps) // Google Maps for delivery pins, when the backend has a key
-            setMe(m)
-          } else setError(r.status === 403 ? `${u.email} is not on the allowlist.` : `Backend returned ${r.status}.`)
-        } catch {
-          setError('Could not reach the backend.')
-        }
+        if (u) loadMe()
       }),
-    [],
+    [], // eslint-disable-line react-hooks/exhaustive-deps -- subscribe once
   )
 
-  const tryDemo = () => signInAnonymously(auth).catch((e) => setError(e.message))
-  // A demo visitor who signs out cannot come back to the same demo, so say so first.
-  const leave = () => (!me?.demo || confirm('Signing out ends this demo. Your demo chats and orders will not come back.')) && signOut(auth)
+  // The one way in: an anonymous session, then the access code, entered once.
+  const enter = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setError('')
+    try {
+      if (!auth.currentUser) await signInAnonymously(auth)
+      const r = await api('/access', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) })
+      if (r.ok) {
+        setCode('')
+        await loadMe()
+      } else setError((await r.json().catch(() => null))?.detail ?? `Backend returned ${r.status}.`)
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  // A session that signs out cannot come back to the same demo chats, so say so first.
+  const leave = () =>
+    confirm('Signing out ends this session: your demo chats and orders will not come back, and you will need the access code again.') &&
+    signOut(auth)
 
-  if (user === undefined) return <main className="card">Loading…</main>
+  if (user === undefined || (user && !me && !error)) return <main className="card">Loading…</main>
 
-  if (!me)
+  if (!me?.admitted)
     return (
       <main className="card">
         <h1 className="logo">
           <Logo />
         </h1>
+        <p>
+          You are the seller: demo chats where AI plays each customer, and the shop's Messenger inbox. Nothing reaches real money. Enter the
+          access code that came with the submission.
+        </p>
         {error && <p role="alert">{error}</p>}
-        {user ? (
-          <button onClick={() => signOut(auth)}>Sign out</button>
-        ) : (
-          <>
-            <p>
-              Try it with demo chats: you are the seller, and AI plays each customer. Nothing reaches real customers, Messenger, or real
-              money.
-            </p>
-            <p className="actions">
-              <button className="primary" onClick={tryDemo}>
-                Try the demo
-              </button>
-            </p>
-          </>
-        )}
+        <form className="actions" onSubmit={enter}>
+          <label>
+            Access code <input value={code} onChange={(e) => setCode(e.target.value)} required autoComplete="off" spellCheck={false} />
+          </label>
+          <button className="primary" disabled={busy || !code.trim()}>
+            {busy ? 'Checking…' : 'Enter'}
+          </button>
+        </form>
       </main>
     )
 
@@ -118,7 +145,8 @@ export default function App() {
       </header>
       {me.demo && (
         <p className="demo-banner" role="note">
-          You see only your own demo chats and orders. Payments are PayMongo test mode and deliveries are the Lalamove sandbox.
+          Your own demo chats and orders, and the shop's Messenger inbox, shared by everyone with the code. Payments are PayMongo test mode
+          and deliveries are the Lalamove sandbox.
         </p>
       )}
       <Boundary key={tab}>

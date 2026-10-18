@@ -211,40 +211,50 @@ export default function GcashSettings() {
       <section className="order">
         <h2>GCash account</h2>
         <p>
-          Used when a customer pays by GCash directly. The name and number on their receipt must fit these. Enter the name exactly as
-          registered in GCash, including any middle name.
+          Used when a customer pays by GCash directly. The name and number on their receipt must fit these.
+          {!saved?.demo && ' Enter the name exactly as registered in GCash, including any middle name.'}
         </p>
-        <form onSubmit={save}>
-          <label>
-            Registered name
-            <input required minLength={2} maxLength={100} value={name} onChange={(e) => setName(e.target.value)} />
-          </label>
-          <label>
-            GCash mobile number
-            <input
-              required
-              inputMode="tel"
-              maxLength={30}
-              placeholder="0917 123 4567"
-              value={mobile}
-              onChange={(e) => setMobile(e.target.value)}
-            />
-          </label>
-          <label>
-            GCash QR (optional): a screenshot from GCash → Receive → Receive via QR
-            <input type="file" accept="image/png,image/jpeg" onChange={(e) => pick(e.target.files?.[0])} />
-          </label>
-          <p>
-            <small>
-              {qr
-                ? qr === saved?.qr?.payload
-                  ? `QR saved: GCash shows your name as ${saved.qr.masked_name}. Receipts are compared with that exactly.`
-                  : 'QR read. Save to check it against your name.'
-                : 'Without a QR, receipt names are compared with the name above, letter by letter where GCash shows them.'}
-            </small>
-          </p>
-          <button disabled={busy}>Save</button>
-        </form>
+        {saved?.demo ? (
+          // The demo shop's made-up account: read-only, like every setting in the demo.
+          <dl>
+            <dt>Registered name</dt>
+            <dd>{saved.name}</dd>
+            <dt>GCash mobile number</dt>
+            <dd>{saved.mobile}</dd>
+          </dl>
+        ) : (
+          <form onSubmit={save}>
+            <label>
+              Registered name
+              <input required minLength={2} maxLength={100} value={name} onChange={(e) => setName(e.target.value)} />
+            </label>
+            <label>
+              GCash mobile number
+              <input
+                required
+                inputMode="tel"
+                maxLength={30}
+                placeholder="0917 123 4567"
+                value={mobile}
+                onChange={(e) => setMobile(e.target.value)}
+              />
+            </label>
+            <label>
+              GCash QR (optional): a screenshot from GCash → Receive → Receive via QR
+              <input type="file" accept="image/png,image/jpeg" onChange={(e) => pick(e.target.files?.[0])} />
+            </label>
+            <p>
+              <small>
+                {qr
+                  ? qr === saved?.qr?.payload
+                    ? `QR saved: GCash shows your name as ${saved.qr.masked_name}. Receipts are compared with that exactly.`
+                    : 'QR read. Save to check it against your name.'
+                  : 'Without a QR, receipt names are compared with the name above, letter by letter where GCash shows them.'}
+              </small>
+            </p>
+            <button disabled={busy}>Save</button>
+          </form>
+        )}
         {saved?.qr_image && (
           <div className="packing">
             <Photo

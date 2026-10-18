@@ -1101,6 +1101,19 @@ mark.source.demo {
   color: var(--demo-text);
 }
 
+mark.source.tester {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.tester-note {
+  margin: 0;
+  padding: 0.4rem 1rem;
+  font-size: 0.85rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--accent-soft);
+}
+
 mark.source.provider {
   background: color-mix(in srgb, var(--ok) 15%, transparent);
   color: var(--ok);

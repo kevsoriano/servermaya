@@ -3,8 +3,9 @@ import os
 PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "servermaya-ai-builder-cup")
 
 
-# Comma-separated. Empty means nobody gets in.
-ALLOWLIST = {e.strip().lower() for e in os.environ.get("ALLOWLIST_EMAIL", "").split(",") if e.strip()}
+# The one way in: every visitor signs in anonymously, then enters this code once. Empty means nobody gets in. Given to
+# judges with the submission, never in the repo; changing it shuts out every session admitted with the old one.
+ACCESS_CODE = os.environ.get("ACCESS_CODE", "")
 
 
 PAGE_ID = os.environ.get("MESSENGER_PAGE_ID", "")

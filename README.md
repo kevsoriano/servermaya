@@ -6,14 +6,14 @@ An assistant for small sellers who take orders in Messenger and get paid by GCas
 
 ## Try it
 
-Open the live app and press **Try the demo**. No account is needed.
+Open the live app and enter the **access code** `SURI-XV85-ED5E-Y4YY-TX7Y`. There are no accounts: each code entry is a session of its own. Chats marked **Real tester** are a real person on Messenger, not an AI customer, so they may not answer right away.
 
 - You get fifteen demo chats. You are the seller; each customer is played by AI (Gemini) and answers your messages on their own, in character, sticking to what their chat already says.
 - From a chat: create the draft order and send it for confirmation; the customer taps **Confirm** under the summary in the chat. Send the payment link in the chat and pay with PayMongo's **Simulate payment** (test mode), or pay by GCash. Then check packing photos, book a Lalamove sandbox delivery, ask the customer to tap **Received**, and open Bea's damage report from her chat, with her photo and unboxing video, then review it.
 - To try GCash, press **Send GCash QR code** (or **Already paid by GCash (outside the chat)** for Mark). The customer answers with a made-up receipt, stamped SAMPLE, made in code (the AI never draws an image). Mark's first receipt is always paid to someone else; tell him and he sends one that matches. To confirm a payment the way a seller would, use **Sample history screenshot** in the order, or download the sample GCash history PDF in Settings and upload it (its password is in the next point).
 - **Sample GCash history PDF** (Settings): GCash locks its history exports with a password, and so does the sample. Its password is `delacruz4567`: GCash's rule, the account holder's last name and the last 4 digits of their number, for the demo's made-up account (Juan Dela Cruz, 0917 123 4567). Upload it under Settings to confirm the GCash payments of the matching sample receipts you sent.
 - **New demo chat** pastes any chat in `Customer:` / `Seller:` lines, or leave it empty and the AI customer starts it by asking about something from the catalog. The seeded customers' personalities stay in their own chats; a new chat gets a polite generic customer. **Reset demo chats** starts over.
-- Demo visitors only see their own demo chats and orders, with a made-up GCash account and pickup address. Messenger is live but limited to app testers while the Meta app is in development mode, so real chats are not part of the demo.
+- Each session sees its own demo chats and orders, with a made-up GCash account and pickup address, and the shop's real Messenger inbox and its orders, shared by everyone with the code. The Meta app is in development mode, so only its tester can message the Page. Settings are read-only for everyone.
 
 ## The problem
 
@@ -57,10 +57,10 @@ A small Philippine online seller keeps the order in a Messenger thread, the paym
 | **Veo video generation** | The demo's and the eval's unboxing and packing videos were made once with `veo-3.1-generate-001` from the catalog's photo of the blue mug, so it is the same mug, and every frame is stamped "SAMPLE VIDEO · AI GENERATED" (`backend/seed/make_videos.py`). |
 | **Cloud Run** | The FastAPI backend: all API routes, the Messenger Graph API client, and the Messenger, PayMongo and Lalamove webhooks. One instance is kept warm through judging (`MIN_INSTANCES=1`; deploy with 0 afterwards to scale to zero), each takes 30 requests at once, and it runs as its own service account (`api-runtime`) with only Firestore, the evidence bucket, Vertex AI, Memory Bank, Model Armor and its own secrets. |
 | **Firebase Hosting** | Serves the React frontend and routes `/api/**` to Cloud Run on the same domain. Hosting cuts off a forwarded request after 60 seconds, so the deployed frontend sends the actions that call Gemini straight to Cloud Run's own URL (300 seconds); the API accepts those cross-origin calls only from the app's own pages. |
-| **Firebase Authentication** | Anonymous sign-in for demo visitors, the only way in from the app. The backend also accepts Google sign-in from an email allowlist (the real Messenger inbox), with no button for it in the app. The backend verifies the ID token on every protected route and limits demo visitors to their own demo chats and orders. |
+| **Firebase Authentication** | Anonymous sign-in only, then an access code entered once per session (`ACCESS_CODE`, kept in Secret Manager): no accounts, no email allowlist. The backend verifies the ID token and the session's admission on every protected route; changing the code shuts out every session admitted with the old one, and a session gets 10 tries. It limits each session to its own demo chats and orders, the shop's Messenger inbox and its orders, and read-only settings, and counts every session's AI calls (250 a day each, 5,000 for everyone). |
 | **Firestore** | Orders with their full history, claims, refunds, delivery events, settings and webhook dedupe records. Security rules deny all browser access; everything goes through the backend. |
 | **Cloud Storage** | Evidence files: packing and claim photos, GCash screenshots, images sent in replies. Stored by content hash. |
-| **Secret Manager** | API keys (Messenger, PayMongo, Lalamove, Google Maps) reach Cloud Run as secrets, each readable only by the backend's service account. Source deploys leave `.env` out of the upload (`backend/.gcloudignore`). |
+| **Secret Manager** | The access code and the API keys (Messenger, PayMongo, Lalamove, Google Maps) reach Cloud Run as secrets, each readable only by the backend's service account. Source deploys leave `.env` out of the upload (`backend/.gcloudignore`). |
 
 Other services: Messenger Graph API and webhook (conversations, replies and quick-reply taps), PayMongo (checkout, webhooks, refunds, in test mode), Lalamove (sandbox quotes, bookings and webhooks).
 
@@ -71,7 +71,7 @@ backend/    FastAPI on Cloud Run
   main.py           the app: includes one router per area
   routes/           HTTP routes by area: conversations, demo, orders, customer (the public customer API; its page is not in the demo UI), gcash, packing,
                     dispatch, claims, refunds, returns, patterns, catalog, webhooks
-  core/             config, auth (sign-in, allowlist, demo gate, demo AI limits) and Firestore/Storage access
+  core/             config, auth (anonymous sign-in, the access code, what a session may reach, AI limits) and Firestore/Storage access
   integrations/     Messenger Graph API, PayMongo, Lalamove, Google Maps, Model Armor and Memory Bank clients
   services/         shared helpers the routes call: demo chats, demo seeding, the catalog, the customer link, payment and delivery sync
   domain/           business rules as pure functions, no I/O:

@@ -20,7 +20,7 @@ from routes import dispatch
 from seed import catalog, demo
 from services import chats
 
-SELLER = {"Authorization": "Bearer x"}
+VISITOR = {"Authorization": "Bearer x"}
 asked = []
 
 
@@ -39,7 +39,7 @@ def signed(event: dict, secret="whsk") -> dict:
 
 
 @pytest.fixture
-def seller(monkeypatch):
+def visitor(monkeypatch):
     assert fake_token(monkeypatch).status_code == 200
 
 
@@ -106,7 +106,7 @@ class Canned(BaseLlm):
         yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text=review.model_dump_json())]))
 
 
-def test_packing_delivery_claims_refunds_and_replacement(monkeypatch, seller):
+def test_packing_delivery_claims_refunds_and_replacement(monkeypatch, visitor):
     report = pack.Report(
         lines=[pack.Seen(line=1, visible=True, counts=[pack.Count(variant="blue", quantity=1)], damage=None, photos=[1], note="")], suggestions=[]
     )
@@ -118,20 +118,20 @@ def test_packing_delivery_claims_refunds_and_replacement(monkeypatch, seller):
 
     # Packing: the photo is stored once with its hash, Gemini's report is applied, and packing completes.
     photo = catalog.image("packing-mug-blue")
-    upload = lambda: client.post("/api/orders/o1/packing/photos", content=photo, headers={**SELLER, "Content-Type": "image/jpeg"})
-    assert client.post("/api/orders/o1/packing/photos", content=b"x", headers={**SELLER, "Content-Type": "text/plain"}).status_code == 415
-    assert client.post("/api/orders/o1/dispatch/start", json={"courier": "simulator"}, headers=SELLER).status_code == 409  # not packed
+    upload = lambda: client.post("/api/orders/o1/packing/photos", content=photo, headers={**VISITOR, "Content-Type": "image/jpeg"})
+    assert client.post("/api/orders/o1/packing/photos", content=b"x", headers={**VISITOR, "Content-Type": "text/plain"}).status_code == 415
+    assert client.post("/api/orders/o1/dispatch/start", json={"courier": "simulator"}, headers=VISITOR).status_code == 409  # not packed
     p = upload().json()["packing"]["photos"][0]
     assert p["sha256"] == hashlib.sha256(photo).hexdigest() and bucket.files[p["path"]] == photo
-    assert client.get(f"/api/orders/o1/packing/photos/{p['id']}", headers=SELLER).content == photo
-    rows = client.post("/api/orders/o1/packing/check", headers=SELLER).json()["packing"]["rows"]
+    assert client.get(f"/api/orders/o1/packing/photos/{p['id']}", headers=VISITOR).content == photo
+    rows = client.post("/api/orders/o1/packing/check", headers=VISITOR).json()["packing"]["rows"]
     assert rows[0]["auto_result"] == "matched"
-    assert client.post("/api/orders/o1/packing/complete", headers=SELLER).json()["packing"]["completed"]["by"] == "ok@example.com"
+    assert client.post("/api/orders/o1/packing/complete", headers=VISITOR).json()["packing"]["completed"]["by"] == "visitor u1"
 
     # Delivery by the simulator, then the customer says it arrived.
-    client.post("/api/orders/o1/dispatch/start", json={"courier": "simulator"}, headers=SELLER)
+    client.post("/api/orders/o1/dispatch/start", json={"courier": "simulator"}, headers=VISITOR)
     for status in ("picked_up", "delivered"):
-        r = client.post("/api/orders/o1/dispatch/step", json={"status": status}, headers=SELLER)
+        r = client.post("/api/orders/o1/dispatch/step", json={"status": status}, headers=VISITOR)
     assert r.json()["fulfillment"]["status"] == "delivered"
     assert client.post("/api/public/orders/tok/received").json()["received"] is True
 
@@ -147,18 +147,18 @@ def test_packing_delivery_claims_refunds_and_replacement(monkeypatch, seller):
         memory, "recall", lambda order, query: recalled.append(query) or ["Decided 2026-10-01: Damaged claim on 1 x Mug (blue): replaced."]
     )
     monkeypatch.setattr(memory, "remember", lambda order, fact: remembered.append((order["id"], fact)))
-    review = client.post(f"/api/orders/o1/claims/{cid}/review", headers=SELLER).json()["claims"][0]["review"]
+    review = client.post(f"/api/orders/o1/claims/{cid}/review", headers=VISITOR).json()["claims"][0]["review"]
     assert review["findings"][0]["evidence"] == ["C"] and set(review["sources"]) == {"C"}
     assert review["read"][-1] == "past" and recalled == ["Damaged claim on 1 x Mug (blue)"]
     decision = {"action": "partial_refund", "amount": 20000, "reason": "Cracked in the photo"}
-    assert client.post(f"/api/orders/o1/claims/{cid}/decide", json=decision, headers=SELLER).json()["claims"][0]["status"] == "resolution_approved"
+    assert client.post(f"/api/orders/o1/claims/{cid}/decide", json=decision, headers=VISITOR).json()["claims"][0]["status"] == "resolution_approved"
     assert remembered == [
         ("o1", "Damaged claim on 1 x Mug (blue): the seller approved a partial refund of ₱200.00. Seller's reason: Cracked in the photo")
     ]
 
     # PayMongo does not answer the refund; its refund webhook later settles it through the payment's refund list.
     monkeypatch.setattr(paymongo, "paymongo_refund", lambda *a: {})
-    refund = client.post("/api/orders/o1/refunds", json={"claim_id": cid, "amount": 20000}, headers=SELLER).json()["refunds"][0]
+    refund = client.post("/api/orders/o1/refunds", json={"claim_id": cid, "amount": 20000}, headers=VISITOR).json()["refunds"][0]
     assert refund["status"] == "uncertain"
     listed = {"refunds": [{"id": "ref_1", "attributes": {"amount": 20000, "status": "pending", "metadata": {"operation_id": refund["id"]}}}]}
     monkeypatch.setattr(paymongo, "paymongo", lambda method, path, attributes=None: {"attributes": listed} if path == "payments/pay_1" else {})
@@ -168,7 +168,7 @@ def test_packing_delivery_claims_refunds_and_replacement(monkeypatch, seller):
     assert (landed["status"], landed["provider_refund_id"]) == ("pending", "ref_1")
 
     # The claim closes only once PayMongo reports the refund succeeded.
-    post = lambda path, **k: client.post(f"/api/orders/o1{path}", headers=SELLER, **k)
+    post = lambda path, **k: client.post(f"/api/orders/o1{path}", headers=VISITOR, **k)
     claim_of = lambda r, cid: next(c for c in r.json()["claims"] if c["id"] == cid)
     assert post(f"/claims/{cid}/resolve", json={}).status_code == 409
     listed["refunds"][0]["attributes"]["status"] = "succeeded"
@@ -206,7 +206,7 @@ def test_packing_delivery_claims_refunds_and_replacement(monkeypatch, seller):
     assert [f["claim_id"] for f in saved(store)["fulfillment_history"]] == [None]  # the first shipment stays on record
 
 
-def test_chat_confirm_payment_link_received_and_claim_from_chat(monkeypatch, seller):
+def test_chat_confirm_payment_link_received_and_claim_from_chat(monkeypatch, visitor):
     store, _ = fake_google(monkeypatch)
     put_order(store, status="draft", confirmations=[], payment=None, packing=None, source={"type": "messenger", "conversation_id": "t_1"})
     monkeypatch.setattr(config, "PAGE_ID", "99")
@@ -222,8 +222,8 @@ def test_chat_confirm_payment_link_received_and_claim_from_chat(monkeypatch, sel
             {"participants": {"data": [{"id": "99"}, {"id": "psid7"}]}} if "fields" in k else sent.append(send) or {"message_id": "mid"}
         ),
     )
-    post = lambda path, **k: client.post(f"/api/orders/o1{path}", headers=SELLER, **k)
-    get = lambda: client.get("/api/orders/o1", headers=SELLER).json()
+    post = lambda path, **k: client.post(f"/api/orders/o1{path}", headers=VISITOR, **k)
+    get = lambda: client.get("/api/orders/o1", headers=VISITOR).json()
 
     # The summary goes out with a Confirm button naming the order and version; only a tap with exactly that text confirms.
     order = post("/ask-confirmation").json()
@@ -237,7 +237,7 @@ def test_chat_confirm_payment_link_received_and_claim_from_chat(monkeypatch, sel
     chat += [say("m2", "Confirm #O1 v0"), say("m3", "Confirm #O1 v1", page=True)]  # wrong version; the Page's own echo
     assert get()["status"] == "awaiting_confirmation"
     chat.append(say("m4", "Confirm #O1 v1"))
-    order = client.get("/api/conversations/t_1/orders", headers=SELLER).json()[0]
+    order = client.get("/api/conversations/t_1/orders", headers=VISITOR).json()[0]
     assert order["status"] == "confirmed" and order["confirmations"][-1] | {"at": None} == {
         "version": 1,
         "kind": "customer",
@@ -280,7 +280,7 @@ def test_chat_confirm_payment_link_received_and_claim_from_chat(monkeypatch, sel
     assert [p["source"] for p in claim["photos"]] == ["customer_chat"]
 
 
-def test_lalamove_quote_book_cancel_release_refresh_and_webhook(monkeypatch, seller):
+def test_lalamove_quote_book_cancel_release_refresh_and_webhook(monkeypatch, visitor):
     store, _ = fake_google(monkeypatch)
     put_order(store)
     monkeypatch.setattr(config, "LALAMOVE_KEY", "pk")
@@ -301,11 +301,13 @@ def test_lalamove_quote_book_cancel_release_refresh_and_webhook(monkeypatch, sel
 
     monkeypatch.setattr(lalamove, "lalamove", fake_lalamove)
     pin = "https://maps.google.com/?q=14.6091,121.0223"
-    assert client.post("/api/orders/o1/dispatch/quote", json={"pin": pin}, headers=SELLER).status_code == 409  # no pickup yet
-    pickup = {"address": "Unit 1, Cubao", "pin": pin, "name": "Shop", "phone": "0917 000 0000"}
-    assert client.put("/api/settings/dispatch", json=pickup, headers=SELLER).json()["phone"] == "+639170000000"
+    assert client.post("/api/orders/o1/dispatch/quote", json={"pin": pin}, headers=VISITOR).status_code == 409  # no pickup yet
+    # The shop's pickup is set in Firestore (visitors cannot change settings), as the old settings route stored it.
+    pickup = {"address": "Unit 1, Cubao", "lat": 14.6091, "lng": 121.0223, "name": "Shop", "phone": "+639170000000"}
+    store.collection("stores").document(config.STORE).set({"dispatch": pickup}, merge=True)
+    assert client.put("/api/settings/dispatch", json={**pickup, "pin": pin}, headers=VISITOR).status_code == 403
 
-    post = lambda path, **k: client.post(f"/api/orders/o1/dispatch/{path}", headers=SELLER, **k)
+    post = lambda path, **k: client.post(f"/api/orders/o1/dispatch/{path}", headers=VISITOR, **k)
 
     # Cancelled before pickup: cancelled with Lalamove too, and kept on record.
     post("quote", json={"pin": pin})
@@ -333,7 +335,7 @@ def test_lalamove_quote_book_cancel_release_refresh_and_webhook(monkeypatch, sel
     assert post("book").json()["fulfillment"]["provider_order_id"] == "LL1"
     assert post("book").status_code == 409  # cannot book twice
     assert calls.count(("POST", "/v3/orders")) == 3
-    assert client.post("/api/orders/o1/dispatch/refresh", headers=SELLER).json()["fulfillment"]["status"] == "picked_up"
+    assert client.post("/api/orders/o1/dispatch/refresh", headers=VISITOR).json()["fulfillment"]["status"] == "picked_up"
 
     # Lalamove's own event finds the order by its Lalamove ID through the real query.
     data = {"order": {"orderId": "LL1", "status": "COMPLETED"}, "updatedAt": later}
@@ -364,7 +366,7 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     monkeypatch.setattr(messenger, "graph", lambda *a, **k: (_ for _ in ()).throw(AssertionError("demo visitors never reach Messenger")))
     monkeypatch.setattr(claim_agent, "gemini", lambda model, project: Canned(model="canned"))
 
-    chats = {c["customer"]["name"]: c for c in client.get("/api/conversations", headers=SELLER).json()}  # the first visit seeds
+    chats = {c["customer"]["name"]: c for c in client.get("/api/conversations", headers=VISITOR).json()}  # the first visit seeds
     assert len(chats) == 15 and chats["Bea Villanueva"]["order_actions"] == []  # her report waits in the chat
     # Each seeded chat keeps the persona the AI customer plays in it, by the customer's seeded name.
     seeded = {d["name"]: d.get("persona") for p, d in store.docs.items() if "/demoThreads/" in p}
@@ -372,15 +374,15 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     # The chats behind Patterns have their checks stored, so listing them shows the count and opening them asks no Gemini.
     assert chats["Paolo Garcia"]["open_checks"] == 3 and chats["Kim Navarro"]["open_checks"] == 2 and chats["Carla Villamor"]["open_checks"] == 0
     assert chats["Nico Ramos"]["order_actions"] == ["Ready to pack"] and chats["Rico Bautista"]["order_actions"] == []
-    listed = client.get("/api/orders", headers=SELLER).json()  # newest first
+    listed = client.get("/api/orders", headers=VISITOR).json()  # newest first
     orders = {o["draft"]["recipient_name"]["value"]: o for o in reversed(listed)}  # each customer's newest order
     # Every chat but Ana's has earlier orders: delivered by simulated sandbox riders, some with a claim decided and refunded.
     assert len(listed) == 4 + len(demo.MISFITS) + sum(len(h) for h in demo.HISTORY.values()) and "Ana Reyes" not in orders
     past = [o for o in listed if (o.get("fulfillment") or {}).get("courier") == "lalamove"]
     assert {o["fulfillment"]["driver"]["source"] for o in past} == {"simulated"} and all(o["receipt"] for o in past)
     assert {c["decision"]["cause"] for o in past for c in o.get("claims", [])} == {"courier_transit", "unknown", "seller_error"}
-    cards = {c["key"]: c for c in client.get("/api/patterns", headers=SELLER).json()}
-    assert cards["loss_concentration:driver:sim-2"]["elevated"] and client.get("/api/patterns/returns", headers=SELLER).json()["causes"]
+    cards = {c["key"]: c for c in client.get("/api/patterns", headers=VISITOR).json()}
+    assert cards["loss_concentration:driver:sim-2"]["elevated"] and client.get("/api/patterns/returns", headers=VISITOR).json()["causes"]
     # Before the demo's live steps: three receipts that did not fit this week (Mark's makes four), two requests to open an
     # account (Dan's makes the card), two damage reports (Bea's makes the card), two parcels with other contents on Sample Rider 3.
     receipts = cards["rising:theme:receipt_misfit"]
@@ -395,17 +397,17 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     assert (bea["fulfillment"]["status"], bea.get("claims"), bea.get("receipt")) == ("delivered", None, None)
     said = [
         m["id"]
-        for m in client.get(f"/api/conversations/{chats['Bea Villanueva']['id']}", headers=SELLER).json()
+        for m in client.get(f"/api/conversations/{chats['Bea Villanueva']['id']}", headers=VISITOR).json()
         if m["attachments"] and not m["from_page"]
     ]
-    bea = client.post(f"/api/orders/{bea['id']}/claims/from-chat", json={"type": "damage", "message_ids": said[-2:]}, headers=SELLER).json()
+    bea = client.post(f"/api/orders/{bea['id']}/claims/from-chat", json={"type": "damage", "message_ids": said[-2:]}, headers=VISITOR).json()
     video = bea["claims"][0]["videos"][0]  # her unboxing video, served like a photo for the claim card
-    shown = client.get(f"/api/orders/{bea['id']}/claims/{bea['claims'][0]['id']}/photos/{video['id']}", headers=SELLER)
+    shown = client.get(f"/api/orders/{bea['id']}/claims/{bea['claims'][0]['id']}/photos/{video['id']}", headers=VISITOR)
     assert shown.status_code == 200 and shown.headers["content-type"] == "video/mp4" and len(shown.content) == video["size"]
-    rise = {c["key"]: c for c in client.get("/api/patterns", headers=SELLER).json()}["rising:theme:damage_reports"]
+    rise = {c["key"]: c for c in client.get("/api/patterns", headers=VISITOR).json()}["rising:theme:damage_reports"]
     assert rise["numerator"] == 3 and rise["incidents"][0]["name"] == "Bea Villanueva"
     asked.clear()
-    claim = client.post(f"/api/orders/{bea['id']}/claims/{bea['claims'][0]['id']}/review", headers=SELLER).json()["claims"][0]
+    claim = client.post(f"/api/orders/{bea['id']}/claims/{bea['claims'][0]['id']}/review", headers=VISITOR).json()["claims"][0]
     assert claim["status"] == "under_review" and claim["review"]["findings"][0]["evidence"] == ["C"]
     up_front = [p for c in asked[0].contents for p in c.parts if p.inline_data]
     fetched = [r for c in asked[-1].contents for p in c.parts if p.function_response for r in p.function_response.parts or []]
@@ -421,14 +423,14 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     # Reviewed again: both video checks are kept by the videos' hashes, so neither video is watched a second time, and the
     # agent still gets both checks.
     before = len(asked)
-    client.post(f"/api/orders/{bea['id']}/claims/{bea['claims'][0]['id']}/review", headers=SELLER)
+    client.post(f"/api/orders/{bea['id']}/claims/{bea['claims'][0]['id']}/review", headers=VISITOR)
     again = " ".join(p.text for p in asked[before].contents[0].parts if p.text)
     assert len(watched) == 2 and "[CV1C]" in again and "it matches" in again
 
     # Nico: one click checks his packing photo, and code holds it back as too shaky, whatever Gemini read.
     nico = orders["Nico Ramos"]
     assert nico["packing_blocked"] is None and len(nico["packing"]["photos"]) == 1
-    packing = client.post(f"/api/orders/{nico['id']}/packing/check", headers=SELLER).json()["packing"]
+    packing = client.post(f"/api/orders/{nico['id']}/packing/check", headers=VISITOR).json()["packing"]
     assert packing["rows"][0]["auto_result"] == "insufficient_visibility" and packing["suggestions"][0].startswith("Photo 1 is too blurry")
 
     # Bea's claim was opened from her chat messages: her words and her photo.
@@ -438,68 +440,65 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     ana = chats["Ana Reyes"]["id"]
     order = ready_order(status="draft", confirmations=[], payment=None, packing=None, source={"type": "demo", "conversation_id": ana, "owner": "u1"})
     store.collection("stores").document(config.STORE).collection("orders").document("ana1").set(order)
-    assert client.post("/api/orders/ana1/ask-confirmation", headers=SELLER).json()["status"] == "awaiting_confirmation"
-    last = client.get(f"/api/conversations/{ana}", headers=SELLER).json()[-1]
+    assert client.post("/api/orders/ana1/ask-confirmation", headers=VISITOR).json()["status"] == "awaiting_confirmation"
+    last = client.get(f"/api/conversations/{ana}", headers=VISITOR).json()[-1]
     assert last["from_page"] and last["quick_replies"] == ["Confirm #ANA1 v1"]
-    client.post(f"/api/conversations/{ana}/customer", json={"text": "Confirm #ANA1 v1"}, headers=SELLER)
-    assert client.get("/api/orders/ana1", headers=SELLER).json()["confirmations"][-1]["by"] == "chat"
+    client.post(f"/api/conversations/{ana}/customer", json={"text": "Confirm #ANA1 v1"}, headers=VISITOR)
+    assert client.get("/api/orders/ana1", headers=VISITOR).json()["confirmations"][-1]["by"] == "chat"
     # Send GCash QR code sends the instructions in the chat itself, with the demo shop's account and the total
-    assert client.post("/api/orders/ana1/gcash/request", headers=SELLER).json()["manual_payment"]["status"] == "requested"
-    told, qr = client.get(f"/api/conversations/{ana}", headers=SELLER).json()[-2:]
+    assert client.post("/api/orders/ana1/gcash/request", headers=VISITOR).json()["manual_payment"]["status"] == "requested"
+    told, qr = client.get(f"/api/conversations/{ana}", headers=VISITOR).json()[-2:]
     assert told["from_page"] and told["text"].startswith("To pay by GCash, send ₱500.00 to Juan Dela Cruz, 0917 123 4567")
     # then the demo shop's sample QR: stamped as a sample, never a real account
     assert qr["from_page"] and qr["attachments"][0]["kind"] == "image"
     # A photo she sends in the demo chat becomes the claim's photo, read from our storage.
     photo = catalog.image("damage-mug-blue")
-    client.post(f"/api/conversations/{ana}/customer/image", content=photo, headers={**SELLER, "Content-Type": "image/jpeg"})
-    mid = client.get(f"/api/conversations/{ana}", headers=SELLER).json()[-1]["id"]
-    claim = client.post("/api/orders/ana1/claims/from-chat", json={"type": "damage", "message_ids": [mid]}, headers=SELLER).json()["claims"][0]
+    client.post(f"/api/conversations/{ana}/customer/image", content=photo, headers={**VISITOR, "Content-Type": "image/jpeg"})
+    mid = client.get(f"/api/conversations/{ana}", headers=VISITOR).json()[-1]["id"]
+    claim = client.post("/api/orders/ana1/claims/from-chat", json={"type": "damage", "message_ids": [mid]}, headers=VISITOR).json()["claims"][0]
     assert claim["narrative"] == "Sent photos only, no text." and claim["photos"][0]["sha256"] == hashlib.sha256(photo).hexdigest()
 
     # Their payments are in the sample GCash history; a reset deletes all four orders and seeds them again.
-    history = client.get("/api/demo/sample-statement", headers=SELLER)
+    history = client.get("/api/demo/sample-statement", headers=VISITOR)
     assert history.status_code == 200 and history.headers["content-type"] == "application/pdf"
     gcash_paid = 3 + sum(len(h) for h in demo.HISTORY.values())
     assert len(store.docs[f"stores/{config.STORE}/demoUsers/u1"]["samples"]) == gcash_paid
-    assert client.post("/api/demo/reset", headers=SELLER).json() == {"deleted_chats": 15, "deleted_orders": len(listed) + 1}
-    assert len(client.get("/api/orders", headers=SELLER).json()) == len(listed) and len(client.get("/api/conversations", headers=SELLER).json()) == 15
+    assert client.post("/api/demo/reset", headers=VISITOR).json() == {"deleted_chats": 15, "deleted_orders": len(listed) + 1}
+    assert (
+        len(client.get("/api/orders", headers=VISITOR).json()) == len(listed) and len(client.get("/api/conversations", headers=VISITOR).json()) == 15
+    )
 
 
-def test_catalog_edit_photos_demo_read_only_and_notes_on_drafts(monkeypatch, seller):
+def test_the_shops_catalog_is_read_only_and_notes_its_messenger_drafts(monkeypatch, visitor):
     store, bucket = fake_google(monkeypatch)
-    post = lambda path, headers=SELLER, **k: client.post(f"/api/catalog{path}", headers=headers, **k)
+    post = lambda path, headers=VISITOR, **k: client.post(f"/api/catalog{path}", headers=headers, **k)
     mug = {"name": "Ceramic mug", "variants": [{"name": "Blue", "price": 18000, "stock": 2}, {"name": "White", "price": 18000}]}
-    assert post("", json={"name": "", "variants": []}).status_code == 422
-    pid = post("", json=mug).json()["id"]
+    # No visitor can add, change, delete or photograph a product.
+    assert post("", json=mug).status_code == 403
+    assert client.put("/api/catalog/mug", json=mug, headers=VISITOR).status_code == 403
+    assert client.delete("/api/catalog/mug", headers=VISITOR).status_code == 403
+    assert post("/mug/photos/0", content=b"x", headers={**VISITOR, "Content-Type": "image/jpeg"}).status_code == 403
+
+    # Settings shows the demo shop's catalog and its photos.
+    assert [p["id"] for p in client.get("/api/catalog", headers=VISITOR).json()] == ["mug", "tote", "candle", "pouch"]
+    assert client.get("/api/catalog/mug/photos/0", headers=VISITOR).content == catalog.image("mug-blue")
+
+    # The shop's own catalog, set in Firestore, is what its Messenger orders refer to: its photos open, and its prices and stock
+    # are noted on a draft.
     image = catalog.image("mug-blue")
-    assert post(f"/{pid}/photos/1", content=b"x", headers={**SELLER, "Content-Type": "text/plain"}).status_code == 415
-    assert post(f"/{pid}/photos/5", content=image, headers={**SELLER, "Content-Type": "image/jpeg"}).status_code == 404
-    saved = post(f"/{pid}/photos/0", content=image, headers={**SELLER, "Content-Type": "image/jpeg"}).json()
-    assert bucket.files[saved["variants"][0]["photo"]["path"]] == image
-    assert client.get(f"/api/catalog/{pid}/photos/0", headers=SELLER).content == image
-    assert client.get(f"/api/catalog/{pid}/photos/1", headers=SELLER).status_code == 404  # no photo for white
-    # An edit keeps each variant's photo by name, and the list is the store's.
-    edited = client.put(f"/api/catalog/{pid}", json={**mug, "variants": [{"name": "Blue", "price": 19000, "stock": 0}]}, headers=SELLER).json()
-    assert edited["variants"][0]["photo"] and edited["variants"][0]["price"] == 19000
-    assert [p["name"] for p in client.get("/api/catalog", headers=SELLER).json()] == ["Ceramic mug"]
-
-    # Notes from the catalog snapshot come back with the order.
-    snap = {"product_id": pid, "name": "Ceramic mug", "variant": "Blue", "price": 19000, "stock": 0, "photo": None}
-    item = {"name": "Ceramic mug", "variant": "Blue", "quantity": 1, "unit_price": 18000, "price_from": "chat", "sources": [], "catalog": snap}
+    bucket.files["stores/main/catalog/p1/blue"] = image
+    photo = {"path": "stores/main/catalog/p1/blue", "content_type": "image/jpeg"}
+    product = {"name": "Shop mug", "variants": [{"name": "Blue", "price": 19000, "stock": 0, "photo": photo}]}
+    store.collection("stores").document(config.STORE).collection("catalog").document("p1").set(product)
+    assert client.get("/api/catalog/p1/photos/0", headers=VISITOR).content == image
+    snap = {"product_id": "p1", "name": "Shop mug", "variant": "Blue", "price": 19000, "stock": 0, "photo": None}
+    item = {"name": "Shop mug", "variant": "Blue", "quantity": 1, "unit_price": 18000, "price_from": "chat", "sources": [], "catalog": snap}
     put_order(store, status="draft", draft={**ready_order()["draft"], "items": [item]})
-    notes = client.get("/api/orders/o1", headers=SELLER).json()["catalog_notes"]
+    notes = client.get("/api/orders/o1", headers=VISITOR).json()["catalog_notes"]
     assert notes == [
-        "Ceramic mug (Blue): the chat says ₱180.00, your catalog says ₱190.00. The chat price is what the customer agreed to.",
-        "Ceramic mug (Blue): out of stock in your catalog.",
+        "Shop mug (Blue): the chat says ₱180.00, your catalog says ₱190.00. The chat price is what the customer agreed to.",
+        "Shop mug (Blue): out of stock in your catalog.",
     ]
-    assert client.delete(f"/api/catalog/{pid}", headers=SELLER).json() == {"deleted": pid}
-
-    # A demo visitor sees the demo shop's catalog and its photos, and cannot change anything.
-    assert fake_token(monkeypatch, firebase={"sign_in_provider": "anonymous"}).status_code == 200
-    shown = client.get("/api/catalog", headers=SELLER).json()
-    assert [p["id"] for p in shown] == ["mug", "tote", "candle", "pouch"]
-    assert client.get("/api/catalog/mug/photos/0", headers=SELLER).content == catalog.image("mug-blue")
-    assert post("", json=mug).status_code == 403 and client.delete("/api/catalog/mug", headers=SELLER).status_code == 403
 
 
 def test_messenger_webhook_applies_a_tap_from_the_customer_it_was_sent_to(monkeypatch):
@@ -534,14 +533,14 @@ def test_messenger_webhook_applies_a_tap_from_the_customer_it_was_sent_to(monkey
     assert saved(store)["status"] == "confirmed" and saved(store)["confirmations"][-1]["message_id"] == "m_9"
 
 
-def test_dropoff_pin_is_suggested_once_per_address_and_read_from_a_pasted_link(monkeypatch, seller):
+def test_dropoff_pin_is_suggested_once_per_address_and_read_from_a_pasted_link(monkeypatch, visitor):
     from integrations import maps
 
     store, _ = fake_google(monkeypatch)
     put_order(store)
     looked_up = []
     monkeypatch.setattr(maps, "geocode", lambda address: looked_up.append(address) or {"address": address, "lat": 14.62, "lng": 121.05})
-    get = lambda: client.get("/api/orders/o1/dispatch/suggest", headers=SELLER).json()
+    get = lambda: client.get("/api/orders/o1/dispatch/suggest", headers=VISITOR).json()
     assert get()["lat"] == 14.62 and get()["lat"] == 14.62 and looked_up == ["Cubao"]  # kept on the order: one lookup
     saved(store)["draft"]["address"]["value"] = "Cubao, Quezon City"
     assert get()["address"] == "Cubao, Quezon City" and len(looked_up) == 2  # a changed address is looked up again
@@ -553,12 +552,12 @@ def test_dropoff_pin_is_suggested_once_per_address_and_read_from_a_pasted_link(m
     saved(store)["draft"]["address"]["value"] = "Somewhere unknown"
     assert get() | {"warning": ""} == {"address": "Somewhere unknown", "not_found": True, "lat": 14.55, "lng": 121.02, "warning": ""}
 
-    pin = lambda text: client.post("/api/orders/o1/dispatch/pin", json={"text": text}, headers=SELLER)
+    pin = lambda text: client.post("/api/orders/o1/dispatch/pin", json={"text": text}, headers=VISITOR)
     assert pin("https://www.google.com/maps/@14.6191,121.0510,18z").json() == {"lat": 14.6191, "lng": 121.051}
     assert pin("not a pin at all").status_code == 422
 
 
-def test_loading_an_order_moves_a_sandbox_booking_on_unless_switched_off(monkeypatch, seller):
+def test_loading_an_order_moves_a_sandbox_booking_on_unless_switched_off(monkeypatch, visitor):
     from domain import delivery
 
     store, _ = fake_google(monkeypatch)
@@ -567,21 +566,26 @@ def test_loading_an_order_moves_a_sandbox_booking_on_unless_switched_off(monkeyp
     shipment = {"id": "f1", "courier": "lalamove", "status": "booked", "quotation": {"livemode": False}, "events": [booked], "driver_id": None}
     put_order(store, fulfillment=shipment)
     monkeypatch.setattr(config, "SANDBOX_AUTO_DELIVERY", False)
-    assert client.get("/api/orders/o1", headers=SELLER).json()["fulfillment"]["status"] == "booked"
+    assert client.get("/api/orders/o1", headers=VISITOR).json()["fulfillment"]["status"] == "booked"
     monkeypatch.setattr(config, "SANDBOX_AUTO_DELIVERY", True)
-    f = client.get("/api/orders/o1", headers=SELLER).json()["fulfillment"]
+    f = client.get("/api/orders/o1", headers=VISITOR).json()["fulfillment"]
     assert f["status"] == "delivered" and [e["source"] for e in f["events"]] == ["provider", "demo", "demo", "demo"]
 
 
-def test_the_sellers_own_qr_is_saved_and_sent_after_the_gcash_instructions(monkeypatch, seller):
-    store, _ = fake_google(monkeypatch)
-    store.collection("stores").document(config.STORE).set({"gcash": {"name": "Ana Seller", "mobile": "639171112222", "qr": None}})
+def test_the_shops_own_qr_is_sent_after_the_gcash_instructions_of_a_messenger_order(monkeypatch, visitor):
+    store, bucket = fake_google(monkeypatch)
+    qr = catalog.image("gcash-qr-sample")  # any JPEG stands in for the shop's screenshot
+    # The shop's account and QR are set in Firestore and Storage; no visitor can upload or change them.
+    bucket.files["stores/main/gcash/qr"] = qr
+    store.collection("stores").document(config.STORE).set(
+        {
+            "gcash": {"name": "Ana Seller", "mobile": "639171112222", "qr": None},
+            "gcash_qr_image": {"path": "stores/main/gcash/qr", "content_type": "image/jpeg"},
+        }
+    )
     put_order(store, payment=None, packing=None, source={"type": "messenger", "conversation_id": "t_1"})
-    qr = catalog.image("gcash-qr-sample")  # any JPEG stands in for the seller's screenshot
-    assert client.post("/api/settings/gcash/qr", content=b"x", headers={**SELLER, "Content-Type": "image/gif"}).status_code == 415
-    assert client.post("/api/settings/gcash/qr", content=qr, headers={**SELLER, "Content-Type": "image/jpeg"}).json() == {"qr_image": True}
-    assert client.get("/api/settings/gcash/qr", headers=SELLER).content == qr
-    assert client.get("/api/settings/gcash", headers=SELLER).json()["qr_image"] is True
+    assert client.post("/api/settings/gcash/qr", content=qr, headers={**VISITOR, "Content-Type": "image/jpeg"}).status_code == 403
+    assert client.get("/api/settings/gcash", headers=VISITOR).json()["name"] == config.DEMO_GCASH["name"]  # Settings: the demo shop
 
     monkeypatch.setattr(config, "PAGE_ID", "99")
     now = datetime.now(UTC).isoformat()
@@ -594,13 +598,13 @@ def test_the_sellers_own_qr_is_saved_and_sent_after_the_gcash_instructions(monke
             {"participants": {"data": [{"id": "99"}, {"id": "psid7"}]}} if "fields" in k else sent.append((send, files)) or {"message_id": "mid"}
         ),
     )
-    assert client.post("/api/orders/o1/gcash/request", headers=SELLER).json()["manual_payment"]["status"] == "requested"
+    assert client.post("/api/orders/o1/gcash/request", headers=VISITOR).json()["manual_payment"]["status"] == "requested"
     (text, _), (image, files) = sent
     assert text["message"]["text"].startswith("To pay by GCash, send ₱500.00 to Ana Seller, 0917 111 2222")
     assert image["message"]["attachment"]["type"] == "image" and files["filedata"][1] == qr  # the very screenshot the seller saved
 
 
-def test_a_return_the_customer_sends_holds_the_refund_until_the_item_is_received(monkeypatch, seller):
+def test_a_return_the_customer_sends_holds_the_refund_until_the_item_is_received(monkeypatch, visitor):
     from domain import delivery
 
     report = pack.Report(
@@ -620,12 +624,12 @@ def test_a_return_the_customer_sends_holds_the_refund_until_the_item_is_received
         "pod": delivery.proof("DELIVERED", past, "demo", {"sample": "courier-dropoff-crushed"}),
     }
     put_order(store, fulfillment=shipped, manual_payment=None)
-    post = lambda path, **k: client.post(f"/api/orders/o1{path}", headers=SELLER, **k)
+    post = lambda path, **k: client.post(f"/api/orders/o1{path}", headers=VISITOR, **k)
 
     cid = post("/claims", json={"type": "damage", "narrative": "Box crushed, mug cracked"}).json()["claims"][0]["id"]
-    custody = client.get("/api/orders/o1", headers=SELLER).json()["claims"][0]["custody"]
+    custody = client.get("/api/orders/o1", headers=VISITOR).json()["claims"][0]["custody"]
     assert [s["step"] for s in custody["steps"]][:4] == ["packed", "picked_up", "in_transit", "dropped_off"]
-    assert client.get("/api/orders/o1/shipments/f1/proof/pod", headers=SELLER).content == catalog.image("courier-dropoff-crushed")
+    assert client.get("/api/orders/o1/shipments/f1/proof/pod", headers=VISITOR).content == catalog.image("courier-dropoff-crushed")
     assert post(f"/claims/{cid}/return").status_code == 409  # nothing approved yet
     decided = post(f"/claims/{cid}/decide", json={"action": "refund", "reason": "Crushed in transit", "cause": "courier_transit"}).json()
     assert decided["claims"][0]["decision"]["cause"] == "courier_transit"
@@ -639,7 +643,7 @@ def test_a_return_the_customer_sends_holds_the_refund_until_the_item_is_received
     assert post("/refunds/manual", json=manual).json()["refunds"][-1]["status"] == "seller_reported"
 
     photo = catalog.image("damage-mug-blue")
-    upload = client.post(f"/api/orders/o1/returns/{rid}/photos", content=photo, headers={**SELLER, "Content-Type": "image/jpeg"})
+    upload = client.post(f"/api/orders/o1/returns/{rid}/photos", content=photo, headers={**VISITOR, "Content-Type": "image/jpeg"})
     assert upload.json()["returns"][0]["photos"]
     check = post(f"/returns/{rid}/check").json()["returns"][0]["check"]
     assert check["rows"][0]["result"] == "conflict"  # code decides: the item is damaged
@@ -649,7 +653,7 @@ def test_a_return_the_customer_sends_holds_the_refund_until_the_item_is_received
     assert done["claims"][0]["custody"]["steps"][-1]["status"] == "ok"
 
 
-def test_the_customer_brief_reads_history_only_and_is_shared_by_chats_with_the_same_history(monkeypatch, seller):
+def test_the_customer_brief_reads_history_only_and_is_shared_by_chats_with_the_same_history(monkeypatch, visitor):
     from domain import brief
 
     asked, failing = [], []
@@ -666,7 +670,7 @@ def test_the_customer_brief_reads_history_only_and_is_shared_by_chats_with_the_s
     old = {"id": "m0", "from_page": False, "created_time": "2026-10-01T01:00:00+00:00", "text": "2 mugs please"}
     chats = {"t_1": [old], "t_2": [dict(old)]}
     monkeypatch.setattr(messenger, "fetch_messages", lambda conversation_id: chats[conversation_id])
-    get = lambda cid="t_1": client.get(f"/api/conversations/{cid}/brief", headers=SELLER).json()
+    get = lambda cid="t_1": client.get(f"/api/conversations/{cid}/brief", headers=VISITOR).json()
 
     # No finished order: a fixed first-order line, no Gemini call.
     assert get() == {"summary": brief.FIRST, "first": True} and asked == []
@@ -724,8 +728,8 @@ def test_a_failed_demo_seeding_is_retried_on_the_next_load(monkeypatch):
         real(user)
 
     monkeypatch.setattr(seeding, "seed_demo", flaky)
-    first = client.get("/api/conversations", headers=SELLER)
+    first = client.get("/api/conversations", headers=VISITOR)
     assert first.status_code == 503 and first.json()["detail"] == seeding.SEED_FAILED
     assert f"stores/{config.STORE}/demoUsers/u1" not in store.docs  # not marked as seeded, so the next load tries again
-    assert len(client.get("/api/conversations", headers=SELLER).json()) == 15
-    assert len(client.get("/api/conversations", headers=SELLER).json()) == 15 and len(calls) == 2  # seeded once, not again
+    assert len(client.get("/api/conversations", headers=VISITOR).json()) == 15
+    assert len(client.get("/api/conversations", headers=VISITOR).json()) == 15 and len(calls) == 2  # seeded once, not again

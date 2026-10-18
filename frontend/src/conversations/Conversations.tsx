@@ -418,6 +418,11 @@ export default function Conversations({
                   </div>
                   <span className="snippet">{c.snippet}</span>
                   {c.demo && <mark className="source demo">Demo</mark>}
+                  {!c.demo && (
+                    <mark className="source tester" title="A real person on Messenger, who may not answer right away">
+                      Real tester
+                    </mark>
+                  )}
                   {!!c.open_checks && (
                     <mark>
                       {c.open_checks} {c.open_checks === 1 ? 'check' : 'checks'} before shipping
@@ -441,6 +446,11 @@ export default function Conversations({
             <Avatar name={name} src={customer?.picture} />
             <strong>{name}</strong>
           </header>
+        )}
+        {openId && thread && !thread.demo && (
+          <p className="tester-note" role="note">
+            A real tester on Messenger, not an AI customer. Your replies reach their phone, and they may not answer right away.
+          </p>
         )}
         {error && <p role="alert">{error}</p>}
         {!openId && !error && <p className="empty">Pick a conversation to read it.</p>}

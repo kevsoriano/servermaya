@@ -25,8 +25,12 @@ class DispatchSettings(BaseModel):
 
 @router.get("/api/settings/dispatch")
 def get_dispatch_settings(user: dict = Depends(auth.current_user)):
-    if user.get("demo"):
-        return config.DEMO_PICKUP
+    """What Settings shows: the demo shop's pickup, read-only."""
+    return config.DEMO_PICKUP
+
+
+def store_pickup() -> dict | None:
+    """The shop's own pickup address and pin, for its Messenger orders. Set in Firestore; visitors cannot change it."""
     return (db.store_doc().get().to_dict() or {}).get("dispatch")
 
 
@@ -78,7 +82,7 @@ def suggest_dropoff(order_id: str, user: dict = Depends(auth.current_user)):
         ref.update({"dropoff_suggestion": found})
         return found
     # Not found: a map around the shop's pickup to click the spot on. No pin is set, so nothing can be quoted by accident.
-    pickup = config.DEMO_PICKUP if (order.get("source") or {}).get("type") == "demo" else get_dispatch_settings(user)
+    pickup = config.DEMO_PICKUP if (order.get("source") or {}).get("type") == "demo" else store_pickup()
     if not (config.MAPS_SERVER_KEY and pickup):
         return None
     warning = "Google Maps could not find this address. Click the drop-off spot on the map, or ask the customer for their pin."
@@ -144,9 +148,9 @@ def stop(lat: float, lng: float, address: str) -> dict:
 @router.post("/api/orders/{order_id}/dispatch/quote")
 def quote_delivery(order_id: str, body: QuoteIn, user: dict = Depends(auth.current_user)):
     """A Lalamove quotation for the seller to approve. Nothing is booked yet."""
-    pickup = config.DEMO_PICKUP if db.demo_order(order_id) else get_dispatch_settings(user)
+    pickup = config.DEMO_PICKUP if db.demo_order(order_id) else store_pickup()
     if not pickup:
-        raise HTTPException(409, "Add your pickup address and pin in Settings first")
+        raise HTTPException(409, "The shop has no pickup address set up yet")
     ref, order = db.loaded(order_id)
     try:
         delivery.can_dispatch(order)
@@ -169,7 +173,7 @@ class BookIn(BaseModel):
 @router.post("/api/orders/{order_id}/dispatch/book")
 def book_delivery(order_id: str, body: BookIn | None = None, user: dict = Depends(auth.current_user)):
     """Book the approved quote. The quote is locked first, so a retry cannot book twice."""
-    pickup = config.DEMO_PICKUP if db.demo_order(order_id) else get_dispatch_settings(user)
+    pickup = config.DEMO_PICKUP if db.demo_order(order_id) else store_pickup()
     ref, order = db.loaded(order_id)
     f, d = order.get("fulfillment") or {}, order["draft"]
     try:

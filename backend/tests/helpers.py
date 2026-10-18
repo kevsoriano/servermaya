@@ -18,10 +18,14 @@ client = TestClient(main.app)
 ISS = f"https://securetoken.google.com/{config.PROJECT_ID}"
 
 
-def fake_token(monkeypatch, **claims):
-    base = {"sub": "u1", "iss": ISS, "email": "ok@example.com", "email_verified": True}
+def fake_token(monkeypatch, admitted=True, **claims):
+    """A visitor: an anonymous Firebase sign-in that has entered the access code (admitted=False: has not yet)."""
+    from core import auth
+
+    base = {"sub": "u1", "iss": ISS, "firebase": {"sign_in_provider": "anonymous"}}
     monkeypatch.setattr(id_token, "verify_firebase_token", lambda *a, **k: {**base, **claims})
-    monkeypatch.setattr(config, "ALLOWLIST", {"ok@example.com"})
+    if admitted:
+        monkeypatch.setattr(auth, "admitted", lambda uid: True)
     return client.get("/api/me", headers={"Authorization": "Bearer x"})
 
 

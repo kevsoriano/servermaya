@@ -16,24 +16,47 @@ def test_missing_and_garbage_tokens_rejected():
     assert client.get("/api/me", headers={"Authorization": "Bearer garbage"}).status_code == 401
 
 
-def test_allowlisted_user_passes(monkeypatch):
-    r = fake_token(monkeypatch, email="OK@example.com")
-    assert r.status_code == 200 and r.json()["email"] == "ok@example.com"
+def test_only_anonymous_visitors_with_the_access_code_get_in(monkeypatch):
+    from helpers import fake_google
+
+    fake_google(monkeypatch, None)
+    monkeypatch.setattr(auth, "_admitted", {})
+    monkeypatch.setattr(config, "ACCESS_CODE", "judges-2026-orchid")
+    h = {"Authorization": "Bearer x"}
+    # No accounts: a Google sign-in, or a token from another project, never gets in.
+    assert fake_token(monkeypatch, admitted=False, firebase={"sign_in_provider": "google.com"}).status_code == 401
+    assert fake_token(monkeypatch, admitted=False, iss="https://securetoken.google.com/other").status_code == 401
+
+    # An anonymous session that has not entered the code may only ask who it is and enter it.
+    r = fake_token(monkeypatch, admitted=False)
+    assert r.status_code == 200 and r.json()["admitted"] is False
+    assert client.get("/api/conversations", headers=h).status_code == 403
+    wrong = client.post("/api/access", json={"code": "guess"}, headers=h)
+    assert wrong.status_code == 403 and "doesn't work" in wrong.json()["detail"]
+    ok = client.post("/api/access", json={"code": " judges-2026-orchid "}, headers=h)  # pasted with spaces
+    assert ok.status_code == 200 and ok.json()["admitted"] is True
+    assert client.get("/api/me", headers=h).json()["admitted"] is True
+    auth._admitted.clear()  # another Cloud Run instance: the stored admission still counts
+    assert client.get("/api/me", headers=h).json()["admitted"] is True
+
+    # A new code shuts out every session admitted with the old one, until it enters the new code.
+    monkeypatch.setattr(config, "ACCESS_CODE", "judges-2026-lotus")
+    assert client.get("/api/me", headers=h).json()["admitted"] is False
+    assert client.get("/api/orders", headers=h).status_code == 403
+
+    # Guessing stops after MAX_ATTEMPTS wrong codes; with no code set, nobody gets in.
+    for _ in range(auth.MAX_ATTEMPTS):
+        client.post("/api/access", json={"code": "guess"}, headers=h)
+    assert client.post("/api/access", json={"code": "judges-2026-lotus"}, headers=h).status_code == 429
+    monkeypatch.setattr(config, "ACCESS_CODE", "")
+    assert client.post("/api/access", json={"code": "anything"}, headers=h).status_code == 503
 
 
-def test_rejections(monkeypatch):
-    assert fake_token(monkeypatch, email="other@example.com").status_code == 403
-    assert fake_token(monkeypatch, email_verified=False).status_code == 403
-    assert fake_token(monkeypatch, iss="https://securetoken.google.com/other").status_code == 401
-
-
-def test_demo_visitors_only_reach_their_own_demo_chats_and_orders(monkeypatch):
+def test_visitors_reach_their_own_demo_chats_and_the_shops_messenger_inbox(monkeypatch):
     from seed import demo
 
-    anon = {"firebase": {"sign_in_provider": "anonymous"}, "email": None, "email_verified": False}
-    assert fake_token(monkeypatch, email="ok@example.com").json()["demo"] is False
-    r = fake_token(monkeypatch, **anon)
-    assert r.status_code == 200 and r.json()["demo"] is True  # no allowlist needed
+    r = fake_token(monkeypatch)
+    assert r.status_code == 200 and r.json()["demo"] is True
 
     mine, theirs = demo.new_id(), demo.new_id()
     threads = {mine: {"owner": "u1", "name": "Ana", "messages": []}, theirs: {"owner": "u2", "name": "Ben", "messages": []}}
@@ -52,32 +75,30 @@ def test_demo_visitors_only_reach_their_own_demo_chats_and_orders(monkeypatch):
             return self._d
 
     monkeypatch.setattr(db, "orders", lambda: type("C", (), {"document": lambda self, oid: type("D", (), {"get": lambda self: Snap(oid)})()})())
-    monkeypatch.setattr(messenger, "graph", lambda *a, **k: (_ for _ in ()).throw(AssertionError("demo visitors never reach Messenger")))
+    monkeypatch.setattr(messenger, "fetch_messages", lambda cid: [])
     h = {"Authorization": "Bearer x"}
     assert client.get(f"/api/conversations/{mine}", headers=h).status_code == 200
-    assert client.get(f"/api/conversations/{theirs}", headers=h).status_code == 404
-    assert client.get("/api/conversations/t_123", headers=h).status_code == 404  # a real Messenger thread
+    assert client.get(f"/api/conversations/{theirs}", headers=h).status_code == 404  # another visitor's demo chat
+    assert client.get("/api/conversations/t_123", headers=h).status_code == 200  # the shop's Messenger thread
     monkeypatch.setattr(db, "loaded", lambda oid: (None, found[oid]))
-    assert client.get("/api/orders/o_theirs/patterns", headers=h).status_code == 404
-    assert client.get("/api/orders/o_real/patterns", headers=h).status_code == 404
     monkeypatch.setattr(db, "present", lambda snap: snap.to_dict())
+    assert client.get("/api/orders/o_theirs", headers=h).status_code == 404
     assert client.get("/api/orders/o_mine", headers=h).status_code == 200
-    assert client.get("/api/orders/o_real", headers=h).status_code == 404
-    assert client.post("/api/orders/o_real/refunds", headers=h, json={}).status_code == 404
+    assert client.get("/api/orders/o_real", headers=h).status_code == 200  # the shop's Messenger order
+    # The settings are read-only for everyone, and show the demo shop's.
     assert client.put("/api/settings/gcash", headers=h, json={"name": "X", "mobile": "09171234567"}).status_code == 403
     assert client.put("/api/settings/dispatch", headers=h, json={}).status_code == 403
+    assert client.post("/api/catalog", headers=h, json={}).status_code == 403
+    assert client.post("/api/settings/gcash/qr", headers=h, content=b"x").status_code == 403
     assert client.post("/api/patterns/review", headers=h, json={}).status_code == 403
     assert client.get("/api/settings/gcash", headers=h).json() == {**config.DEMO_GCASH, "qr_image": True}
     qr = client.get("/api/settings/gcash/qr", headers=h)  # the demo shop's sample QR, stamped as one
     assert qr.status_code == 200 and qr.headers["content-type"] == "image/jpeg"
     assert client.get("/api/settings/dispatch", headers=h).json() == config.DEMO_PICKUP
-
-    me, seller = {"uid": "u1", "demo": True}, {"uid": "s1", "demo": False}
-    assert [auth.visible(o, me) for o in found.values()] == [True, False, False]
-    assert [auth.visible(o, seller) for o in found.values()] == [False, False, True]
+    assert [auth.visible(o, {"uid": "u1", "demo": True}) for o in found.values()] == [True, False, True]
 
 
-def test_demo_ai_budget_limits_visitors_and_the_whole_demo_but_never_sellers(monkeypatch):
+def test_demo_ai_budget_limits_each_visitor_and_everyone(monkeypatch):
     from seed import demo
 
     monkeypatch.setattr(demo, "AI_PER_VISITOR", 250)
@@ -88,10 +109,6 @@ def test_demo_ai_budget_limits_visitors_and_the_whole_demo_but_never_sellers(mon
     assert "all visitors" in demo.over_budget(demo.AI_PER_VISITOR, demo.AI_PER_DAY, 1)  # the shared limit is the one to report
     monkeypatch.setattr(demo, "AI_PER_VISITOR", None)  # switched off: only the shared limit applies
     assert demo.over_budget(10_000, 0, 1) is None and "all visitors" in demo.over_budget(10_000, demo.AI_PER_DAY, 1)
-
-    # A seller is never counted: no Firestore read or write at all.
-    monkeypatch.setattr(db, "store_doc", lambda: (_ for _ in ()).throw(AssertionError("sellers are not counted")))
-    auth.ai_budget({"uid": "s", "email": "s@example.com"}, 5)
 
 
 def test_demo_ai_budget_counts_per_visitor_and_for_everyone_without_transactions(monkeypatch):

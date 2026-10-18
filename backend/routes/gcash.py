@@ -28,8 +28,12 @@ log = logging.getLogger(__name__)
 
 @router.get("/api/settings/gcash")
 def get_gcash(user: dict = Depends(auth.current_user)):
-    if user.get("demo"):
-        return {**config.DEMO_GCASH, "qr_image": True}  # the sample QR, stamped as one
+    """What Settings shows: the demo shop's account, read-only."""
+    return {**config.DEMO_GCASH, "qr_image": True}  # the sample QR, stamped as one
+
+
+def store_gcash() -> dict | None:
+    """The shop's own GCash account, for its Messenger orders. Set in Firestore; visitors cannot change it."""
     store = db.store_doc().get().to_dict() or {}
     return store.get("gcash") and {**store["gcash"], "qr_image": bool(store.get("gcash_qr_image"))}
 
@@ -97,9 +101,9 @@ class GcashRequest(BaseModel):
 
 @router.post("/api/orders/{order_id}/gcash/request")
 def request_gcash(order_id: str, body: GcashRequest | None = None, user: dict = Depends(auth.current_user)):
-    pay_to = config.DEMO_GCASH if db.demo_order(order_id) else get_gcash(user)
+    pay_to = config.DEMO_GCASH if db.demo_order(order_id) else store_gcash()
     if not pay_to:
-        raise HTTPException(409, "Add your GCash name and number in Settings first")
+        raise HTTPException(409, "The shop has no GCash account set up yet")
     now = datetime.now(UTC)
     qr = pay_to.get("qr") or {}
     snapshot = {"name": pay_to["name"], "mobile": pay_to["mobile"], "masked_name": qr.get("masked_name"), "user_id": qr.get("user_id")}

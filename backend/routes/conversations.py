@@ -25,7 +25,8 @@ log = logging.getLogger(__name__)
 # ponytail: first page only (25 threads, 50 messages), add paging when a Page outgrows it
 @router.get("/api/conversations")
 def conversations(user: dict = Depends(auth.current_user)):
-    if user.get("demo"):
+    """The shop's Messenger threads, then this visitor's own demo chats."""
+    if not config.PAGE_ID:
         return demo_list(user)
     try:
         data = messenger.graph(

@@ -14,10 +14,11 @@ from services import catalog
 router = APIRouter()
 
 
-# The catalog. Demo visitors see the demo shop's, read-only: editing routes are not in auth.DEMO_ROUTES.
+# The catalog. Settings shows the demo shop's, read-only: the editing routes are not in auth.DEMO_ROUTES, so no visitor
+# reaches them. The shop's own catalog is set in Firestore and used for its Messenger orders.
 @router.get("/api/catalog")
 def list_catalog(user: dict = Depends(auth.current_user)):
-    return catalog.products(bool(user.get("demo")))
+    return catalog.products(True)
 
 
 def product(product_id: str) -> tuple:
@@ -82,7 +83,10 @@ async def upload_reference(product_id: str, n: int, request: Request, user: dict
 
 @router.get("/api/catalog/{product_id}/photos/{n}")
 def reference_photo(product_id: str, n: int, user: dict = Depends(auth.current_user)):
-    found = next((p for p in catalog.products(bool(user.get("demo"))) if p["id"] == product_id), None)
+    # the demo shop's products, then the shop's own, which its Messenger orders refer to
+    found = next((p for p in catalog.products(True) if p["id"] == product_id), None) or next(
+        (p for p in catalog.products(False) if p["id"] == product_id), None
+    )
     if not found or not 0 <= n < len(found["variants"]) or not found["variants"][n].get("photo"):
         raise HTTPException(404, "Photo not found")
     photo = found["variants"][n]["photo"]

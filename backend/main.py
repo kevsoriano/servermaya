@@ -1,8 +1,9 @@
 """The API. Routes live in routes/, one module per area; shared code in core/, integrations/ and services/; business rules,
 as pure functions, in domain/."""
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 
 from core import auth, config
 from routes import catalog, claims, conversations, customer, demo, dispatch, gcash, orders, packing, patterns, refunds, returns, webhooks
@@ -21,6 +22,18 @@ app.add_middleware(
 @app.get("/api/healthz")
 def healthz():
     return {"ok": True}
+
+
+class AccessIn(BaseModel):
+    code: str = Field(min_length=1, max_length=200)
+
+
+@app.post("/api/access")
+def enter_access_code(body: AccessIn, user: dict = Depends(auth.current_user)):
+    """The one way in: this anonymous session enters the access code, once."""
+    if not auth.admit(user["uid"], body.code):
+        raise HTTPException(403, "That code doesn't work. Check it and try again.")
+    return me({**user, "admitted": True})
 
 
 @app.get("/api/me")

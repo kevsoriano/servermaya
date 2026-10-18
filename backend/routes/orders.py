@@ -13,12 +13,10 @@ router = APIRouter()
 
 @router.get("/api/orders")
 def list_orders(user: dict = Depends(auth.current_user)):
-    if user.get("demo"):
-        docs = db.orders().where(filter=firestore.FieldFilter("source.owner", "==", user["uid"])).stream()
-    else:
-        # ponytail: over-fetches to skip other people's demo orders; query by source.type once demo orders outnumber real ones
-        docs = db.orders().order_by("created_at", direction=firestore.Query.DESCENDING).limit(100).stream()
-    mine = [d for d in docs if auth.visible(d.to_dict(), user)]
+    """This visitor's demo orders and the shop's own (its Messenger orders), newest first."""
+    own = db.orders().where(filter=firestore.FieldFilter("source.owner", "==", user["uid"])).stream()
+    shop = db.orders().where(filter=firestore.FieldFilter("source.type", "==", "messenger")).stream()
+    mine = [d for d in [*own, *shop] if auth.visible(d.to_dict(), user)]
     mine.sort(key=lambda d: d.get("created_at") or datetime.max.replace(tzinfo=UTC), reverse=True)
     return [db.present(d) for d in mine[:25]]
 

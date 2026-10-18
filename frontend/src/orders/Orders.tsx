@@ -79,6 +79,7 @@ export default function Orders({ initial }: { initial?: string }) {
                     {o.draft.total === null ? 'no total yet' : peso(o.draft.total)} · version {o.version}
                   </span>
                   <mark className={`status ${o.status}`}>{STATUS[o.status]}</mark>
+                  {o.source.type === 'messenger' && <mark className="source tester">Real tester</mark>}
                 </div>
               </button>
             </li>

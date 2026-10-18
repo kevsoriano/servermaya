@@ -78,7 +78,9 @@ files under `backend/` (most in `.venv`) and made every request about 5× slower
 cd backend && uv run --env-file .env uvicorn main:app --port 8000
 # terminal 2
 cd frontend && npm run dev          # http://localhost:5173 (the Firebase key allows only this origin locally)
-# terminal 3, in the rec folder: warm up once, then record one after the other, not in parallel
+# terminal 3, in the rec folder: the app only lets in a session that enters the access code
+export ACCESS_CODE=$(grep '^ACCESS_CODE=' ../ai-builder-cup/backend/.env | cut -d= -f2-)   # adjust the path to the repo
+# warm up once, then record one after the other, not in parallel
 node warmup.mjs          # the script below record.mjs: compiles the frontend, connects the backend, caches the briefs
 node record.mjs A out-A
 node record.mjs B out-B
@@ -129,7 +131,7 @@ Re-record or trim long waits in editing.
   `.messages li.typing` (the customer is answering), `dialog.viewer[open]` with its `h2` and `.viewer-close`, `form.reply`,
   `nav.tabs button`, `.signal.pattern` (a Patterns card), `section.packing` with its `select`, `form` and
   `div.claim:not(.done)` (the claims on an order), the `/customer/auto`, `/claims/from-chat` and `/claims/…/review`
-  requests, and button texts ("Try the demo", "Create draft order", "Send for confirmation in chat", "Already paid by
+  requests, the access-code form (`main.card input` and its "Enter" button), and button texts ( "Create draft order", "Send for confirmation in chat", "Already paid by
   GCash", "Check receipt screenshots", "Open order →", "Open claim from the chat", "Open claim", "Review with AI"). Update
   the script to match.
 - **A card is missing or its count is off by one**: the Patterns tab was opened before the seller's action was saved, or
@@ -142,7 +144,8 @@ Re-record or trim long waits in editing.
   after several takes in a row. Wait a few minutes and record again.
 - **"Could not read a screenshot. Try again."** at Check receipt screenshots: Gemini failed twice in a row on the read (it
   retries once, with a "screenshot read attempt" warning in the backend log). Record again.
-- **The chat list stays on "Loading…" after Try the demo**: the local backend got stuck, seen once after a failed run.
+- **The access code is refused**: `ACCESS_CODE` is not set in the shell, or differs from the one the backend runs with.
+- **The chat list stays on "Loading…" after the access code**: the local backend got stuck, seen once after a failed run.
   Restart it and record again.
 - **The video opens on a click instead of the still list**: the cut landed late. Raise the 1500 ms hold after the cut.
 
@@ -157,6 +160,8 @@ import { execFileSync } from 'node:child_process'
 import ffmpeg from 'ffmpeg-static'
 
 const URL = process.env.APP_URL ?? 'http://localhost:5173'
+const CODE = process.env.ACCESS_CODE
+if (!CODE) throw new Error('Set ACCESS_CODE: the app only lets in sessions that enter it')
 const [flow, out] = process.argv.slice(2)
 fs.mkdirSync(out, { recursive: true })
 
@@ -232,7 +237,9 @@ const sellerSays = async (text, receipt = false) => {
 
 // Signing in is not part of the video: it is cut from the start at the moment the chats have loaded.
 await page.goto(URL)
-await click('button:has-text("Try the demo")')
+// The one way in: the access code (ACCESS_CODE), as a judge enters it.
+await page.locator('main.card input').fill(CODE)
+await click('main.card button:has-text("Enter")')
 await chat('Mark Dizon').waitFor({ timeout: 120_000 })
 await page.waitForTimeout(500) // the list's previews and avatars settle
 // Patterns, unseen: one visit before the cut, so each flow's last step can show what its action changed ("Up from 3 since
@@ -412,8 +419,9 @@ const ok = async (label, fn) => {
   try { await fn(); console.log(`ok   ${label.padEnd(30)} ${t()}`) } catch (e) { console.log(`FAIL ${label.padEnd(30)} ${t()} ${e.message.split('\n')[0]}`) }
 }
 await p.goto('http://localhost:5173')
-await ok('sign in and seed', async () => {
-  await p.locator('button:has-text("Try the demo")').click()
+await ok('access code and seed', async () => {
+  await p.locator('main.card input').fill(process.env.ACCESS_CODE ?? '')
+  await p.locator('main.card button:has-text("Enter")').click()
   await p.locator('.threads button:has-text("Mark Dizon")').first().waitFor({ timeout: 120000 })
 })
 for (const name of ['Mark Dizon', 'Dan Cortez', 'Bea Villanueva', 'Carla Villamor'])

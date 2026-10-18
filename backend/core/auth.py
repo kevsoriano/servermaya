@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 from datetime import datetime
 
 from fastapi import Header, HTTPException, Request
@@ -13,11 +15,58 @@ from services import chats
 _http = google_requests.Request()
 
 
-def current_user(request: Request, authorization: str = Header(default="")) -> dict:
-    """Verify the Firebase ID token and the email allowlist. Every protected route depends on this.
+MAX_ATTEMPTS = 10  # wrong codes per session; a long code makes guessing hopeless anyway
+_admitted: dict[str, str] = {}  # uid -> the code key it was admitted with, kept per instance to save a read per request
 
-    Anonymous Firebase sign-ins are demo visitors: they pass without the allowlist, but only reach their own demo chats and
-    the orders made from them (see demo_gate)."""
+
+def code_key(code: str) -> str:
+    """What a session stores of the code it entered: never the code itself."""
+    return hashlib.sha256(f"suri-access|{code}".encode()).hexdigest()[:32]
+
+
+def visitors():
+    return db.store_doc().collection("visitors")
+
+
+def admitted(uid: str) -> bool:
+    """Whether this session entered the current access code. A changed code admits nobody until they enter the new one."""
+    if not config.ACCESS_CODE:
+        return False
+    current = code_key(config.ACCESS_CODE)
+    if _admitted.get(uid) == current:
+        return True
+    if (visitors().document(uid).get().to_dict() or {}).get("code") == current:
+        _admitted[uid] = current
+        return True
+    return False
+
+
+def admit(uid: str, code: str) -> bool:
+    """Check a code this session entered; on a match, the session is admitted for as long as the code stays the same."""
+    if not config.ACCESS_CODE:
+        raise HTTPException(503, "Access is closed for now.")
+    ref = visitors().document(uid)
+    tries = (ref.get().to_dict() or {}).get("attempts", 0)
+    if tries >= MAX_ATTEMPTS:
+        raise HTTPException(429, "Too many wrong codes. Sign out and ask for the access code again.")
+    if not hmac.compare_digest(code.strip(), config.ACCESS_CODE):
+        ref.set({"attempts": tries + 1}, merge=True)
+        return False
+    ref.set({"code": code_key(config.ACCESS_CODE), "admitted_at": firestore.SERVER_TIMESTAMP, "attempts": 0}, merge=True)
+    _admitted[uid] = code_key(config.ACCESS_CODE)
+    return True
+
+
+# Before the code is entered, a session may only ask who it is and enter the code.
+OPEN_ROUTES = {("GET", "/api/me"), ("POST", "/api/access")}
+
+
+def current_user(request: Request, authorization: str = Header(default="")) -> dict:
+    """Verify the Firebase ID token and the access code. Every protected route depends on this.
+
+    Every visitor is an anonymous Firebase sign-in that has entered the access code: there are no accounts. A visitor reaches
+    their own demo chats and orders, the shop's Messenger inbox and its orders, and the read-only settings (see demo_gate).
+    "demo" is kept in the user for the visitor limits (the AI budget) and the demo shop's settings."""
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token:
         raise HTTPException(401, "Missing bearer token")
@@ -27,20 +76,25 @@ def current_user(request: Request, authorization: str = Header(default="")) -> d
         raise HTTPException(401, "Invalid token")
     if claims.get("iss") != f"https://securetoken.google.com/{config.PROJECT_ID}":
         raise HTTPException(401, "Invalid token")
-    if (claims.get("firebase") or {}).get("sign_in_provider") == "anonymous":
-        user = {"uid": claims["sub"], "email": "demo visitor", "name": "Demo visitor", "demo": True}
-        demo_gate(request, user)
-        return user
-    email = (claims.get("email") or "").lower()
-    if not claims.get("email_verified") or email not in config.ALLOWLIST:
-        raise HTTPException(403, "This account is not allowed")
-    return {"uid": claims["sub"], "email": email, "name": claims.get("name"), "demo": False}
+    if (claims.get("firebase") or {}).get("sign_in_provider") != "anonymous":
+        raise HTTPException(401, "Sign in with the access code")
+    # what records say did something: a short form of the session, so two judges' actions can be told apart
+    label = f"visitor {claims['sub'][:6]}"
+    user = {"uid": claims["sub"], "email": label, "name": "Visitor", "demo": True}
+    route = (request.method, getattr(request.scope.get("route"), "path", ""))
+    if route in OPEN_ROUTES:
+        return {**user, "admitted": admitted(user["uid"])}
+    if not admitted(user["uid"]):
+        raise HTTPException(403, "Enter the access code")
+    demo_gate(request, user)
+    return user
 
 
-# Routes a demo visitor may call that name no chat or order. Routes with a chat or order in the path are allowed only for
-# the visitor's own; every other route is refused, so a new route stays closed to demo visitors until it is listed here.
+# Routes a visitor may call that name no chat or order. A route with a demo chat or order in the path is allowed only for the
+# visitor's own; every other route is refused (the settings stay read-only), so a new route stays closed until it is listed.
 DEMO_ROUTES = {
     ("GET", "/api/me"),
+    ("POST", "/api/access"),
     ("GET", "/api/conversations"),
     ("POST", "/api/demo/threads"),
     ("POST", "/api/demo/reset"),
@@ -60,8 +114,8 @@ DEMO_ROUTES = {
 def demo_gate(request: Request, user: dict):
     params = request.path_params
     if "conversation_id" in params:
-        cid = params["conversation_id"]
-        if not demo.is_demo(cid) or chats.demo_doc(cid).get("owner") != user["uid"]:
+        cid = params["conversation_id"]  # a Messenger thread is the shop's, open to every visitor; its routes check its id
+        if demo.is_demo(cid) and chats.demo_doc(cid).get("owner") != user["uid"]:
             raise HTTPException(404, "Demo chat not found")
     if "order_id" in params:
         snap = db.orders().document(params["order_id"]).get()
@@ -72,21 +126,19 @@ def demo_gate(request: Request, user: dict):
 
 
 def visible(order: dict, user: dict) -> bool:
-    """Demo orders belong to whoever made their chat; everything else is the store's, closed to demo visitors."""
+    """Demo orders belong to whoever made their chat; everything else is the shop's (its Messenger orders), open to every visitor."""
     source = order.get("source") or {}
-    return source.get("owner") == user["uid"] if source.get("type") == "demo" else not user.get("demo")
+    return source.get("owner") == user["uid"] if source.get("type") == "demo" else True
 
 
 def ai_budget(user: dict, n: int = 1):
-    """Count n Gemini calls for a demo visitor before making them, or refuse with 429. Sellers are never limited.
+    """Count n Gemini calls for a visitor before making them, or refuse with 429. Every visitor is counted.
 
     Counted when asked, not when Gemini answers, so a failed call still counts: the limit is on cost, and a failure costs too.
     Every visitor's AI call adds to the same daily total, and transactions on one document abort each other under load, so
     the counters are read once and then only incremented by the server. Calls racing at the very edge of a limit can overshoot
     it by a few: it bounds cost, it is not an exact count.
     """
-    if not user.get("demo"):
-        return
     day = datetime.now(gcash.PHT).strftime("%Y-%m-%d")
     mine = db.store_doc().collection("demoAiUse").document(f"{user['uid']}_{day}")
     total = db.store_doc().collection("demoAiTotals").document(day)
