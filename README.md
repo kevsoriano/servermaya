@@ -6,14 +6,14 @@ An assistant for small sellers who take orders in Messenger and get paid by GCas
 
 ## Try it
 
-Open the live app and enter the **access code** `SURI-XV85-ED5E-Y4YY-TX7Y`. There are no accounts: each code entry is a session of its own. Chats marked **Real tester** are a real person on Messenger, not an AI customer, so they may not answer right away.
+Open the live app and enter the **access code** `SURI-XV85-ED5E-Y4YY-TX7Y`. There are no accounts: each code entry is a session of its own.
 
 - You get fifteen demo chats. You are the seller; each customer is played by AI (Gemini) and answers your messages on their own, in character, sticking to what their chat already says.
 - From a chat: create the draft order and send it for confirmation; the customer taps **Confirm** under the summary in the chat. Send the payment link in the chat and pay with PayMongo's **Simulate payment** (test mode), or pay by GCash. Then check packing photos, book a Lalamove sandbox delivery, ask the customer to tap **Received**, and open Bea's damage report from her chat, with her photo and unboxing video, then review it.
 - To try GCash, press **Send GCash QR code** (or **Already paid by GCash (outside the chat)** for Mark). The customer answers with a made-up receipt, stamped SAMPLE, made in code (the AI never draws an image). Mark's first receipt is always paid to someone else; tell him and he sends one that matches. To confirm a payment the way a seller would, use **Sample history screenshot** in the order, or download the sample GCash history PDF in Settings and upload it (its password is in the next point).
 - **Sample GCash history PDF** (Settings): GCash locks its history exports with a password, and so does the sample. Its password is `delacruz4567`: GCash's rule, the account holder's last name and the last 4 digits of their number, for the demo's made-up account (Juan Dela Cruz, 0917 123 4567). Upload it under Settings to confirm the GCash payments of the matching sample receipts you sent.
 - **New demo chat** pastes any chat in `Customer:` / `Seller:` lines, or leave it empty and the AI customer starts it by asking about something from the catalog. The seeded customers' personalities stay in their own chats; a new chat gets a polite generic customer. **Reset demo chats** starts over.
-- Each session sees its own demo chats and orders, with a made-up GCash account and pickup address, and the shop's real Messenger inbox and its orders, shared by everyone with the code. The Meta app is in development mode, so only its tester can message the Page. Settings are read-only for everyone.
+- Each session sees its own demo chats and orders, with a made-up GCash account and pickup address, and the shop's real Messenger inbox and its orders, shared by everyone with the code. The Meta app is in development mode, so only its tester can message the Page: chats marked **Real tester** are that person, not an AI customer, so they may not answer right away. Settings are read-only for everyone.
 
 ## The problem
 
@@ -21,16 +21,25 @@ A small Philippine online seller keeps the order in a Messenger thread, the paym
 
 ## What it does
 
+Each order follows six steps, and every check stays under the seller's control: unclear evidence prompts a question, and refunds and replacements need a seller action.
+
+1. **Capture and confirm.** AI drafts the order from the Messenger chat; the seller reviews it and the customer confirms it in the chat.
+2. **Check payment.** PayMongo verifies the payment, or the seller reconciles a GCash receipt with their own GCash history.
+3. **Review packing.** AI checks the packing photos and videos against the order; the seller resolves any gap before dispatch.
+4. **Deliver and receive.** The seller books a courier, delivery proofs are tracked, and the customer confirms receipt.
+5. **Review any claim.** AI compares the claim with the evidence and recalls how the shop decided similar claims.
+6. **Resolve and learn.** The seller approves the outcome; the order history and the store's patterns are updated.
+
 | Stage | What happens |
 |---|---|
 | **Chat to order** | Gemini reads the Messenger thread and drafts the order: items, quantities, recipient, address. Every field cites the message it came from, and the seller reviews and edits before anything is sent. For a returning customer, the new order is drafted only from the messages after the last order. Name, phone and address the customer doesn't repeat are copied from their last confirmed order and marked as copied, not cited. |
 | **Catalog** | The seller's products, each variant with a price, stock and an optional reference photo, in Settings. Drafting matches each item to a catalog line (Gemini picks the line; code looks up every value). A price no seller message states comes from the catalog and says so; a chat price that differs from it, and stock that runs short, are noted on the order; the chat price the customer agreed to stands. The packing check sends each line's reference photo, so a variant named "Sky" can be checked by how it looks. |
 | **About this customer** | Above the order: a short paragraph Gemini writes about the customer's history with the shop, from their finished orders (counted in code: outcomes, claims with their recorded causes, refunds, returns, failed deliveries) and the messages about them. The conversation going on now is left to the checks, so a new message never rewrites it; a newly finished order does. Briefs are kept by the hash of their input and shared by every chat with the same history. A first-time customer gets a fixed line reminding the seller to check their Facebook profile, with no Gemini call. It never judges the customer. |
 | **Checks before shipping** | Gemini flags specific things in the chat to verify, such as "says they already paid", pressure to ship before payment, asking the seller to open an account, use a link or share a code to "receive" payment, or threatening to post about the shop or report its page. Each check quotes the message. It is never a score or a label on the customer. |
-| **Video evidence** | The seller can film packing and sealing; the customer can send an unboxing video in the chat. Videos are stored with their hash and given to Gemini as links to the evidence bucket, so their size never limits a review. The seller prints a packing label with the order code and sticks it on the box; the customer is asked to film the label before opening. Each video gets its own check first (one continuous shot, sealed at the start, the item's condition, the label's order code and name, which code compares with the order), and a label from another order or a cut means the video cannot show the item came out of that parcel: never a sign of dishonesty, a reason to ask for the uncut video. The demo's videos are realistic samples made with Veo. |
 | **Customer confirmation** | Everything happens in the chat. The seller sends the order summary with a **Confirm** quick-reply button whose text names the order and version, and code matches the customer's tap exactly; no AI reads it. The payment link (PayMongo QR Ph) goes in the chat too, or the customer pays GCash directly: one click sends the shop's GCash name, number and amount, then the shop's own QR screenshot saved in Settings (the demo shop sends a stamped sample QR that pays no one). Once it is on its way, a **Received** button records receipt, kept apart from the courier's "delivered". A complaint in the chat becomes a claim when the seller picks the messages: the claim keeps the customer's own words and photos. With the Messenger webhook set up, a tap applies the moment it happens: the button carries the order (and version), and it counts only from the customer it was sent to, checked against Meta's signature. Messenger allows replies for 24 hours after the customer's last message (7 days for a person replying, once the app has Meta's Human Agent permission); a fallback for a closed window is on the roadmap. |
 | **Payment** | Only a checkout session the backend fetches from PayMongo's API marks a payment as verified; PayMongo's webhook (its signature checked), the seller's status check and the customer's payment page each only prompt that fetch. For direct GCash, a customer's screenshot is transcribed by Gemini and checked in code (recipient name and number, amount, date, reference format). It is still only a claim until the seller finds it in their own GCash history, either by screenshot or by uploading the GCash history PDF, which is parsed in code with running-balance checks. If the customer says they paid before being asked, receipts count from the start of the conversation about the order instead of from the request. |
 | **Packing** | The seller photographs the packed items. Gemini reports what it can see per order line; code compares that with the confirmed order, and anything uncertain waits for the seller. |
+| **Video evidence** | The seller can film packing and sealing; the customer can send an unboxing video in the chat. Videos are stored with their hash and given to Gemini as links to the evidence bucket, so their size never limits a review. The seller prints a packing label with the order code and sticks it on the box; the customer is asked to film the label before opening. Each video gets its own check first (one continuous shot, sealed at the start, the item's condition, the label's order code and name, which code compares with the order), and a label from another order or a cut means the video cannot show the item came out of that parcel: never a sign of dishonesty, a reason to ask for the uncut video. The demo's videos are realistic samples made with Veo. |
 | **Dispatch and delivery** | Booking through Lalamove (sandbox), with status from its signed webhook, or a seller-reported courier. Every delivery event is labelled with its source, and "delivered" (the courier) is kept apart from "received" (the customer). The driver is kept with where it came from: Lalamove (name and masked plate, fetched while the order is active, because Lalamove stops serving them after), simulated (the sandbox, which rarely assigns a driver), or named by the seller (a Favourite Driver or a rider arranged outside Lalamove). Lalamove's pickup and drop-off photos are copied into the evidence bucket. A failed or cancelled shipment records who and why, since Lalamove gives no reason. |
 | **Claims** | The customer reports a problem with photos. An ADK agent starts from the claim and the customer's photos, fetches the order's records with read-only tools (the order and payment, the chat, packing with its photos, delivery events), recalls how the shop decided similar claims from Memory Bank, and recommends an outcome, citing evidence IDs. None of its tools can change anything. Its after-agent callback runs code that drops any citation to a record it was not given or did not fetch, and holds back findings left without one. |
 | **Custody check and cause** | Each claim's evidence chain (packed, picked up, in transit, dropped off, opened, returned) is read in code on every load. The courier's pickup and drop-off photos each get a narrow Gemini check (the parcel's outside, its seal, its label, which code compares). The first step where the parcel looks wrong suggests a cause: the seller's error, the courier in transit, the customer, or unknown. The seller records the cause with the decision. A missing photo or video never counts against the courier or the customer. |
@@ -44,6 +53,31 @@ A small Philippine online seller keeps the order in a Messenger thread, the paym
 - **Chat text is data, not instructions.** Customer, courier and model-written text is flattened to one line before it goes into a prompt, so it can't pose as a seller message or a payment record. Prompt injection has a unit test and live Gemini eval cases (fake seller lines, a `</chat>` breakout, "ignore instructions", a fake payment record, a Tagalog instruction, and a fake record in a claim).
 - **Records are appended.** Replaced shipments, re-packing and refunds keep their history.
 
+## Architecture
+
+```mermaid
+flowchart LR
+  seller["Seller dashboard<br/>React on Firebase Hosting<br/>Firebase Authentication"]
+  api["Application backend<br/>FastAPI on Cloud Run<br/>order and payment rules<br/>evidence checks, webhook validation"]
+  messenger["Messenger<br/>conversations, confirmations,<br/>customer complaints"]
+  commerce["Commerce services<br/>PayMongo (test), Lalamove (sandbox)<br/>Google Maps Platform"]
+  gemini["Gemini on Vertex AI<br/>structured extraction<br/>photo and video analysis"]
+  agent["ADK claim reviewer<br/>read-only evidence tools<br/>cited recommendations"]
+  memory["Memory Bank<br/>past seller decisions"]
+  data["Firestore and Cloud Storage<br/>orders, decisions, events<br/>hashed photo and video evidence"]
+  armor["Model Armor<br/>input screening"]
+  seller <--> api
+  messenger <-->|Graph API, webhook| api
+  commerce <-->|API, webhooks| api
+  api --> gemini
+  api --> agent
+  agent --> memory
+  api --> armor
+  api <--> data
+```
+
+The browser only talks to the backend: Firestore and Storage are closed to it, and every AI call, payment check and courier booking goes through Cloud Run. Each service is described below.
+
 ## How it uses Google Cloud
 
 | Service | Use |
@@ -55,9 +89,9 @@ A small Philippine online seller keeps the order in a Messenger thread, the paym
 | **Gemini image generation** | The demo's product photos (catalog references, packing and damage photos) were made once with `gemini-3.1-flash-image`, each packing or damage photo from its product's reference so it shows the same item, and stamped as AI-generated samples (`backend/seed/make_images.py`). A real seller's catalog uses photos of their own products. |
 | **Google Maps Platform** | The Geocoding API suggests the drop-off and pickup pins from the address, and the Maps JavaScript API shows them on a map to drag into place. Lalamove needs a pin and does not geocode. Philippine addresses often geocode to the wrong street or city (even at Google's top precision), so the backend compares the city and street with the address and tells the seller in plain words what to check. A Google Maps link, including a short share link the customer sends in the chat, is read for its pin, following redirects only through Google's hosts. Keys: the server key may only geocode; the browser key only loads maps, only on this app's addresses. |
 | **Veo video generation** | The demo's and the eval's unboxing and packing videos were made once with `veo-3.1-generate-001` from the catalog's photo of the blue mug, so it is the same mug, and every frame is stamped "SAMPLE VIDEO · AI GENERATED" (`backend/seed/make_videos.py`). |
-| **Cloud Run** | The FastAPI backend: all API routes, the Messenger Graph API client, and the Messenger, PayMongo and Lalamove webhooks. One instance is kept warm through judging (`MIN_INSTANCES=1`; deploy with 0 afterwards to scale to zero), each takes 30 requests at once, and it runs as its own service account (`api-runtime`) with only Firestore, the evidence bucket, Vertex AI, Memory Bank, Model Armor and its own secrets. |
+| **Cloud Run** | The FastAPI backend: all API routes, the Messenger Graph API client, and the Messenger, PayMongo and Lalamove webhooks. One instance is kept warm (`MIN_INSTANCES=1`), each takes 30 requests at once, and it runs as its own service account (`api-runtime`) with only Firestore, the evidence bucket, Vertex AI, Memory Bank, Model Armor and its own secrets. |
 | **Firebase Hosting** | Serves the React frontend and routes `/api/**` to Cloud Run on the same domain. Hosting cuts off a forwarded request after 60 seconds, so the deployed frontend sends the actions that call Gemini straight to Cloud Run's own URL (300 seconds); the API accepts those cross-origin calls only from the app's own pages. |
-| **Firebase Authentication** | Anonymous sign-in only, then an access code entered once per session (`ACCESS_CODE`, kept in Secret Manager): no accounts, no email allowlist. The backend verifies the ID token and the session's admission on every protected route; changing the code shuts out every session admitted with the old one, and a session gets 10 tries. It limits each session to its own demo chats and orders, the shop's Messenger inbox and its orders, and read-only settings, and counts every session's AI calls (250 a day each, 5,000 for everyone). |
+| **Firebase Authentication** | Anonymous sign-in only, then an access code entered once per session (`ACCESS_CODE`, kept in Secret Manager): no accounts, no email allowlist. The backend verifies the ID token and the session's admission on every protected route, and a session gets 10 tries. It limits each session to its own demo chats and orders, the shop's Messenger inbox and its orders, and read-only settings, and counts every session's AI calls (250 a day each, 5,000 for everyone). |
 | **Firestore** | Orders with their full history, claims, refunds, delivery events, settings and webhook dedupe records. Security rules deny all browser access; everything goes through the backend. |
 | **Cloud Storage** | Evidence files: packing and claim photos, GCash screenshots, images sent in replies. Stored by content hash. |
 | **Secret Manager** | The access code and the API keys (Messenger, PayMongo, Lalamove, Google Maps) reach Cloud Run as secrets, each readable only by the backend's service account. Source deploys leave `.env` out of the upload (`backend/.gcloudignore`). |
@@ -102,7 +136,7 @@ frontend/   React + Vite on Firebase Hosting
   src/patterns/       store-wide pattern cards
   src/customer/       the page a customer sees after paying with PayMongo
   src/lib/            Firebase and API calls, display formatting, receipt check labels, maps, the per-tab error boundary
-docs/       product requirements (suri-prd.md), eval results and the submission deck
+docs/       eval results and the submission deck
 ```
 
 ## Running locally
