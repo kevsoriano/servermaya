@@ -292,8 +292,8 @@ CONTENTS = (
 # Gemini calls demo visitors may make in a Philippine day. A judge's full run is about 20, plus one per customer reply. The
 # total is the real ceiling: anyone can make a new anonymous account, so only it bounds what the demo can cost (about $30 a
 # day at Flash prices).
-# ponytail: no per-visitor limit while we test; set it back to 250 before judging.
-AI_PER_VISITOR: int | None = None
+# Per visitor too, so no one visitor can use up the day's total for everyone else.
+AI_PER_VISITOR: int | None = 250
 AI_PER_DAY = 5000
 
 

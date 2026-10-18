@@ -1,5 +1,6 @@
 import { GoogleAuthProvider, onAuthStateChanged, signInAnonymously, signInWithPopup, signOut, type User } from 'firebase/auth'
 import { useEffect, useState } from 'react'
+import Boundary from './lib/Boundary'
 import { setMapsConfig } from './lib/maps'
 import Conversations from './conversations/Conversations'
 import Orders from './orders/Orders'
@@ -108,29 +109,31 @@ export default function App() {
           You see only your own demo chats and orders. Payments are PayMongo test mode and deliveries are the Lalamove sandbox.
         </p>
       )}
-      {tab === 'conversations' ? (
-        <Conversations
-          key={chatId}
-          initial={chatId}
-          replyHours={me.reply_hours ?? 24}
-          onOpenOrder={(id) => (setOrderId(id), setTab('orders'))}
-        />
-      ) : tab === 'orders' ? (
-        <Orders key={orderId} initial={orderId} />
-      ) : tab === 'patterns' ? (
-        <Patterns onOpenChat={(id) => (setChatId(id), setTab('conversations'))} />
-      ) : (
-        <div className="page">
-          {me.demo && (
-            <p className="demo-banner" role="note">
-              A made-up catalog, GCash account and pickup address. They can't be changed in the demo.
-            </p>
-          )}
-          <Catalog readOnly={!!me.demo} />
-          <GcashSettings />
-          <DispatchSettings readOnly={!!me.demo} />
-        </div>
-      )}
+      <Boundary key={tab}>
+        {tab === 'conversations' ? (
+          <Conversations
+            key={chatId}
+            initial={chatId}
+            replyHours={me.reply_hours ?? 24}
+            onOpenOrder={(id) => (setOrderId(id), setTab('orders'))}
+          />
+        ) : tab === 'orders' ? (
+          <Orders key={orderId} initial={orderId} />
+        ) : tab === 'patterns' ? (
+          <Patterns onOpenChat={(id) => (setChatId(id), setTab('conversations'))} />
+        ) : (
+          <div className="page">
+            {me.demo && (
+              <p className="demo-banner" role="note">
+                A made-up catalog, GCash account and pickup address. They can't be changed in the demo.
+              </p>
+            )}
+            <Catalog readOnly={!!me.demo} />
+            <GcashSettings />
+            <DispatchSettings readOnly={!!me.demo} />
+          </div>
+        )}
+      </Boundary>
     </div>
   )
 }

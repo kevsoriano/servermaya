@@ -1,9 +1,6 @@
-import random
-import time
 from datetime import datetime
 
 from fastapi import Header, HTTPException, Request
-from google.api_core.exceptions import Aborted
 from google.auth.transport import requests as google_requests
 from google.cloud import firestore
 from google.oauth2 import id_token
@@ -80,35 +77,23 @@ def visible(order: dict, user: dict) -> bool:
     return source.get("owner") == user["uid"] if source.get("type") == "demo" else not user.get("demo")
 
 
-ABORT_RETRIES = 5
-
-
 def ai_budget(user: dict, n: int = 1):
     """Count n Gemini calls for a demo visitor before making them, or refuse with 429. Sellers are never limited.
 
     Counted when asked, not when Gemini answers, so a failed call still counts: the limit is on cost, and a failure costs too.
+    Every visitor's AI call adds to the same daily total, and transactions on one document abort each other under load, so
+    the counters are read once and then only incremented by the server. Calls racing at the very edge of a limit can overshoot
+    it by a few: it bounds cost, it is not an exact count.
     """
     if not user.get("demo"):
         return
     day = datetime.now(gcash.PHT).strftime("%Y-%m-%d")
-    mine = db.store_doc().collection("demoAiUse").document(user["uid"])
+    mine = db.store_doc().collection("demoAiUse").document(f"{user['uid']}_{day}")
     total = db.store_doc().collection("demoAiTotals").document(day)
-
-    @firestore.transactional
-    def take(tx):
-        used = mine.get(transaction=tx).to_dict() or {}
-        mine_used = used.get("count", 0) if used.get("day") == day else 0
-        all_used = (total.get(transaction=tx).to_dict() or {}).get("count", 0)
-        if problem := demo.over_budget(mine_used, all_used, n):
-            raise HTTPException(429, problem)
-        tx.set(mine, {"day": day, "count": mine_used + n})
-        tx.set(total, {"day": day, "count": all_used + n})
-
-    # Two Gemini calls from one visitor at once (the checks load while a draft is made) take the same counters: Firestore then
-    # aborts one transaction, and an abort on a read inside it is not retried for us. Try again; only a steady clash says busy.
-    for attempt in range(ABORT_RETRIES):
-        try:
-            return take(db.clients()[1].transaction())
-        except Aborted:
-            time.sleep(0.2 * (attempt + 1) + random.random() / 5)
-    raise HTTPException(503, "The demo is busy for a moment. Try again.")
+    used = {s.id: (s.to_dict() or {}).get("count", 0) for s in db.clients()[1].get_all([mine, total])}
+    if problem := demo.over_budget(used.get(mine.id, 0), used.get(total.id, 0), n):
+        raise HTTPException(429, problem)
+    batch = db.clients()[1].batch()
+    for ref in (mine, total):
+        batch.set(ref, {"day": day, "count": firestore.Increment(n)}, merge=True)
+    batch.commit()

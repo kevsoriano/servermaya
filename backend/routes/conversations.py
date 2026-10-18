@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from google.api_core.exceptions import AlreadyExists
 from google.cloud import firestore
 from google.genai import types
 from pydantic import BaseModel, Field
@@ -38,7 +37,7 @@ def conversations(user: dict = Depends(auth.current_user)):
         log.warning("Messenger thread list failed: %s", e.detail)  # demo chats still load, so the app stays usable
         data = {}
     threads = data.get("data", [])
-    seen, actions = read_marks(user), order_actions([c["id"] for c in threads])
+    seen, state = read_marks(user), list_state([c["id"] for c in threads])
     customers = {c["id"]: next((p for p in c.get("participants", {}).get("data", []) if p.get("id") != config.PAGE_ID), None) for c in threads}
     pics = messenger.profile_pics([p["id"] for p in customers.values() if p and p.get("id")])
     out = []
@@ -54,11 +53,11 @@ def conversations(user: dict = Depends(auth.current_user)):
                 "updated_time": c.get("updated_time"),
                 "snippet": c.get("snippet", ""),
                 "customer": customer and {**customer, "picture": pics.get(customer.get("id"))},
-                "open_checks": cached_open_checks(c["id"]),
+                "open_checks": state[c["id"]]["open_checks"],
                 "unread": bool(at) and (c["id"] not in seen or seen[c["id"]] < at),
                 "awaiting_reply": waiting,
                 "reply_until": (at + chats.reply_window()).isoformat() if at else None,
-                "order_actions": actions.get(c["id"], []),
+                "order_actions": state[c["id"]]["actions"],
             }
         )
     return out + demo_list(user)
@@ -66,28 +65,24 @@ def conversations(user: dict = Depends(auth.current_user)):
 
 def demo_list(user: dict) -> list[dict]:
     """This seller's demo chats, seeded the first time they open the inbox. Never read state or reply windows: nobody is waiting."""
-    try:
-        db.store_doc().collection("demoUsers").document(user["uid"]).create({"seeded_at": firestore.SERVER_TIMESTAMP})
-        seeding.seed_demo(user)
-    except AlreadyExists:
-        pass
+    seeding.seed_once(user)
     docs = sorted(
         chats.demo_threads().where(filter=firestore.FieldFilter("owner", "==", user["uid"])).stream(),
         key=lambda d: d.get("updated_time"),
         reverse=True,
     )
-    actions = order_actions([d.id for d in docs])
+    state = list_state([d.id for d in docs])
     return [
         {
             "id": d.id,
             "updated_time": d.get("updated_time"),
             "snippet": d.get("snippet"),
             "customer": {"id": d.id, "name": d.get("name"), "picture": None},
-            "open_checks": cached_open_checks(d.id),
+            "open_checks": state[d.id]["open_checks"],
             "unread": False,
             "awaiting_reply": False,
             "reply_until": None,
-            "order_actions": actions.get(d.id, []),
+            "order_actions": state[d.id]["actions"],
             "demo": True,
         }
         for d in docs
@@ -145,33 +140,28 @@ def order_action(order: dict) -> str | None:
     return ORDER_ACTIONS.get(order["status"])
 
 
-def order_actions(conversation_ids: list[str]) -> dict[str, list[str]]:
-    """What is still open on each thread's orders. Cancelled and paid orders need nothing."""
-    found: dict[str, list[str]] = {}
+def list_state(conversation_ids: list[str]) -> dict[str, dict]:
+    """What the chat list shows beside each thread: what is still open on its orders (cancelled and paid orders need nothing),
+    and its open checks from the last analysis (None: not analysed yet). A few reads however many threads: their orders in
+    one query per 30 threads, their stored checks in one batch. Never calls Gemini; without Firestore the list still loads."""
+    out = {cid: {"actions": [], "open_checks": None} for cid in conversation_ids}
+    by_chat: dict[str, list[dict]] = {}
     try:
         for i in range(0, len(conversation_ids), 30):  # Firestore caps an "in" filter at 30 values
-            batch = conversation_ids[i : i + 30]
-            for d in db.orders().where(filter=firestore.FieldFilter("source.conversation_id", "in", batch)).stream():
+            for d in db.orders().where(filter=firestore.FieldFilter("source.conversation_id", "in", conversation_ids[i : i + 30])).stream():
                 o = d.to_dict()
-                action = order_action(o)
-                cid = o["source"]["conversation_id"]
-                if action and action not in found.setdefault(cid, []):
-                    found[cid].append(action)
-    except Exception:
-        return {}
-    return found
-
-
-def cached_open_checks(conversation_id: str) -> int | None:
-    """Count from the last analysis only, so listing never calls Gemini. None means not analysed yet."""
-    try:
-        doc = db.signal_docs().document(conversation_id).get()
-    except Exception:
-        return None  # the list still works without Firestore
-    if not doc.exists:
-        return None
-    d = doc.to_dict()
-    return sum(1 for s in risk.resolve(d["signals"], [o for _, o in db.chat_orders(conversation_id)], d.get("reviews")) if risk.is_open(s))
+                by_chat.setdefault(o["source"]["conversation_id"], []).append(o)
+        for cid, found in by_chat.items():
+            found.sort(key=lambda o: o.get("created_at") or db.EPOCH, reverse=True)  # newest first, as db.chat_orders
+            out[cid]["actions"] = list(dict.fromkeys(a for a in map(order_action, found) if a))
+        for snap in db.clients()[1].get_all([db.signal_docs().document(cid) for cid in conversation_ids]):
+            if snap.exists:
+                d = snap.to_dict()
+                checks = risk.resolve(d["signals"], by_chat.get(snap.id, []), d.get("reviews"))
+                out[snap.id]["open_checks"] = sum(1 for c in checks if risk.is_open(c))
+    except Exception as e:
+        log.warning("chat list state failed: %r", e)
+    return out
 
 
 @router.get("/api/conversations/{conversation_id}")

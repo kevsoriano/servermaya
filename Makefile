@@ -5,6 +5,9 @@ RUN_SA  := api-runtime@$(PROJECT).iam.gserviceaccount.com
 EVIDENCE_BUCKET := $(PROJECT)-evidence
 # 1 keeps one instance warm through judging; deploy with MIN_INSTANCES=0 afterwards to scale to zero again
 MIN_INSTANCES ?= 1
+# Requests one instance takes at once. Below the 40 threads FastAPI runs blocking routes on, so while AI calls hold threads
+# for up to 90 s, Cloud Run starts another instance instead of queueing requests inside a busy one.
+CONCURRENCY ?= 30
 # read from backend/.env, but sent to Cloud Run through Secret Manager instead of as plain env vars
 SECRETS := MESSENGER_PAGE_TOKEN PAYMONGO_SECRET_KEY PAYMONGO_WEBHOOK_SECRET LALAMOVE_API_KEY LALAMOVE_API_SECRET
 # sent the same way when set; while empty, the Messenger webhook (or the Maps address lookup) stays off
@@ -62,7 +65,7 @@ deploy: deploy-backend deploy-frontend
 # ^;^ switches gcloud's list delimiter to ';' so the comma-separated allowlist survives
 deploy-backend: runtime-sa secrets
 	gcloud run deploy api --source backend --project $(PROJECT) --region $(REGION) \
-		--service-account $(RUN_SA) --allow-unauthenticated --min-instances $(MIN_INSTANCES) \
+		--service-account $(RUN_SA) --allow-unauthenticated --min-instances $(MIN_INSTANCES) --concurrency $(CONCURRENCY) \
 		--set-env-vars "^;^$$(grep -v '^#' backend/.env | grep . | grep -v $(patsubst %,-e ^%=,$(SECRETS) $(OPTIONAL_SECRETS)) | paste -sd';' -)" \
 		--set-secrets "$$(for k in $(SECRETS) $(OPTIONAL_SECRETS); do grep -q "^$$k=." backend/.env && printf '%s=%s:latest,' $$k $$k; done | sed 's/,$$//')"
 

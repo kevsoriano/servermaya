@@ -1,12 +1,41 @@
 import hashlib
+import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 
+from fastapi import HTTPException
+from google.api_core.exceptions import AlreadyExists
 from google.cloud import firestore
 
 from core import config, db
 from seed import catalog, demo, samples
 from services import chats
+
+log = logging.getLogger(__name__)
+SEED_FAILED = "Could not set up the demo chats. Reload the page to try again."
+
+
+def seed_once(user: dict):
+    """Seed a visitor's demo the first time they open the inbox. The marker is taken first, so two loads at once seed it once;
+    if seeding fails, the marker goes again, so the next load retries instead of showing an empty inbox for good."""
+    marker = db.store_doc().collection("demoUsers").document(user["uid"])
+    try:
+        marker.create({"seeded_at": firestore.SERVER_TIMESTAMP})
+    except AlreadyExists:
+        return
+    reseed(user, marker)
+
+
+def reseed(user: dict, marker=None):
+    """Seed, or seed again after a reset. On failure the visitor is left unseeded, never half seeded: the chats and orders are
+    written in one batch at the end, and the marker is removed so the next load tries again."""
+    marker = marker or db.store_doc().collection("demoUsers").document(user["uid"])
+    try:
+        seed_demo(user)
+    except Exception as e:
+        log.warning("demo seeding failed: %r", e)
+        marker.delete()
+        raise HTTPException(503, SEED_FAILED)
 
 
 def seed_demo(user: dict):

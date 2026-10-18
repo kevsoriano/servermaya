@@ -67,7 +67,7 @@ def reset_demo(user: dict = Depends(auth.current_user)):
         db.signal_docs().document(cid).delete()
         chats.demo_threads().document(cid).delete()
     db.store_doc().collection("demoUsers").document(user["uid"]).set({"samples": []}, merge=True)
-    seeding.seed_demo(user)
+    seeding.reseed(user)
     return {"deleted_chats": len(ids), "deleted_orders": len(order_ids)}
 
 

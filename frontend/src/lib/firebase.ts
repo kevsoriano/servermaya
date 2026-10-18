@@ -12,7 +12,11 @@ const app = initializeApp({
 export const auth = getAuth(app)
 
 async function json<T>(r: Response): Promise<T> {
-  if (!r.ok) throw new Error((await r.json().catch(() => null))?.detail ?? `Backend returned ${r.status}`)
+  if (!r.ok) {
+    const detail = (await r.json().catch(() => null))?.detail
+    // A request FastAPI could not validate lists each problem; anything else is one message.
+    throw new Error(Array.isArray(detail) ? detail.map((d) => d.msg).join('; ') : (detail ?? `Backend returned ${r.status}`))
+  }
   return r.json()
 }
 
@@ -38,5 +42,7 @@ export async function api(path: string, init: RequestInit = {}) {
   return fetch(`${base(path)}${path}`, {
     ...init,
     headers: { ...init.headers, Authorization: `Bearer ${token}` },
+  }).catch(() => {
+    throw new Error('Could not reach the server. Check your connection and try again.')
   })
 }

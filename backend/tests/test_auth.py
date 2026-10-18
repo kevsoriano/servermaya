@@ -94,37 +94,20 @@ def test_demo_ai_budget_limits_visitors_and_the_whole_demo_but_never_sellers(mon
     auth.ai_budget({"uid": "s", "email": "s@example.com"}, 5)
 
 
-def test_demo_ai_budget_retries_when_two_calls_take_the_counters_at_once(monkeypatch):
-    from google.api_core.exceptions import Aborted
+def test_demo_ai_budget_counts_per_visitor_and_for_everyone_without_transactions(monkeypatch):
+    from helpers import fake_google
+    from seed import demo
 
-    reads, writes = [], []
-
-    class Doc:
-        def __init__(self, key="store"):
-            self.key = key
-
-        def collection(self, name):
-            return self
-
-        def document(self, key):
-            return Doc(key)
-
-        def get(self, transaction):
-            reads.append(self.key)
-            if len(reads) == 1:
-                raise Aborted("cross-transaction contention")  # the other call holds the counters
-            return type("Snap", (), {"to_dict": lambda self: {}})()
-
-    tx = type("Tx", (), {"set": lambda self, ref, data: writes.append((ref.key, data["count"]))})()
-    monkeypatch.setattr(auth.firestore, "transactional", lambda f: f)
-    monkeypatch.setattr(auth.time, "sleep", lambda s: None)
-    monkeypatch.setattr(db, "store_doc", lambda: Doc())
-    monkeypatch.setattr(db, "clients", lambda: (None, type("Client", (), {"transaction": lambda self: tx})()))
-    auth.ai_budget({"uid": "v1", "demo": True}, 2)
-    assert writes[0] == ("v1", 2) and len(writes) == 2  # counted once, after the retry
-
-    reads.clear()
-    monkeypatch.setattr(Doc, "get", lambda self, transaction: (_ for _ in ()).throw(Aborted("still busy")))
-    with pytest.raises(HTTPException) as busy:
-        auth.ai_budget({"uid": "v1", "demo": True}, 1)
-    assert busy.value.status_code == 503
+    store, _ = fake_google(monkeypatch, None)
+    monkeypatch.setattr(db.clients()[1], "transaction", lambda: (_ for _ in ()).throw(AssertionError("no transaction")), raising=False)
+    monkeypatch.setattr(demo, "AI_PER_VISITOR", 5)
+    a, b = {"uid": "a", "demo": True}, {"uid": "b", "demo": True}
+    auth.ai_budget(a, 3)
+    auth.ai_budget(a, 2)  # exactly at the visitor's limit
+    with pytest.raises(HTTPException) as over:
+        auth.ai_budget(a, 1)
+    assert over.value.status_code == 429 and "limit of AI reads" in over.value.detail
+    auth.ai_budget(b, 4)  # another visitor has their own count
+    counts = {p.rsplit("/", 1)[1]: d["count"] for p, d in store.docs.items() if "/demoAi" in p}
+    day = next(k for k in counts if "_" not in k)
+    assert counts == {f"a_{day}": 5, f"b_{day}": 4, day: 9}  # a refused call is not counted

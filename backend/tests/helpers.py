@@ -6,7 +6,7 @@ from datetime import UTC
 
 from fastapi.testclient import TestClient
 from google.api_core.exceptions import AlreadyExists, NotFound, PreconditionFailed
-from google.cloud.firestore_v1.transforms import ArrayUnion
+from google.cloud.firestore_v1.transforms import ArrayUnion, Increment
 from google.oauth2 import id_token
 
 import main
@@ -54,7 +54,7 @@ def ready_order(**extra):
 
 
 class FakeFirestore:
-    """In-memory Firestore for route tests: documents, == and "in" queries, transactions, batches and ArrayUnion, which is all
+    """In-memory Firestore for route tests: documents, == and "in" queries, transactions, batches, ArrayUnion and Increment, which is all
     the routes use. Reads and writes copy, so a route never shares a dict with the store. Updates are top-level keys, as every
     rule returns."""
 
@@ -68,6 +68,9 @@ class FakeFirestore:
         return FakeTransaction()
 
     batch = transaction  # writes apply at once; commit() has nothing left to do
+
+    def get_all(self, refs):
+        return [r.get() for r in refs]
 
     def recursive_delete(self, ref):
         for path in [p for p in self.docs if p == ref.path or p.startswith(ref.path + "/")]:
@@ -115,7 +118,13 @@ class FakeDoc:
 
     def set(self, data, merge=False):
         old = self.db.docs.get(self.path, {}) if merge else {}
-        new = {k: old.get(k, []) + [x for x in v.values if x not in old.get(k, [])] if isinstance(v, ArrayUnion) else v for k, v in data.items()}
+
+        def apply(k, v):
+            if isinstance(v, ArrayUnion):
+                return old.get(k, []) + [x for x in v.values if x not in old.get(k, [])]
+            return old.get(k, 0) + v.value if isinstance(v, Increment) else v
+
+        new = {k: apply(k, v) for k, v in data.items()}
         self.db.docs[self.path] = {**old, **copy.deepcopy(new)}
 
     def update(self, data):

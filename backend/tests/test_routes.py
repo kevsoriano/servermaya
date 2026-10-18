@@ -708,3 +708,24 @@ def test_only_the_apps_own_pages_may_call_the_api_from_another_origin():
     ok = ask("https://servermaya-ai-builder-cup.web.app")
     assert ok.status_code == 200 and ok.headers["access-control-allow-origin"] == "https://servermaya-ai-builder-cup.web.app"
     assert "access-control-allow-origin" not in ask("https://evil.example").headers
+
+
+def test_a_failed_demo_seeding_is_retried_on_the_next_load(monkeypatch):
+    from services import seeding
+
+    store, _ = fake_google(monkeypatch, None)
+    assert fake_token(monkeypatch, firebase={"sign_in_provider": "anonymous"}).json()["demo"] is True
+    real, calls = seeding.seed_demo, []
+
+    def flaky(user):  # a storage or Firestore hiccup on the first try
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("storage unavailable")
+        real(user)
+
+    monkeypatch.setattr(seeding, "seed_demo", flaky)
+    first = client.get("/api/conversations", headers=SELLER)
+    assert first.status_code == 503 and first.json()["detail"] == seeding.SEED_FAILED
+    assert f"stores/{config.STORE}/demoUsers/u1" not in store.docs  # not marked as seeded, so the next load tries again
+    assert len(client.get("/api/conversations", headers=SELLER).json()) == 15
+    assert len(client.get("/api/conversations", headers=SELLER).json()) == 15 and len(calls) == 2  # seeded once, not again

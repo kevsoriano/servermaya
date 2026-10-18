@@ -171,10 +171,11 @@ def test_thread_list_read_state_and_pending_actions(monkeypatch):
             ]
         },
     )
-    monkeypatch.setattr(conversations, "cached_open_checks", lambda cid: None)
     monkeypatch.setattr(conversations, "demo_list", lambda user: [])
     monkeypatch.setattr(conversations, "read_marks", lambda user: {"t_3": now - timedelta(hours=1)})
-    monkeypatch.setattr(conversations, "order_actions", lambda ids: {"t_2": ["Waiting for payment"]})
+    monkeypatch.setattr(
+        conversations, "list_state", lambda ids: {i: {"actions": ["Waiting for payment"] if i == "t_2" else [], "open_checks": None} for i in ids}
+    )
     try:
         t1, t2, t3 = client.get("/api/conversations").json()
         assert (t1["unread"], t1["awaiting_reply"]) == (True, True)
