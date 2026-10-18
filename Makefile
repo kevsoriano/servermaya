@@ -69,12 +69,12 @@ deploy-backend: runtime-sa secrets
 		--set-env-vars "^;^$$(grep -v '^#' backend/.env | grep . | grep -v $(patsubst %,-e ^%=,$(SECRETS) $(OPTIONAL_SECRETS)) | paste -sd';' -)" \
 		--set-secrets "$$(for k in $(SECRETS) $(OPTIONAL_SECRETS); do grep -q "^$$k=." backend/.env && printf '%s=%s:latest,' $$k $$k; done | sed 's/,$$//')"
 
-# Firestore, the evidence bucket's objects, Vertex AI (Gemini, the claim agent, Memory Bank). Each secret is granted to it
-# on its own by `secrets`. Add roles/modelarmor.user here if MODEL_ARMOR_TEMPLATE is set.
+# Firestore, the evidence bucket's objects, Vertex AI (Gemini, the claim agent, Memory Bank) and Model Armor (screening with
+# the MODEL_ARMOR_TEMPLATE, never editing it). Each secret is granted to it on its own by `secrets`.
 runtime-sa:
 	@gcloud iam service-accounts describe $(RUN_SA) --project $(PROJECT) >/dev/null 2>&1 || \
 		gcloud iam service-accounts create api-runtime --project $(PROJECT) --display-name "Cloud Run backend (api)"
-	@for r in roles/datastore.user roles/aiplatform.user roles/aiplatform.memoryUser; do \
+	@for r in roles/datastore.user roles/aiplatform.user roles/aiplatform.memoryUser roles/modelarmor.user; do \
 		gcloud projects add-iam-policy-binding $(PROJECT) --member serviceAccount:$(RUN_SA) --role $$r --condition None --quiet >/dev/null || exit 1; \
 	done
 	@gcloud storage buckets add-iam-policy-binding gs://$(EVIDENCE_BUCKET) --member serviceAccount:$(RUN_SA) --role roles/storage.objectUser --quiet >/dev/null
