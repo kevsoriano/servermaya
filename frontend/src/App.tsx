@@ -77,6 +77,8 @@ export default function App() {
     setBusy(true)
     setError('')
     try {
+      // a Google session left from before access codes is not let in, so it is swapped for an anonymous one
+      if (auth.currentUser && !auth.currentUser.isAnonymous) await signOut(auth)
       if (!auth.currentUser) await signInAnonymously(auth)
       const r = await api('/access', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) })
       if (r.ok) {
