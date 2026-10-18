@@ -30,7 +30,8 @@ account, damage reports, parcels that arrived without their contents.
 ## What the seed sets up
 
 Every demo visitor gets 15 chats: the 8 to work through, and 7 from the past week behind the Patterns cards. Their checks
-are stored when the demo is seeded, so the counts are the same on every run. See [test-scenarios.md](test-scenarios.md).
+are stored when the demo is seeded, so the counts are the same on every run. The chats and their checks are defined in
+[backend/seed/demo.py](../backend/seed/demo.py).
 
 - **Receipts (A):** Paolo (paid to someone else), Grace (₱100 short) and Jerome (dated before the GCash request), each asking
   to ship first. 3 this week, so the card is already there.

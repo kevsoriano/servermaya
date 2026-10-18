@@ -110,7 +110,7 @@ make test    # backend tests, frontend lint and build
 make eval    # live Gemini evaluation, writes docs/eval-results.md
 ```
 
-The demo chats and evaluation cases are described in [docs/test-scenarios.md](docs/test-scenarios.md), with the latest results in [docs/eval-results.md](docs/eval-results.md).
+The demo chats are defined in [backend/seed/demo.py](backend/seed/demo.py) and the evaluation cases in [backend/evals/run.py](backend/evals/run.py), with the latest results in [docs/eval-results.md](docs/eval-results.md).
 
 Fill in `backend/.env` with your own keys. It is ignored by git.
 
