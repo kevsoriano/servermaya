@@ -21,7 +21,7 @@ persona's words, so it can fail to come in a take: re-record.
 | D | Carla | Her box arrived with only crumpled paper inside; the seller opens a Missing item claim from her messages, with the custody check beside it | **Count goes up**: "Missing or replaced contents" on Sample Rider 3, from 2 to 3 parcels (Mark, Rico, Carla), against 0 of 13 for other drivers | 0:47 |
 
 Lengths are untrimmed, with pauses standing in for narration (halved in A). Gemini waits (the draft, the claim review) and
-the Patterns tab loading (about 5 s) are worth trimming. Together the four flows are about 4:00 untrimmed; if they don't fit
+the Patterns tab loading (2–3 s) are worth trimming. Together the four flows are about 4:00 untrimmed; if they don't fit
 with an intro, drop C or D first, since both end on a driver card.
 
 The cards never say a customer did anything wrong. Narrate what they show: receipts that don't fit, requests to open an

@@ -2,7 +2,7 @@
 
 Version 0.5 · 12 October 2026 · Hackathon MVP proposal
 
-Product name is provisional. This is a new product-wide PRD covering conversation through resolution. Inputs are authorized chat messages, pasted text, and typed seller notes. Customer-call listening and post-call dictation remain outside scope. Optional seller narration is limited to deliberate packing-check sessions.
+The product is named Suri. This is a new product-wide PRD covering conversation through resolution. Inputs are authorized chat messages, pasted text, and typed seller notes. Customer-call listening and post-call dictation remain outside scope. Optional seller narration is limited to deliberate packing-check sessions.
 
 ## 1. Problem statement
 
