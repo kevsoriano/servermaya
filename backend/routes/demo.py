@@ -1,5 +1,6 @@
 import logging
 import re
+import secrets
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -12,7 +13,7 @@ from domain import customer_agent as agent
 from domain import orders as rules
 from domain import receipts as gcash
 from seed import demo, samples
-from services import chats, seeding
+from services import catalog, chats, seeding
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -134,20 +135,22 @@ def quick_reply_waiting(conversation_id: str, last: dict) -> str | None:
 
 @router.post("/api/conversations/{conversation_id}/customer/auto")
 def demo_customer_turn(conversation_id: str, user: dict = Depends(auth.current_user)):
-    """The demo customer answers the seller's latest message. A tap on the seller's button needs no Gemini. Otherwise
-    Gemini writes the words, and code decides whether a sample GCash receipt goes with them and which one."""
+    """The demo customer answers the seller's latest message, or opens an empty chat. A tap on the seller's button needs no
+    Gemini. Otherwise Gemini writes the words, and code decides whether a sample GCash receipt goes with them and which one."""
     demo_only(conversation_id)
     d = chats.demo_doc(conversation_id)
     messages = d["messages"]
-    if not messages or not messages[-1]["from_page"]:
+    if messages and not messages[-1]["from_page"]:
         return {"action": "none"}  # nothing new from the seller to answer
-    if button := quick_reply_waiting(conversation_id, messages[-1]):
+    if messages and (button := quick_reply_waiting(conversation_id, messages[-1])):
         chats.demo_post(conversation_id, False, button)
         chats.apply_answers(conversation_id)
         return {"action": "tap"}
 
-    p = agent.persona(d["name"])
-    m = gcash_waiting(conversation_id)
+    p = agent.persona(d.get("persona"))
+    # An empty chat a judge made: the customer starts it, asking about something the shop sells (picked here, not by Gemini).
+    opening = None if messages else secrets.choice(agent.wants(catalog.products(True)))
+    m = gcash_waiting(conversation_id) if messages else None
     sent = agent.receipts_sent(messages, m["requested_at"]) if m else 0
     kind = agent.receipt_kind(p, sent) if m else None
     attaching = bool(kind) and sent == 0  # the first receipt for a request always follows it
@@ -155,14 +158,15 @@ def demo_customer_turn(conversation_id: str, user: dict = Depends(auth.current_u
     turn = None
     for attempt in range(2):  # one quiet retry, as for the brief: a Vertex call occasionally fails
         try:
-            turn = write_turn(agent.prompt(d["name"], p, messages, attaching, bool(kind)))
+            turn = write_turn(agent.prompt(d["name"], p, messages, attaching, bool(kind), opening))
             break
         except Exception as e:
             log.warning("demo customer attempt %d failed: %r", attempt + 1, e)
     if turn is None and not attaching:
         raise HTTPException(502, f"{d['name']} could not reply right now.")
     # The seller wrote again while Gemini was answering: that message gets its own turn, so this answer is dropped.
-    if chats.demo_doc(conversation_id)["messages"][-1]["id"] != messages[-1]["id"]:
+    latest = chats.demo_doc(conversation_id)["messages"]
+    if [x["id"] for x in latest[-1:]] != [x["id"] for x in messages[-1:]]:
         return {"action": "none"}
     text = (turn.message.strip() if turn else "")[:2000]
     if text:

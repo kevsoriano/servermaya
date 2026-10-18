@@ -366,6 +366,9 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
 
     chats = {c["customer"]["name"]: c for c in client.get("/api/conversations", headers=SELLER).json()}  # the first visit seeds
     assert len(chats) == 8 and chats["Bea Villanueva"]["order_actions"] == ["Review a customer claim"]
+    # Each seeded chat keeps the persona the AI customer plays in it, by the customer's seeded name.
+    seeded = {d["name"]: d.get("persona") for p, d in store.docs.items() if "/demoThreads/" in p}
+    assert len(seeded) == 8 and all(name == persona for name, persona in seeded.items())
     assert chats["Nico Ramos"]["order_actions"] == ["Ready to pack"] and chats["Rico Bautista"]["order_actions"] == []
     listed = client.get("/api/orders", headers=SELLER).json()  # newest first
     orders = {o["draft"]["recipient_name"]["value"]: o for o in reversed(listed)}  # each customer's newest order

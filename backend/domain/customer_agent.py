@@ -18,7 +18,8 @@ class Persona:
     receipts: tuple[str, ...] = ("matching",)
 
 
-# One per seeded chat, by customer name. Facts match the seed (seed.demo), so the agent never contradicts what the chat says.
+# One per seeded chat, kept on the chat when it is seeded (its "persona"), so a judge's own chat with the same name never gets
+# one. Facts match the seed (seed.demo), so the agent never contradicts what the chat says.
 PERSONAS = {
     "Ana Reyes": Persona(
         "Ana is a friendly, easy customer ordering 2 blue ceramic mugs. She pays by GCash when the seller asks and sends her receipt."
@@ -58,12 +59,23 @@ PERSONAS = {
     ),
 }
 
-# A chat a judge made with New demo chat.
-ANYONE = Persona("A polite customer of the shop who wants what they asked for in the chat. They pay by GCash when asked.")
+# A chat a judge made with New demo chat. Its delivery details are made up here, so an order from it can be completed without
+# the agent inventing them.
+ANYONE = Persona(
+    "A polite customer of the shop who wants what they asked about in the chat. Once the seller gives the price, they order 1 "
+    "or 2, with their delivery details: their name as above, 0917 555 0110, 21 Narra St., Brgy. Malanday, Marikina City. They "
+    "pay by GCash when asked."
+)
 
 
-def persona(name: str) -> Persona:
-    return PERSONAS.get(name, ANYONE)
+def persona(key: str | None) -> Persona:
+    """The persona a chat was seeded with; any other chat, the generic customer."""
+    return PERSONAS.get(key, ANYONE) if key else ANYONE
+
+
+def wants(products: list[dict]) -> list[str]:
+    """What a customer can open an empty chat asking about: each catalog product and variant, by name only, never the price."""
+    return [f"{v['name']} {p['name']}".lower() if v.get("name") else p["name"].lower() for p in products for v in p["variants"]]
 
 
 def receipt_kind(p: Persona, sent: int) -> str | None:
@@ -113,9 +125,12 @@ def line(n: int, m: dict) -> str:
     return f"[{n}] {who}: {' '.join(p for p in parts if p)}"
 
 
-def prompt(name: str, p: Persona, messages: list[dict], attaching: bool, can_send: bool) -> str:
+def prompt(name: str, p: Persona, messages: list[dict], attaching: bool, can_send: bool, opening: str | None = None) -> str:
+    """opening: in an empty chat, what the customer starts it asking about."""
     situation = (
-        "You are attaching your GCash receipt screenshot to this message."
+        f"You are starting this chat. Say hi and ask whether the shop has the {opening} and how much it is. Do not order yet."
+        if opening
+        else "You are attaching your GCash receipt screenshot to this message."
         if attaching
         else "You can send a GCash receipt screenshot if the seller asks for one."
         if can_send

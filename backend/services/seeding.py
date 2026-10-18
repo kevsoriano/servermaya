@@ -31,7 +31,8 @@ def seed_demo(user: dict):
         """A chat with its earlier sample orders first (their messages before the chat's own), then its own orders."""
         refs = [db.orders().document() for _ in demo.HISTORY.get(chat["name"], [])]
         earlier, past = demo.history(uid, cid, chat["name"], now, [r.id for r in refs], shared, pay_to)
-        batch.set(chats.demo_threads().document(cid), {**chat, "messages": earlier + chat["messages"]})
+        # persona: the AI customer plays this seeded customer only here, never in a judge's own chat with the same name
+        batch.set(chats.demo_threads().document(cid), {**chat, "messages": earlier + chat["messages"], "persona": chat["name"]})
         for ref, order in zip(refs, past):
             put_order(ref, order, chat["name"])
         for ref, order, paid_at in orders:

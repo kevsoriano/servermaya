@@ -75,7 +75,8 @@ function linked(text: string) {
 }
 
 /** Demo chats live in this app only, so judges can try every step without Messenger. */
-function DemoTools({ onDone }: { onDone: (id?: string) => void }) {
+/** onDone: after a new chat (empty: the customer starts it) or a reset (no id). */
+function DemoTools({ onDone }: { onDone: (id?: string, empty?: boolean) => void }) {
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
   const [chat, setChat] = useState('')
@@ -92,7 +93,7 @@ function DemoTools({ onDone }: { onDone: (id?: string) => void }) {
       body: JSON.stringify({ name: name.trim() || 'Demo customer', chat }),
     })
       .then(
-        ({ id }) => (setOpen(false), setName(''), setChat(''), onDone(id)),
+        ({ id }) => (setOpen(false), setName(''), setChat(''), onDone(id, !chat.trim())),
         (e) => setError(e.message),
       )
       .finally(() => setBusy(false))
@@ -127,7 +128,7 @@ function DemoTools({ onDone }: { onDone: (id?: string) => void }) {
             <input value={name} onChange={(e) => setName(e.target.value)} maxLength={100} placeholder="Demo customer" />
           </label>
           <label>
-            Chat (optional): start each message with Customer: or Seller:
+            Chat (optional): start each message with Customer: or Seller:. Leave it empty and the customer starts the chat.
             <textarea
               rows={6}
               value={chat}
@@ -333,7 +334,7 @@ export default function Conversations({ replyHours, onOpenOrder }: { replyHours:
   }
 
   // After a new demo chat, open it; after a reset, close the open demo chat, which no longer exists.
-  const demoChanged = (id?: string) => {
+  const demoChanged = (id?: string, empty?: boolean) => {
     if (!id && openId?.startsWith('demo_')) {
       setOpenId(undefined)
       setMessages(undefined)
@@ -343,6 +344,7 @@ export default function Conversations({ replyHours, onOpenOrder }: { replyHours:
       (l) => {
         setList(l)
         if (id) open(id)
+        if (id && empty) customerTurn(id) // the customer, played by AI, opens an empty chat
       },
       (e) => setError(e.message),
     )

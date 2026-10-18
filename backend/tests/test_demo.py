@@ -147,7 +147,7 @@ def test_the_demo_customer_taps_answers_and_sends_receipts_in_its_script(monkeyp
     from core import config, db
     from domain import customer_agent as agent
     from helpers import fake_google, ready_order
-    from seed import demo
+    from seed import catalog, demo
 
     prompts, turns = [], []
 
@@ -164,8 +164,8 @@ def test_the_demo_customer_taps_answers_and_sends_receipts_in_its_script(monkeyp
     monkeypatch.setattr(samples, "receipt_png", lambda amount, ref, at, name, mobile: (drawn.append(at), draw(amount, ref, at, name, mobile))[1])
     now = datetime.now(UTC)
     mark, dan = demo.new_id(), demo.new_id()
-    for cid, (name, lines) in ((mark, demo.SEED[1]), (dan, demo.SEED[2])):
-        chats.demo_threads().document(cid).set(demo.thread(name, lines, "u1", now - timedelta(minutes=5)))
+    for cid, (name, lines) in ((mark, demo.SEED[1]), (dan, demo.SEED[2])):  # seeded, so each has its persona
+        chats.demo_threads().document(cid).set({**demo.thread(name, lines, "u1", now - timedelta(minutes=5)), "persona": name})
     source = {"type": "demo", "conversation_id": mark, "owner": "u1"}
     drafted = chats.demo_doc(mark)["messages"]  # the evidence a draft is made from
     db.orders().document("mark1").set(ready_order(status="draft", confirmations=[], payment=None, packing=None, source=source, messages=drafted))
@@ -218,6 +218,16 @@ def test_the_demo_customer_taps_answers_and_sends_receipts_in_its_script(monkeyp
 
         monkeypatch.setattr(type(gemini.models), "generate_content", late)
         assert auto(dan) == {"action": "none"} and chat(dan)[-1]["text"] == "Hello?"
+        monkeypatch.setattr(type(gemini.models), "generate_content", generate_content)
+
+        # A judge's own empty chat: the customer opens it, asking about something from the catalog, never at a price.
+        new = client.post("/api/demo/threads", json={"name": "Mark Dizon", "chat": ""}).json()["id"]
+        turns.append(agent.Turn(message="Hi! Do you have the cream tote bag? How much?", send_receipt=True))
+        assert auto(new) == {"action": "reply"} and [(m["from_page"], m["attachments"]) for m in chat(new)] == [(False, [])]
+        assert "You are starting this chat" in prompts[-1] and any(w in prompts[-1] for w in agent.wants(catalog.DEMO))
+        # Named like a seeded customer, but the generic customer, with delivery details made up for it.
+        assert "Mark is in a hurry" not in prompts[-1] and "21 Narra St." in prompts[-1]
+        assert auto(new) == {"action": "none"}  # it waits for the seller now
     finally:
         main.app.dependency_overrides.clear()
 
@@ -233,6 +243,11 @@ def test_customer_personas_match_the_seed_and_scripts():
     mark = agent.persona("Mark Dizon")
     assert [agent.receipt_kind(mark, n) for n in range(3)] == ["wrong_recipient", "matching", "matching"]
     assert agent.receipt_kind(agent.persona("Dan Cortez"), 0) is None and agent.persona("Someone new") is agent.ANYONE
+    assert agent.persona(None) is agent.ANYONE  # a chat that was not seeded
+    assert agent.wants([{"name": "Tote bag", "variants": [{"name": "Black"}]}, {"name": "Linen pouch", "variants": [{"name": None}]}]) == [
+        "black tote bag",
+        "linen pouch",
+    ]
     at = datetime(2026, 10, 1, tzinfo=UTC)
     msg = lambda page, minutes, kind=None: {
         "from_page": page,
