@@ -2,11 +2,20 @@
 as pure functions, in domain/."""
 
 from fastapi import Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from core import auth, config
 from routes import catalog, claims, conversations, customer, demo, dispatch, gcash, orders, packing, patterns, refunds, returns, webhooks
 
 app = FastAPI()
+# Only the app's own pages, and only for what they send: a bearer token, JSON or a file, the PDF password.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=config.APP_ORIGINS,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type", "X-Pdf-Password"],
+    max_age=3600,
+)
 
 
 @app.get("/api/healthz")

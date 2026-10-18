@@ -697,3 +697,14 @@ def test_the_customer_brief_reads_history_only_and_is_shared_by_chats_with_the_s
     failing.extend([1, 1])
     assert get() == {"summary": None, "problem": "Could not write the brief right now."}
     assert get() == {"summary": "Summary 6."}
+
+
+def test_only_the_apps_own_pages_may_call_the_api_from_another_origin():
+    # The deployed frontend sends AI actions straight to Cloud Run, past Firebase Hosting's 60-second limit.
+    ask = lambda origin: client.options(
+        "/api/orders/o1/claims/c1/review",
+        headers={"Origin": origin, "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "authorization"},
+    )
+    ok = ask("https://servermaya-ai-builder-cup.web.app")
+    assert ok.status_code == 200 and ok.headers["access-control-allow-origin"] == "https://servermaya-ai-builder-cup.web.app"
+    assert "access-control-allow-origin" not in ask("https://evil.example").headers

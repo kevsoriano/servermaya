@@ -24,10 +24,18 @@ export const customerReply = (conversationId: string) => load(`/conversations/${
 
 /** JSON from a customer-link route, which needs no sign-in. */
 
+// Firebase Hosting cuts off a request it forwards to Cloud Run after 60 s. Actions that call Gemini can take longer when it is
+// slow, so a deployed build sends them straight to Cloud Run (VITE_API_URL, set by `make deploy-frontend`), which allows 300 s.
+// Everything else stays same-origin. In dev, Vite's proxy has no such limit.
+const DIRECT = import.meta.env.VITE_API_URL as string | undefined
+const SLOW =
+  /\/(claims\/[^/]+\/review|packing\/check|returns\/[^/]+\/check|draft-order|signals|brief|customer\/auto|gcash\/(read|history|sample-history))$/
+const base = (path: string) => (DIRECT && SLOW.test(path.split('?')[0]) ? DIRECT : '') + '/api'
+
 /** fetch() against the backend with the signed-in user's ID token attached. */
 export async function api(path: string, init: RequestInit = {}) {
   const token = await auth.currentUser?.getIdToken()
-  return fetch(`/api${path}`, {
+  return fetch(`${base(path)}${path}`, {
     ...init,
     headers: { ...init.headers, Authorization: `Bearer ${token}` },
   })

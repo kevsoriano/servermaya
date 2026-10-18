@@ -52,6 +52,13 @@ MODEL_ARMOR_TEMPLATE = os.environ.get("MODEL_ARMOR_TEMPLATE", "")
 
 # ponytail: one store, add real store ids when a second seller onboards
 STORE = "main"
+# The app's own pages, the only origins allowed to call the API from another origin: the deployed frontend sends AI actions
+# straight to Cloud Run, past Firebase Hosting's 60-second limit on the requests it forwards.
+APP_ORIGINS = [
+    f"https://{PROJECT_ID}.web.app",
+    f"https://{PROJECT_ID}.firebaseapp.com",
+    "http://localhost:5173",
+]
 
 
 PAYMONGO_KEY = os.environ.get("PAYMONGO_SECRET_KEY", "")

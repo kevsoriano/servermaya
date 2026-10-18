@@ -90,8 +90,9 @@ secrets: backend/.env
 			--member serviceAccount:$(RUN_SA) --role roles/secretmanager.secretAccessor --quiet >/dev/null || exit 1; \
 	done
 
+# AI actions go straight to Cloud Run's own URL, past Hosting's 60-second limit on forwarded requests (frontend/src/lib/firebase.ts)
 deploy-frontend:
-	cd frontend && npm run build
+	cd frontend && VITE_API_URL=$$(gcloud run services describe api --project $(PROJECT) --region $(REGION) --format 'value(status.url)') npm run build
 	npx firebase-tools deploy --only hosting,firestore:rules --project $(PROJECT)
 
 # Page subscription: Meta sends this Page's messages and quick-reply taps to /api/webhooks/messenger. Set the callback URL and
