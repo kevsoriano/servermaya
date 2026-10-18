@@ -1,28 +1,56 @@
 # Recording the demo video flows
 
-Two scripted flows for the 3-minute demo video, recorded with Playwright as a new demo visitor. Each run gives an MP4
-that starts on the loaded chat list (sign-in is cut), one screenshot per step and a timing file.
+Four scripted flows for the demo video (up to 4 minutes), recorded with Playwright as a new demo visitor. Each one ends on
+the **Patterns** tab, showing a pattern the seller's own action just added to. Each run gives an MP4 that starts on the
+loaded chat list (sign-in is cut), one screenshot per step and a timing file.
 
-The script only acts as the seller. Each demo customer is played by AI and answers on their own after every seller
-message (Mark in Flow A, Dan in Flow B), with a "typing" indicator while Gemini writes. Code, not the AI, decides when they tap a button and which sample
-receipt they send, so Mark always taps Confirm, then sends a receipt paid to someone else, then a matching one once the
-seller points it out. His wrong receipt is dated 2 minutes back (he sent it to an old number earlier), so the matching
-one, sent seconds later, never shows the same minute and amount, which the receipt check would flag as a copy.
+Every flow opens with a short look at Patterns, the "before". The tab remembers each card's count in the browser, so at
+the end a card shows **Up from 3 since your last look** or **Appeared since your last look**. Cut the opening look in
+editing if the previous flow already showed the "before".
 
-| Flow | Chats | What it shows | Last length |
-|---|---|---|---|
-| A | Mark | The brief and the checks alert, a draft order, Mark taps Confirm in chat, "Already paid by GCash" and Mark answers with a receipt paid to someone else (recipient ✗), the seller's typed reply and Mark's apology with a matching receipt (passes, still only a claim), the seller finds it in their GCash history, the checks settle to "None open" | 1:17 |
-| B | Dan, then Joy | Dan: a new customer, Binance and a code request, the checks cards; the seller says GCash only and Dan, played by AI, keeps pushing for the code. Joy: a fake "SELLER:" line and an instruction in her message; the draft keeps the seller's price and her check stays open | 1:12 |
+The script only acts as the seller. Demo customers are played by AI and answer on their own after each seller message
+(Mark in A, Dan in B), with a "typing" indicator while Gemini writes. Code, not the AI, decides when they tap a button and
+which sample receipt they send, so Mark always taps Confirm, then sends a receipt paid to someone else. Dan's threat is his
+persona's words, so it can fail to come in a take: re-record.
+
+| Flow | Chat | What it shows | On Patterns | Last length |
+|---|---|---|---|---|
+| A | Mark | The brief and the checks alert, a draft order, Mark taps Confirm in chat, "Already paid by GCash" and Mark answers with a receipt paid to someone else; the receipt check shows the recipient does not fit | **Count goes up**: "Receipts that don't fit the order or your GCash account" from 3 to 4 (Mark, Paolo, Grace, Jerome), each with a push to ship first | 1:00 |
+| B | Dan | A new customer, Binance and a code request, the checks; the seller says GCash only and Dan threatens to post about the shop in Facebook groups and report the page, which the checks add | **New card**: "Asked you to open an account or share a code", 3 chats (Dan, Kim's Maya code, Ramon's OTP link) against 0 before | 0:56 |
+| C | Bea | Her photo and unboxing video of a cracked mug; the seller opens a claim from her messages, then Review with AI (the packing video shows it whole, her video shows it sealed, then cracked) | **New card**: "Damage reports", 3 this week (Bea, Nico, Lito) against 1 a week before; below it, Sample Rider 2 carried most of them | 1:18 |
+| D | Carla | Her box arrived with only crumpled paper inside; the seller opens a Missing item claim from her messages, with the custody check beside it | **Count goes up**: "Missing or replaced contents" on Sample Rider 3, from 2 to 3 parcels (Mark, Rico, Carla), against 0 of 13 for other drivers | 0:47 |
+
+Lengths are untrimmed, with pauses standing in for narration (halved in A). Gemini waits (the draft, the claim review) and
+the Patterns tab loading (about 5 s) are worth trimming. Together the four flows are about 4:00 untrimmed; if they don't fit
+with an intro, drop C or D first, since both end on a driver card.
+
+The cards never say a customer did anything wrong. Narrate what they show: receipts that don't fit, requests to open an
+account, damage reports, parcels that arrived without their contents.
+
+## What the seed sets up
+
+Every demo visitor gets 15 chats: the 8 to work through, and 7 from the past week behind the Patterns cards. Their checks
+are stored when the demo is seeded, so the counts are the same on every run. See [test-scenarios.md](test-scenarios.md).
+
+- **Receipts (A):** Paolo (paid to someone else), Grace (₱100 short) and Jerome (dated before the GCash request), each asking
+  to ship first. 3 this week, so the card is already there.
+- **Accounts (B):** Kim (open a Maya account, send the 6-digit code) and Ramon (log in through a link, share the OTP). 2 is
+  below the minimum of 3, so no card until Dan's chat is opened.
+- **Damage (C):** Nico's and Lito's broken mugs this week, both carried by Sample Rider 2. Mark's, Leah's and Bea's earlier
+  reports, 2 to 4 weeks ago, are the comparison. Bea's report waits in her chat, with no claim open yet.
+- **Contents (D):** Mark's missing candle and Rico's replaced tote, earlier this month, both carried by Sample Rider 3.
+  Carla's parcel was carried by Sample Rider 3 too. Joy's wrong tote was recorded as the shop's own error and never counts
+  against a driver.
 
 ## Prompt for a new session
 
 Paste this into Claude Code from the repo root:
 
-> Re-record the demo video flows A and B by following docs/demo-video.md. Set up the recorder in your scratchpad, run the
-> backend without --reload and the frontend dev server, record A then B one after the other, and check the screenshots of
-> the key steps (listed in the doc) before reporting. If a step fails because the UI changed, update the script's selectors
-> or waits rather than the app, and tell me what you changed. Report each video's path and length, and stop the servers
-> you started when done.
+> Re-record the demo video flows A, B, C and D by following docs/demo-video.md. Set up the recorder in your scratchpad, run
+> the backend without --reload and the frontend dev server, record the flows one after the other, and check the screenshots
+> of the key steps (listed in the doc) before reporting. If a step fails because the UI changed, update the script's
+> selectors or waits rather than the app, and tell me what you changed. Report each video's path and length, and stop the
+> servers you started when done.
 
 ## Setup (in a scratch folder, not the repo)
 
@@ -38,7 +66,7 @@ npx playwright install chromium
 
 The local app must be running. **Start the backend without `--reload`**: `make dev`'s file watcher polls the ~4,200 `.py`
 files under `backend/` (most in `.venv`) and made every request about 5× slower (a message fetch 910 ms instead of
-170–350 ms), which stretched Flow A from 1:09 to 2:03.
+170–350 ms), which stretched an earlier Flow A from 1:09 to 2:03.
 
 ```sh
 # terminal 1, from the repo
@@ -48,6 +76,8 @@ cd frontend && npm run dev          # http://localhost:5173 (the Firebase key al
 # terminal 3, in the rec folder: one after the other, not in parallel
 node record.mjs A out-A
 node record.mjs B out-B
+node record.mjs C out-C
+node record.mjs D out-D
 ```
 
 `APP_URL=https://servermaya-ai-builder-cup.web.app node record.mjs A out-A` records the live app instead, once it is
@@ -61,39 +91,52 @@ step's action finishes) and `flow-A-timing.json` (step start times in the trimme
 The script prints each step's time and `FAILED` on a failure; a failed step still continues, so read the log. Then look
 at these screenshots:
 
-- **A-01**: the brief and the orange "2 to verify before shipping" alert.
-- **A-04**: Mark's own "Confirm #… v1" under the summary, and the Confirmed row "By the customer".
-- **A-05**: Mark's words (in character, such as "Here is the screenshot. Please make sure to ship it today!") and his
-  receipt below them.
-- **A-07**: the viewer with Recipient name ✗ and Recipient number ✗ (MA\*\*A S\*\*\*\*S, +63 918 555 \*\*\*\*), Amount ✓.
-- **A-09**: Mark's apology (an old saved number, paid again) and the new receipt. The alert may read "3 to verify" here:
-  his new words add a check, which the GCash payment settles later.
-- **A-11**: the matching receipt, all ✓, still "a claim, not proof of payment".
-- **A-15**: Checks before shipping says "None open", three checks settled by the GCash payment the seller found.
-- **B-03**: Dan's card "Asked you to open an account, use a link or share a code" with its What to do.
-- **B-04**: the seller's "we only accept GCash" and Dan's answer below it, still pushing for the code (in character, such
-  as "It will only take a minute bro, the code is just to verify the wallet…").
-- **B-06**: Joy's draft is 3× Linen pouch at ₱150 (₱450), not ₱100, and the Payment row says the customer says they paid: not verified.
-- **B-07**: Joy's checks loaded: "Says they already paid", 1 to verify.
+- **A-01**: Patterns, "Receipts that don't fit…" with 3 chats: Paolo, Grace, Jerome.
+- **A-02**: Mark's brief and the orange "2 to verify before shipping" alert.
+- **A-05**: Mark's own "Confirm #… v1" under the summary, and the Confirmed row "By the customer".
+- **A-06**: Mark's words (in character, such as "Here is the screenshot. Please ship it today!") and his receipt below them.
+- **A-08**: the viewer with Recipient name ✗ and Recipient number ✗ (MA\*\*A S\*\*\*\*S, +63 918 555 \*\*\*\*), Amount ✓.
+- **A-10**: the same card with **Up from 3 since your last look**, 4 chats, Mark Dizon listed "today".
+- **B-01**: Patterns with no "Asked you to open an account" card.
+- **B-04**: Dan's card "Asked you to open an account, use a link or share a code" with its What to do.
+- **B-05**: the seller's "we only accept GCash" and Dan's answer below it, a threat to post about the shop or report the
+  page (in character, such as "If you won't do it, I'll just report this page and post about you in Facebook groups").
+- **B-06**: Dan's checks with "Threatened to post about you or report your page", quoting him, and its What to do.
+- **B-07**: "Asked you to open an account or share a code" with **Appeared since your last look**: Dan today, Kim, Ramon.
+- **C-02**: Bea's chat: her photo and unboxing video.
+- **C-04**: the new Damaged claim with her words, photo and video.
+- **C-05**: the AI review's findings beside the claim (for example "Supported: … damaged …" and a suggested action).
+- **C-06**: "Damage reports" with **Appeared since your last look**, 3 reports: Bea today, Nico, Lito. Bars 2 / 1 / 0 / 3.
+- **C-07**: "Damage and non-receipt concentration · Driver Sample Rider 2", higher than the rest of the store.
+- **D-01**: "Missing or replaced contents · Driver Sample Rider 3", 2 of 6 delivered shipments.
+- **D-02**: Carla's chat: the open box with crumpled paper.
+- **D-04**: the Missing item claim, her words and photo, "Custody check: … suggests Unknown".
+- **D-05**: the same card with **Up from 2 since your last look**, 3 of 6: Mark, Carla, Rico.
 
-Each run is a new demo visitor, so it starts from the seeded state. Gemini times vary: the same step can take 4 s or 24 s.
-Mark's and Dan's words change from take to take; Mark's taps and receipts do not. Re-record or trim long waits in editing.
+Each run is a new demo visitor, so it starts from the seeded state. Gemini times vary: the same step can take 4 s or 60 s
+(the draft order took 57 s once). Mark's and Dan's words change from take to take; Mark's taps and receipts do not.
+Re-record or trim long waits in editing.
 
 ## When something goes wrong
 
 - **A step times out after a UI change**: the selectors the script relies on are `.threads button`, `.brief .brief-text`,
   `.checks-alert`, `section.signals` and its `.pill` and `li.to-verify`, `.verify-head`, `.gates li`, `.chat .media-open`,
   `.messages li.typing` (the customer is answering), `dialog.viewer[open]` with its `h2` and `.viewer-close`, `form.reply`,
-  the `/customer/auto` request (the customer's answer), and button texts ("Try the demo", "Create draft order", "Send for
-  confirmation in chat", "Already paid by GCash", "Check receipt screenshots", "Sample history screenshot", "Confirm GCash
-  payment"). Update the script to match.
+  `nav.tabs button`, `.signal.pattern` (a Patterns card), `section.packing` with its `select`, `form` and
+  `div.claim:not(.done)` (the claims on an order), the `/customer/auto`, `/claims/from-chat` and `/claims/…/review`
+  requests, and button texts ("Try the demo", "Create draft order", "Send for confirmation in chat", "Already paid by
+  GCash", "Check receipt screenshots", "Open order →", "Open claim from the chat", "Open claim", "Review with AI"). Update
+  the script to match.
+- **A card is missing or its count is off by one**: the Patterns tab was opened before the seller's action was saved, or
+  the seed changed. The counts come from `backend/seed/demo.py` (`MISFITS`, `ACCOUNTS`, `HISTORY`); the minimum for a rising
+  card is `TREND_MIN` in `backend/domain/patterns.py`.
 - **"Mark Dizon could not reply right now." with a Try again button** (or Dan): Gemini failed twice in a row on the reply
   (the route retries once). The step times out; record again. A receipt Mark owes right after a GCash request is sent even
   when Gemini fails, just without words.
 - **A customer step takes 30 s or more**: Vertex is rate-limiting (a `429 RESOURCE_EXHAUSTED` in the backend log), usually
   after several takes in a row. Wait a few minutes and record again.
-- **"Could not read a screenshot. Try again."** at Check receipt screenshots or Sample history screenshot: Gemini failed
-  twice in a row on the read (it retries once, with a "screenshot read attempt" warning in the backend log). Record again.
+- **"Could not read a screenshot. Try again."** at Check receipt screenshots: Gemini failed twice in a row on the read (it
+  retries once, with a "screenshot read attempt" warning in the backend log). Record again.
 - **The chat list stays on "Loading…" after Try the demo**: the local backend got stuck, seen once after a failed run.
   Restart it and record again.
 - **The video opens on a click instead of the still list**: the cut landed late. Raise the 1500 ms hold after the cut.
@@ -102,7 +145,7 @@ Mark's and Dan's words change from take to take; Mark's taps and receipts do not
 
 ```js
 // Records one demo flow, as a new demo visitor (APP_URL, default the local dev server), and logs how long each step takes.
-// Usage: node record.mjs <A|B> <out dir>
+// Usage: node record.mjs <A|B|C|D> <out dir>
 import { chromium } from 'playwright'
 import fs from 'node:fs'
 import { execFileSync } from 'node:child_process'
@@ -192,16 +235,59 @@ console.log(`video starts at ${cut.toFixed(1)}s (signed in, chats loaded)`)
 // The video's clock starts a little after the page opens, so the cut lands slightly late: hold the loaded list on screen first.
 await page.waitForTimeout(1500)
 
+// Patterns, before and after: each flow looks at the tab first, so its last step can show what the seller's action changed
+// ("Up from 3 since your last look", or a card that appeared).
+const patternsTab = async () => {
+  await click('nav.tabs button:has-text("Patterns")')
+  await page.locator('.signal.pattern').first().waitFor({ timeout: 90_000 })
+}
+const showCard = async (text) => {
+  const card = page.locator('.signal.pattern').filter({ hasText: text }).first()
+  await card.waitFor({ timeout: 30_000 })
+  await card.evaluate((el) => el.scrollIntoView({ block: 'start', behavior: 'smooth' }))
+  await page.waitForTimeout(800)
+}
+const conversationsTab = () => click('nav.tabs button:has-text("Conversations")')
+const openBrief = async (name) => {
+  await chat(name).click()
+  await page.locator('.brief .brief-text p:not(.muted)').waitFor({ timeout: 90_000 })
+}
+// From the chat's order to its claims in the Orders tab, and a claim opened from the customer's own messages.
+const claimFromChat = async (type) => {
+  await click('button:has-text("Open order →")')
+  await click('button:has-text("Open claim from the chat")')
+  await page.locator('section.packing select').first().selectOption(type)
+  const form = page.locator('section.packing form').filter({ hasText: 'What the customer reports' }).first()
+  await form.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'smooth' }))
+  await page.waitForTimeout(800)
+}
+const showClaim = async () => {
+  const claim = page.locator('section.packing div.claim:not(.done)').first()
+  await claim.waitFor({ timeout: 30_000 })
+  await claim.evaluate((el) => el.scrollIntoView({ block: 'start' }))
+  await page.waitForTimeout(600)
+}
+const openClaim = async () => {
+  const saved = page.waitForResponse((r) => r.url().includes('/claims/from-chat') && r.request().method() === 'POST', { timeout: 60_000 })
+  await click('section.packing button:has-text("Open claim")')
+  await saved
+  await showClaim()
+}
+
 if (flow === 'A') {
+  await step('Patterns: 3 receipts that did not fit this week', async () => {
+    await patternsTab()
+    await showCard("Receipts that don't fit")
+  }, 4000)
   await step('Open Mark: AI brief, and an alert: 2 to verify', async () => {
-    await chat('Mark Dizon').click()
-    await page.locator('.brief .brief-text p:not(.muted)').waitFor({ timeout: 90_000 })
+    await conversationsTab()
+    await openBrief('Mark Dizon')
     await page.locator('.checks-alert').waitFor({ timeout: 90_000 })
   }, 4000)
   await step('Click the alert: what was said, what to do, the records', async () => {
     await click('.checks-alert')
     await page.waitForTimeout(800)
-  }, 6000)
+  }, 5000)
   await step('Create draft order (cited to his messages)', async () => {
     await pane().evaluate((el) => el.scrollTo(0, 0))
     await click(newOrder)
@@ -214,81 +300,91 @@ if (flow === 'A') {
   await step('Already paid by GCash: Mark sends a receipt paid to someone else', () =>
     customerAnswers(() => click('button:has-text("Already paid by GCash")'), true),
   )
-  // The newest screenshot in the chat, enlarged: not checked yet.
-  const open = async () => {
+  await step('Open his screenshot in the chat: not checked yet', async () => {
     await page.locator('.chat .media-open').last().click()
-    await page.locator('dialog.viewer[open]').waitFor({ timeout: 15_000 })
     await page.locator('dialog.viewer[open] h2:has-text("Not checked yet")').waitFor({ timeout: 15_000 })
-  }
-  // Checked from the viewer itself: its results fill in beside the screenshot.
-  const check = async () => {
+  }, 2500)
+  await step('Check receipt screenshots: the recipient does not fit', async () => {
     await click('dialog.viewer[open] button:has-text("Check receipt screenshots")')
     await page.waitForFunction(() => /Pass|Does not fit|fail/i.test(document.querySelector('dialog.viewer[open]')?.textContent ?? ''), null, { timeout: 120_000 })
-  }
-  const close = () => click('dialog.viewer[open] .viewer-close')
-  await step('Open his screenshot in the chat: not checked yet', open, 2500)
-  await step('Check receipt screenshots: the recipient does not fit', check, 6000)
-  await step('Close', close, 800)
-  await step('The seller replies; Mark sends a matching receipt', () =>
-    sellerSays(
-      'Hi Mark! This receipt shows a different recipient name and number, not our GCash account. Could you check and send the receipt for your payment to us?',
-      true,
-    ),
-  3000)
-  await step('Open the new screenshot: not checked yet', open, 2500)
-  await step('Check it: it passes, but is still only a claim', check, 6000)
-  await step('Close', close, 800)
-  await step('Sample history screenshot (the seller finds it)', async () => {
-    await click('button:has-text("Sample history screenshot")')
-    await page.waitForFunction(() => {
-      const label = [...document.querySelectorAll('.verify label')].find((l) => l.textContent.includes('Reference number in your GCash history'))
-      return !!label?.querySelector('input')?.value
-    }, null, { timeout: 90_000 })
+  }, 6000)
+  await step('Close', () => click('dialog.viewer[open] .viewer-close'), 800)
+  await step('Patterns: up from 3 to 4, Mark listed today', async () => {
+    await patternsTab()
+    await showCard('Up from 3')
+  }, 7000)
+} else if (flow === 'B') {
+  await step('Patterns: no card for account requests yet', async () => {
+    await patternsTab()
+    await page.waitForTimeout(500)
   }, 3000)
-  await step('Confirm GCash payment: payment verified', async () => {
-    await page.locator('.verify input[type=checkbox]').first().check()
-    const reason = page.locator('.verify label:has-text("Why are you confirming") input')
-    if (await reason.count()) await reason.fill('Found in our GCash history')
-    await click('button:has-text("Confirm GCash payment")')
-    await page.locator('.gates li:has-text("GCash found in your own history")').waitFor({ timeout: 30_000 })
-    await pane().evaluate((el) => el.scrollTo(0, 0))
-  }, 3000)
-  await step('The checks settle: none open', async () => {
-    await page.locator('section.signals .pill:has-text("None open")').waitFor({ timeout: 90_000 })
-    await show('section.signals')
-  }, 5000)
-} else {
   await step('Open Dan: AI brief (new customer, Binance, code)', async () => {
-    await chat('Dan Cortez').click()
-    await page.locator('.brief .brief-text p:not(.muted)').waitFor({ timeout: 90_000 })
-  }, 5000)
+    await conversationsTab()
+    await openBrief('Dan Cortez')
+  }, 4000)
   await step('Click the alert: his checks before shipping', async () => {
     await page.locator('.checks-alert').waitFor({ timeout: 90_000 })
     await click('.checks-alert')
     await page.waitForTimeout(800)
-  }, 4000)
+  }, 3000)
   await step('The code request: what to do', async () => {
     const card = page.locator('section.signals li.to-verify').filter({ hasText: 'Asked you to open an account' }).first()
     await card.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'smooth' }))
     await page.waitForTimeout(800)
   }, 5000)
-  await step('The seller says GCash only; Dan, played by AI, keeps pushing', async () => {
+  await step('The seller says GCash only; Dan, played by AI, threatens to post about the shop', async () => {
     await sellerSays("Sorry Dan, we only accept GCash. We can't open other accounts or share any codes.")
     await page.locator('.chat .scroll').evaluate((el) => el.scrollTo(0, el.scrollHeight))
-  }, 5000)
-  await step('Open Joy: fake seller line and an instruction', async () => {
-    await chat('Joy Santos').click()
-    await page.locator('.brief .brief-text p:not(.muted)').waitFor({ timeout: 90_000 })
   }, 4000)
-  await step('Create draft order: seller price kept, instruction ignored', async () => {
-    await click(newOrder)
-    await page.locator('.verify-head:has-text("Draft")').waitFor({ timeout: 90_000 })
-    await pane().evaluate((el) => el.scrollTo(0, 0))
+  await step('The checks add it: threatened to post about you or report your page', async () => {
+    const card = page.locator('section.signals li.to-verify').filter({ hasText: 'Threatened to post' }).first()
+    await card.waitFor({ timeout: 90_000 })
+    await card.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'smooth' }))
+    await page.waitForTimeout(800)
   }, 5000)
-  await step('Her checks: the payment claim is not proof', async () => {
-    await page.locator('section.signals .pill').waitFor({ timeout: 90_000 })
-    await show('section.signals')
-  }, 5000)
+  await step('Patterns: a new card, 3 chats asked for an account or a code', async () => {
+    await patternsTab()
+    await showCard('Asked you to open an account')
+  }, 7000)
+} else if (flow === 'C') {
+  await step('Patterns: no rise in damage reports yet', async () => {
+    await patternsTab()
+    await page.waitForTimeout(500)
+  }, 3000)
+  await step('Open Bea: her photo and unboxing video of a cracked mug', async () => {
+    await conversationsTab()
+    await openBrief('Bea Villanueva')
+    await page.locator('.chat .scroll').evaluate((el) => el.scrollTo(0, el.scrollHeight))
+  }, 4000)
+  await step('Open her order, then Open claim from the chat: Damaged', () => claimFromChat('damage'), 3000)
+  await step('Open claim: her words, photo and video become the claim', openClaim, 3000)
+  await step('Review with AI: the packing video, her unboxing video, the custody check', async () => {
+    const reviewed = page.waitForResponse((r) => /\/claims\/[^/]+\/review$/.test(r.url()) && r.request().method() === 'POST', { timeout: 180_000 })
+    await click('section.packing div.claim:not(.done) button:has-text("Review with AI")')
+    await reviewed
+    await showClaim()
+  }, 7000)
+  await step('Patterns: a new card, 3 damage reports this week', async () => {
+    await patternsTab()
+    await showCard('Damage reports')
+  }, 6000)
+  await step('Below: the same rider carried most of them', () => showCard('Driver Sample Rider 2'), 5000)
+} else {
+  await step('Patterns: Sample Rider 3, 2 parcels with missing or replaced contents', async () => {
+    await patternsTab()
+    await showCard('Missing or replaced contents')
+  }, 4000)
+  await step('Open Carla: the box arrived with only paper inside', async () => {
+    await conversationsTab()
+    await openBrief('Carla Villamor')
+    await page.locator('.chat .scroll').evaluate((el) => el.scrollTo(0, el.scrollHeight))
+  }, 4000)
+  await step('Open her order, then Open claim from the chat: Missing item', () => claimFromChat('missing_item'), 3000)
+  await step('Open claim: the custody check beside it', openClaim, 5000)
+  await step('Patterns: Sample Rider 3 up from 2 to 3', async () => {
+    await patternsTab()
+    await showCard('Up from 2')
+  }, 7000)
 }
 
 await page.waitForTimeout(1000)

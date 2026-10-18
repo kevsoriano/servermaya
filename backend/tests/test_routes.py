@@ -365,24 +365,42 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     monkeypatch.setattr(claim_agent, "gemini", lambda model, project: Canned(model="canned"))
 
     chats = {c["customer"]["name"]: c for c in client.get("/api/conversations", headers=SELLER).json()}  # the first visit seeds
-    assert len(chats) == 8 and chats["Bea Villanueva"]["order_actions"] == ["Review a customer claim"]
+    assert len(chats) == 15 and chats["Bea Villanueva"]["order_actions"] == []  # her report waits in the chat
     # Each seeded chat keeps the persona the AI customer plays in it, by the customer's seeded name.
     seeded = {d["name"]: d.get("persona") for p, d in store.docs.items() if "/demoThreads/" in p}
-    assert len(seeded) == 8 and all(name == persona for name, persona in seeded.items())
+    assert len(seeded) == 15 and all(name == persona for name, persona in seeded.items())
+    # The chats behind Patterns have their checks stored, so listing them shows the count and opening them asks no Gemini.
+    assert chats["Paolo Garcia"]["open_checks"] == 3 and chats["Kim Navarro"]["open_checks"] == 2 and chats["Carla Villamor"]["open_checks"] == 0
     assert chats["Nico Ramos"]["order_actions"] == ["Ready to pack"] and chats["Rico Bautista"]["order_actions"] == []
     listed = client.get("/api/orders", headers=SELLER).json()  # newest first
     orders = {o["draft"]["recipient_name"]["value"]: o for o in reversed(listed)}  # each customer's newest order
     # Every chat but Ana's has earlier orders: delivered by simulated sandbox riders, some with a claim decided and refunded.
-    assert len(listed) == 4 + sum(len(h) for h in demo.HISTORY.values()) and "Ana Reyes" not in orders
+    assert len(listed) == 4 + len(demo.MISFITS) + sum(len(h) for h in demo.HISTORY.values()) and "Ana Reyes" not in orders
     past = [o for o in listed if (o.get("fulfillment") or {}).get("courier") == "lalamove"]
     assert {o["fulfillment"]["driver"]["source"] for o in past} == {"simulated"} and all(o["receipt"] for o in past)
     assert {c["decision"]["cause"] for o in past for c in o.get("claims", [])} == {"courier_transit", "unknown", "seller_error"}
     cards = {c["key"]: c for c in client.get("/api/patterns", headers=SELLER).json()}
     assert cards["loss_concentration:driver:sim-2"]["elevated"] and client.get("/api/patterns/returns", headers=SELLER).json()["causes"]
+    # Before the demo's live steps: three receipts that did not fit this week (Mark's makes four), two requests to open an
+    # account (Dan's makes the card), two damage reports (Bea's makes the card), two parcels with other contents on Sample Rider 3.
+    receipts = cards["rising:theme:receipt_misfit"]
+    assert (receipts["numerator"], receipts["with_pressure"]) == (3, 3)
+    assert {i["name"] for i in receipts["incidents"]} == {m[0] for m in demo.MISFITS}
+    assert "rising:theme:account_request" not in cards and "rising:theme:damage_reports" not in cards
+    assert cards["contents_concentration:driver:sim-3"]["numerator"] == 2
 
-    # Bea: one click reviews her open report, with her damage photo and the packing photo in front of the reviewer.
+    # Bea: the seller opens her report from her two messages, then one click reviews it, with her damage photo and the packing
+    # photo in front of the reviewer. That is the third damage report this week.
     bea = orders["Bea Villanueva"]
-    assert (bea["fulfillment"]["status"], bea["claims"][0]["status"], bea.get("receipt")) == ("delivered", "open", None)
+    assert (bea["fulfillment"]["status"], bea.get("claims"), bea.get("receipt")) == ("delivered", None, None)
+    said = [
+        m["id"]
+        for m in client.get(f"/api/conversations/{chats['Bea Villanueva']['id']}", headers=SELLER).json()
+        if m["attachments"] and not m["from_page"]
+    ]
+    bea = client.post(f"/api/orders/{bea['id']}/claims/from-chat", json={"type": "damage", "message_ids": said[-2:]}, headers=SELLER).json()
+    rise = {c["key"]: c for c in client.get("/api/patterns", headers=SELLER).json()}["rising:theme:damage_reports"]
+    assert rise["numerator"] == 3 and rise["incidents"][0]["name"] == "Bea Villanueva"
     asked.clear()
     claim = client.post(f"/api/orders/{bea['id']}/claims/{bea['claims'][0]['id']}/review", headers=SELLER).json()["claims"][0]
     assert claim["status"] == "under_review" and claim["review"]["findings"][0]["evidence"] == ["C"]
@@ -440,8 +458,8 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
     assert history.status_code == 200 and history.headers["content-type"] == "application/pdf"
     gcash_paid = 3 + sum(len(h) for h in demo.HISTORY.values())
     assert len(store.docs[f"stores/{config.STORE}/demoUsers/u1"]["samples"]) == gcash_paid
-    assert client.post("/api/demo/reset", headers=SELLER).json() == {"deleted_chats": 8, "deleted_orders": len(listed) + 1}
-    assert len(client.get("/api/orders", headers=SELLER).json()) == len(listed) and len(client.get("/api/conversations", headers=SELLER).json()) == 8
+    assert client.post("/api/demo/reset", headers=SELLER).json() == {"deleted_chats": 15, "deleted_orders": len(listed) + 1}
+    assert len(client.get("/api/orders", headers=SELLER).json()) == len(listed) and len(client.get("/api/conversations", headers=SELLER).json()) == 15
 
 
 def test_catalog_edit_photos_demo_read_only_and_notes_on_drafts(monkeypatch, seller):

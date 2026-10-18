@@ -22,6 +22,7 @@ const LABEL: Record<string, string> = {
   inconsistent_details: 'Details changed during the chat',
   receipt_image: 'Sent a receipt image as proof',
   account_request: 'Asked you to open an account, use a link or share a code',
+  threat: 'Threatened to post about you or report your page',
 }
 
 /** From Model Armor, only when it is on, so never listed as "not seen". */

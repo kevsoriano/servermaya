@@ -34,7 +34,8 @@ PERSONAS = {
     "Dan Cortez": Persona(
         "Dan wants 2 linen pouches but says he has no GCash, only crypto. He keeps pushing the seller to open a Binance account "
         "and to send him the code that arrives on their phone, saying it only verifies the wallet. He sounds friendly and in a "
-        "rush. He never pays by GCash and has no receipt.",
+        "rush. When the seller refuses or says GCash only, he gets annoyed and says that unless they open the account he will "
+        "post about the shop in Facebook groups and report the page. He never pays by GCash and has no receipt.",
         receipts=(),
     ),
     "Joy Santos": Persona(
@@ -55,7 +56,44 @@ PERSONAS = {
         receipts=(),
     ),
     "Nico Ramos": Persona(
-        "Nico ordered 1 cream tote and already paid by GCash; the seller found his payment. He is relaxed and just waiting for it."
+        "Nico ordered 1 cream tote and already paid by GCash; the seller found his payment. He is relaxed and just waiting for it. "
+        "A mug he ordered earlier this week arrived broken, and the shop refunded it."
+    ),
+    # The chats behind the Patterns cards. None of them sends a receipt from here on.
+    "Paolo Garcia": Persona(
+        "Paolo ordered 1 black tote (₱250) and sent a GCash receipt. He insists it is the right one and keeps asking the seller "
+        "to ship today. He has no other receipt to send.",
+        receipts=(),
+    ),
+    "Grace Lim": Persona(
+        "Grace ordered 2 blue mugs (₱360) and sent a GCash receipt for ₱260. She says she will send the rest later and asks the "
+        "seller to ship now so it arrives today.",
+        receipts=(),
+    ),
+    "Jerome Tan": Persona(
+        "Jerome ordered 2 linen pouches (₱300) as a gift for tomorrow and sent a GCash receipt. He says it is his payment and "
+        "keeps asking the seller to ship today.",
+        receipts=(),
+    ),
+    "Kim Navarro": Persona(
+        "Kim wants 1 lavender candle and pays only with Maya. Kim keeps asking the seller to open a Maya account and send the "
+        "6-digit code that arrives on their phone, saying it only links the account.",
+        receipts=(),
+    ),
+    "Ramon Aquino": Persona(
+        "Ramon wants 2 black totes. He says he already sent ₱500 by GCash but the seller's account must be verified first, and "
+        "keeps asking the seller to log in through a link he will send and share the OTP. He never sends a receipt.",
+        receipts=(),
+    ),
+    "Lito Mendoza": Persona(
+        "Lito's mug arrived broken this week and the shop refunded him. He is thankful and may order again.",
+        receipts=(),
+    ),
+    "Carla Villamor": Persona(
+        "Carla received her vanilla candle two days ago and opened the box today: there was no candle, only crumpled paper. "
+        "She already sent a photo in this chat. The tape looked untouched. She is polite but worried, and would like the "
+        "candle sent again or a refund.",
+        receipts=(),
     ),
 }
 

@@ -1523,3 +1523,92 @@ h3:has(> .info) {
   text-align: justify;
   hyphens: auto;
 }
+
+/* Patterns: a card per concentration or rise, and the rising card's bars by week. */
+.signal.pattern {
+  margin: 0.75rem 0;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.signal.pattern.rising {
+  border-left: 4px solid var(--warn);
+  background: color-mix(in srgb, var(--warn-bg) 55%, var(--surface));
+}
+
+mark.since {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.trend-count strong {
+  font-size: 1.4rem;
+}
+
+.trend-bars {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.5rem;
+  height: 7.5rem;
+  margin: 0.5rem 0;
+  padding: 0;
+}
+
+.trend-bars li {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.trend-bars .bar {
+  width: 100%;
+  max-width: 3.5rem;
+  min-height: 2px;
+  border-radius: 4px 4px 0 0;
+  background: color-mix(in srgb, var(--muted) 35%, transparent);
+}
+
+.trend-bars li.now .bar {
+  background: var(--warn);
+}
+
+.trend-bars .n {
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.trend-bars small {
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-align: center;
+}
+
+.trend-cases {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.9rem;
+  padding: 0;
+}
+
+.trend-cases small {
+  color: var(--muted);
+}
+
+.signal.pattern button.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--accent-text);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}

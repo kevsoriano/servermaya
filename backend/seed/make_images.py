@@ -58,6 +58,12 @@ FROM_REFERENCE = {
         "The same box as in this image, now on the floor in front of a closed apartment door, photographed by the delivery "
         "rider. One top corner is crushed in and the side is visibly dented; the tape is still on.",
     ),
+    # Carla's photo: her parcel opened at home, with nothing in it but packing paper.
+    "contents-empty-box": (
+        "courier-pickup-intact",
+        "The same box as in this image, now opened on a living-room coffee table and seen from above at an angle: the flaps "
+        "are open and the tape along the top is cut. Inside there is only crumpled brown packing paper, and no product.",
+    ),
     "packing-tote-cream": (
         "tote-cream",
         "The same tote bag as in this image, folded on a wooden packing table next to a grey poly mailer bag, seen from above.",

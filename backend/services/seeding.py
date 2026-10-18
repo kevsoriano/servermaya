@@ -28,11 +28,19 @@ def seed_demo(user: dict):
             )
 
     def save(cid, chat, orders):
-        """A chat with its earlier sample orders first (their messages before the chat's own), then its own orders."""
+        """A chat with its earlier sample orders first (their messages before the chat's own), then its own orders. A chat
+        in demo.CHECKS gets its checks stored as already read up to its last message."""
         refs = [db.orders().document() for _ in demo.HISTORY.get(chat["name"], [])]
         earlier, past = demo.history(uid, cid, chat["name"], now, [r.id for r in refs], shared, pay_to)
+        messages = earlier + chat["messages"]
         # persona: the AI customer plays this seeded customer only here, never in a judge's own chat with the same name
-        batch.set(chats.demo_threads().document(cid), {**chat, "messages": earlier + chat["messages"], "persona": chat["name"]})
+        batch.set(chats.demo_threads().document(cid), {**chat, "messages": messages, "persona": chat["name"]})
+        if chat["name"] in demo.CHECKS:
+            found = demo.checks(messages, demo.CHECKS[chat["name"]])
+            batch.set(
+                db.signal_docs().document(cid),
+                {"signals": found, "screened": {}, "latest_message_id": messages[-1]["id"], "model": "demo_seed", "analysed_at": now},
+            )
         for ref, order in zip(refs, past):
             put_order(ref, order, chat["name"])
         for ref, order, paid_at in orders:
@@ -52,17 +60,34 @@ def seed_demo(user: dict):
     save(cid, chat, [(ref, order, paid_at)])
 
     # Her ID starts with the code on the packing label in her videos, so the claim review's label check finds her order's code.
-    cid, ref, claim_id = demo.new_id(), db.orders().document(demo.LABEL_CODE.lower() + secrets.token_hex(8)), secrets.token_hex(6)
+    cid, ref = demo.new_id(), db.orders().document(demo.LABEL_CODE.lower() + secrets.token_hex(8))
     cracked, unboxing = catalog.image("damage-mug-blue"), catalog.video("unboxing-labelled-cracked")
     packed = packing_sample(ref.id, catalog.image("packing-mug-blue")), packing_sample(ref.id, catalog.video("packing-labelled"), "video/mp4")
     sent = chats.demo_attachment(cracked, "image/jpeg"), chats.demo_attachment(unboxing, "video/mp4")
-    media = [claim_sample(ref.id, claim_id, cracked), claim_sample(ref.id, claim_id, unboxing, "video/mp4")]
-    chat, order = demo.damaged(uid, cid, ref.id, now, packed, sent, claim_id, media, pay_to, samples.new_reference())
+    chat, order = demo.damaged(uid, cid, ref.id, now, packed, sent, pay_to, samples.new_reference())
     save(cid, chat, [(ref, order, None)])
 
     cid, ref = demo.new_id(), db.orders().document()
     chat, order = demo.to_pack(uid, cid, now, packing_sample(ref.id, catalog.image("packing-tote-cream", blur=8)), pay_to, samples.new_reference())
     save(cid, chat, [(ref, order, None)])
+
+    # Chats for Patterns: receipts that did not fit, requests to open an account, a refunded damage report, and a parcel that
+    # arrived empty. Each one's earlier orders come from demo.HISTORY.
+    def receipt(data: bytes) -> tuple[dict, dict]:
+        a = chats.demo_attachment(data, "image/png")
+        return a, {"path": a["path"], "sha256": hashlib.sha256(data).hexdigest(), "content_type": "image/png", "size": len(data)}
+
+    for spec in demo.MISFITS:
+        cid, ref = demo.new_id(), db.orders().document()
+        chat, order = demo.misfit(uid, cid, spec, now, receipt, pay_to)
+        save(cid, chat, [(ref, order, None)])
+    for name, days, lines in demo.ACCOUNTS:
+        save(demo.new_id(), demo.thread(name, lines, uid, now - timedelta(days=days)), [])
+    # Lito's thanks comes after his refund (at most 41 hours ago); Carla writes after receiving her parcel (at most 22 hours ago).
+    save(demo.new_id(), demo.thread(*demo.LITO, uid, now - timedelta(hours=38)), [])
+    chat = demo.thread(*demo.CONTENTS, uid, now - timedelta(hours=2 * len(demo.SEED) + 8))
+    chat["messages"][0]["attachments"] = [chats.demo_attachment(catalog.image("contents-empty-box"), "image/jpeg")]
+    save(demo.new_id(), chat, [])
 
     batch.set(db.store_doc().collection("demoUsers").document(uid), {"samples": firestore.ArrayUnion(paid)}, merge=True)
     batch.commit()
@@ -82,20 +107,4 @@ def packing_sample(order_id: str, data: bytes, content_type: str = "image/jpeg")
         "uploaded_at": datetime.now(UTC),
         "uploaded_by": demo.SHOP,
         "claimed_captured_at": None,
-    }
-
-
-def claim_sample(order_id: str, claim_id: str, data: bytes, content_type: str = "image/jpeg") -> dict:
-    """A sample damage photo or unboxing video, stored like one copied from the customer's chat into a report."""
-    sha = hashlib.sha256(data).hexdigest()
-    path = f"stores/{config.STORE}/orders/{order_id}/claims/{claim_id}/{sha}"
-    db.bucket().blob(path).upload_from_string(data, content_type=content_type, if_generation_match=0)
-    return {
-        "id": sha[:16],
-        "path": path,
-        "sha256": sha,
-        "content_type": content_type,
-        "size": len(data),
-        "source": "customer_chat",
-        "uploaded_at": datetime.now(UTC),
     }

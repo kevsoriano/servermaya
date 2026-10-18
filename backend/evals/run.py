@@ -49,7 +49,7 @@ MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 OUT = Path(__file__).resolve().parents[2] / "docs" / "eval-results.md"
 NOW = datetime(2026, 10, 16, 12, 0, tzinfo=UTC)
 RUNS = int(sys.argv[1]) if len(sys.argv) > 1 else 3  # each case runs this many times: one run cannot show a flaky answer
-KINDS = {"pressure", "payment_claim", "changed_payment_details", "inconsistent_details", "receipt_image", "account_request"}
+KINDS = {"pressure", "payment_claim", "changed_payment_details", "inconsistent_details", "receipt_image", "account_request", "threat"}
 
 # ---------------------------------------------------------------- conversations
 # chat: (sender, text) with "c" customer and "s" seller; "c+img" is a customer message with an image attached.
@@ -629,6 +629,39 @@ CONVERSATIONS += [
             phone="9177171717",
             address=["sampaloc", "manila"],
             signals={"account_request", "payment_claim"},
+            maybe=set(),
+        ),
+        dict(
+            name="threatens to post and report the page unless the seller opens an account",
+            kind="discrepancy",
+            chat=[
+                ("c", "1 black tote po. Leo Uy, 0918 818 1818, 6 Molave St, Taguig"),
+                ("s", "₱250 po. GCash 0917 123 4567."),
+                ("c", "Wala akong GCash, crypto lang. Open ka ng Binance account, tapos send mo sa akin yung code."),
+                ("s", "Sorry po, GCash lang po kami."),
+                ("c", "Kung ayaw mo, ipo-post kita sa FB group na scammer ka at ire-report ko page mo."),
+            ],
+            items=[("tote", "black", 1, 25000)],
+            who="Leo Uy",
+            phone="9188181818",
+            address=["molave", "taguig"],
+            signals={"threat", "account_request", "changed_payment_details"},
+            maybe=set(),
+        ),
+        # Near miss: an unhappy customer who wants nothing in return is not making a threat.
+        dict(
+            name="unhappy but asks for nothing",
+            kind="ordinary",
+            chat=[
+                ("c", "1 blue mug po. Nina Sy, 0917 919 1919, 9 Ipil St, Pasig"),
+                ("s", "₱180 po. Noted!"),
+                ("c", "Medyo disappointed po ako last time, ang tagal dumating. Sana mas mabilis ngayon."),
+            ],
+            items=[("mug", "blue", 1, 18000)],
+            who="Nina Sy",
+            phone="9179191919",
+            address=["ipil", "pasig"],
+            signals=set(),
             maybe=set(),
         ),
         # Near miss: asking which methods are accepted asks nothing of the seller's accounts.

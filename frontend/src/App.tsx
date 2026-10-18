@@ -26,6 +26,7 @@ export default function App() {
   const [error, setError] = useState('')
   const [tab, setTab] = useState<'conversations' | 'orders' | 'patterns' | 'settings'>('conversations')
   const [orderId, setOrderId] = useState<string>() // the order to open in the Orders tab, such as one opened from its chat
+  const [chatId, setChatId] = useState<string>() // the chat to open in Conversations, such as one opened from a pattern
 
   useEffect(
     () =>
@@ -84,7 +85,7 @@ export default function App() {
       <header className="topbar">
         <strong className="brand">Seller Evidence Assistant</strong>
         <nav className="tabs">
-          <button onClick={() => setTab('conversations')} aria-current={tab === 'conversations'}>
+          <button onClick={() => (setChatId(undefined), setTab('conversations'))} aria-current={tab === 'conversations'}>
             Conversations
           </button>
           <button onClick={() => (setOrderId(undefined), setTab('orders'))} aria-current={tab === 'orders'}>
@@ -108,11 +109,16 @@ export default function App() {
         </p>
       )}
       {tab === 'conversations' ? (
-        <Conversations replyHours={me.reply_hours ?? 24} onOpenOrder={(id) => (setOrderId(id), setTab('orders'))} />
+        <Conversations
+          key={chatId}
+          initial={chatId}
+          replyHours={me.reply_hours ?? 24}
+          onOpenOrder={(id) => (setOrderId(id), setTab('orders'))}
+        />
       ) : tab === 'orders' ? (
         <Orders key={orderId} initial={orderId} />
       ) : tab === 'patterns' ? (
-        <Patterns />
+        <Patterns onOpenChat={(id) => (setChatId(id), setTab('conversations'))} />
       ) : (
         <div className="page">
           {me.demo && (

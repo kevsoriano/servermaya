@@ -199,7 +199,15 @@ function pending(c: Conversation) {
 
 const done = (o: Order) => o.status === 'cancelled' || o.receipt?.status === 'customer_confirmed'
 
-export default function Conversations({ replyHours, onOpenOrder }: { replyHours: number; onOpenOrder: (id: string) => void }) {
+export default function Conversations({
+  replyHours,
+  onOpenOrder,
+  initial,
+}: {
+  replyHours: number
+  onOpenOrder: (id: string) => void
+  initial?: string // a chat to open at once, such as one picked on the Patterns tab
+}) {
   const [list, setList] = useState<Conversation[]>()
   const [openId, setOpenId] = useState<string>()
   const [messages, setMessages] = useState<Message[]>()
@@ -211,10 +219,6 @@ export default function Conversations({ replyHours, onOpenOrder }: { replyHours:
   const [drafting, setDrafting] = useState(false)
   const [reply, setReply] = useState('')
   const shown = useRef<string>(undefined) // the open chat, for answers that arrive after the seller moved on
-
-  useEffect(() => {
-    load<Conversation[]>('/conversations').then(setList, (e) => setError(e.message))
-  }, [])
 
   // Only Messenger changes on its own; demo chats change only when this page writes to them, and it reloads after each write.
   const hasMessenger = !!list?.some((c) => !c.demo)
@@ -300,6 +304,14 @@ export default function Conversations({ replyHours, onOpenOrder }: { replyHours:
   // One answer at a time per chat; a message the seller sends meanwhile gets its own answer after it.
   const [typing, setTyping] = useState<string>() // the demo chat whose customer is answering
   const [turnError, setTurnError] = useState('')
+
+  // The list, once; then the chat the parent asked to open, if any. Below open() and the state it sets.
+  useEffect(() => {
+    load<Conversation[]>('/conversations').then(
+      (l) => (setList(l), initial && open(initial)),
+      (e) => setError(e.message),
+    )
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps -- once, on mount: the parent remounts this for each chat it opens
   const answering = useRef(new Set<string>())
   const again = useRef(new Set<string>())
   const customerTurn = (id: string) => {
@@ -454,7 +466,7 @@ export default function Conversations({ replyHours, onOpenOrder }: { replyHours:
                   ))}
               </li>
             ))}
-            {typing === openId && (
+            {openId && typing === openId && (
               <li className="customer typing" role="status">
                 <small>{name} is typing…</small>
                 <p aria-hidden="true">

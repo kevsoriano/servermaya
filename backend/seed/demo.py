@@ -12,6 +12,7 @@ from domain import custody, delivery, extraction, refunds, returns
 from domain import orders as rules
 from domain import packing as pack
 from domain import receipts as gcash
+from domain import signals as risk
 from seed import catalog, samples
 
 SHOP = "Demo shop"
@@ -117,9 +118,9 @@ REPEAT = (
 )
 
 
-# A delivered order with a damage report waiting: the mug arrived cracked, and she sent a photo and her unboxing video in the
-# chat. The report is open and not yet reviewed, so the claim review is one click away. Her chat after delivery belongs
-# to this order: it was not yet received.
+# A delivered order with a damage report in the chat: the mug arrived cracked, and she sent a photo and her unboxing video.
+# No claim is open yet: the seller opens one from her messages, which copies her photo and video into it. Her chat after
+# delivery belongs to this order: it was not yet received.
 DAMAGED = (
     "Bea Villanueva",
     [
@@ -133,7 +134,7 @@ DAMAGED = (
     [
         (False, "Hi, the mug arrived today but it's cracked 😞 Here's a photo."),
         (False, "There's a crack down the side and a chip out of the rim. I filmed opening the box too."),
-        (True, "So sorry, Bea! I've opened a report and will check our packing records."),
+        (True, "So sorry, Bea! Let me check our packing records."),
     ],
 )
 
@@ -149,6 +150,141 @@ TO_PACK = (
         (True, "Thanks, Nico! I'll send the order here so you can confirm it."),
         (False, "Paid via GCash ₱250 just now."),
         (True, "Found it in our GCash, thank you! Packing your tote now."),
+    ],
+)
+
+
+# Recent chats for Patterns: what a shop sees more of in a bad week. Each chat's checks are seeded as the checks step would
+# record them (CHECKS), so the counts are the same on every run and opening these chats costs no Gemini call for checks.
+
+# A receipt that does not fit the order or the shop's GCash, with a push to ship first. Mark's makes the fourth this week.
+# (name, days ago, product, variant, quantity, receipt, lines). receipt: wrong_recipient, wrong_amount or old (dated before
+# the GCash request). Lines 1-4 make the order, line 5 is the seller's GCash request, line 6 carries the receipt.
+GCASH_ASK = "Please send ₱{total} to our GCash, 0917 123 4567 (Juan Dela Cruz), and send the receipt here."
+MISFITS = [
+    (
+        "Paolo Garcia",
+        1,
+        "tote",
+        "Black",
+        1,
+        "wrong_recipient",
+        [
+            (False, "Hi! Is the black tote available? I'll take 1."),
+            (True, "Yes! The black tote is ₱250."),
+            (False, "Paolo Garcia, 0917 555 0121, 18 Dahlia St., Brgy. Batasan Hills, Quezon City"),
+            (True, "Thanks, Paolo! I'll send the order here so you can confirm it."),
+            (True, GCASH_ASK),
+            (False, "Paid! Here's the receipt. Please ship it today, I need it tonight 🙏"),
+            (True, "Thanks! The receipt shows a different name and number from our GCash. Could you check where it went?"),
+            (False, "It's the right one, I already paid. Please just ship it now, the rider can pick it up anytime."),
+        ],
+    ),
+    (
+        "Grace Lim",
+        3,
+        "mug",
+        "Blue",
+        2,
+        "wrong_amount",
+        [
+            (False, "Hello, 2 blue ceramic mugs please."),
+            (True, "Sure! The blue mug is ₱180 each, ₱360 total."),
+            (False, "Grace Lim, 0918 555 0172, 5 Ilang-Ilang St., Brgy. Wack-Wack, Mandaluyong City"),
+            (True, "Thanks, Grace! I'll send the order here so you can confirm it."),
+            (True, GCASH_ASK),
+            (False, "Sent! Please pack it now so the rider can get it this afternoon."),
+            (True, "Thanks, Grace! The receipt shows ₱260, but the order is ₱360. Could you send the remaining ₱100?"),
+            (False, "I'll send the rest later, please ship it already so it arrives today."),
+        ],
+    ),
+    (
+        "Jerome Tan",
+        5,
+        "pouch",
+        None,
+        2,
+        "old",
+        [
+            (False, "Hi, do you have the linen pouch? 2 pieces."),
+            (True, "Yes! ₱150 each, ₱300 total."),
+            (False, "Jerome Tan, 0919 555 0158, 77 Banaba St., Brgy. Pio del Pilar, Makati City"),
+            (True, "Thanks, Jerome! I'll send the order here so you can confirm it."),
+            (True, GCASH_ASK),
+            (False, "Here's my receipt. Can you ship today? It's a gift for tomorrow."),
+            (True, "Thanks, Jerome! This receipt is dated three days ago, before we sent our GCash details. Could you check?"),
+            (False, "That's the payment, I just took the screenshot now. Please ship it today 🙏"),
+        ],
+    ),
+]
+
+# Asked the seller to open an account and pass on a code. Dan's makes the third this week. (name, days ago, lines)
+ACCOUNTS = [
+    (
+        "Kim Navarro",
+        2,
+        [
+            (False, "Hi! How much is the scented soy candle?"),
+            (True, "The soy candle is ₱220. We have vanilla and lavender."),
+            (False, "1 lavender please. I'll pay with Maya, but you need a Maya account to receive it. Can you open one? It's quick."),
+            (True, "Sorry, we only accept GCash for now."),
+            (
+                False,
+                "It's really easy, I'll guide you. Once you sign up a 6-digit code will come to your number, just send it to me and I'll link it.",
+            ),
+        ],
+    ),
+    (
+        "Ramon Aquino",
+        4,
+        [
+            (False, "Hello, I'd like 2 black tote bags."),
+            (True, "Sure! The black tote is ₱250 each, ₱500 total. Payment is by GCash."),
+            (False, "I sent ₱500 to your GCash, but it says your account has to be verified before you can receive it."),
+            (False, "I'll send you a link to verify. Log in there and send me the OTP so the money goes through."),
+        ],
+    ),
+]
+
+# What the checks step records for each chat above, cited by message number from 1: (kind, what was said).
+CHECKS = {
+    "Paolo Garcia": [
+        ("payment_claim", "Says they paid and sent a receipt screenshot.", [6]),
+        ("receipt_image", "Sent a screenshot of a GCash receipt as proof of payment.", [6]),
+        ("pressure", "Asks for the order to be shipped today, before the payment is confirmed.", [6, 8]),
+    ],
+    "Grace Lim": [
+        ("payment_claim", "Says they sent the payment, with a receipt screenshot.", [6]),
+        ("receipt_image", "Sent a screenshot of a GCash receipt as proof of payment.", [6]),
+        ("pressure", "Asks for the order to be packed and shipped today, and to send the rest of the payment later.", [6, 8]),
+    ],
+    "Jerome Tan": [
+        ("payment_claim", "Says the receipt screenshot is their payment.", [6, 8]),
+        ("receipt_image", "Sent a screenshot of a GCash receipt as proof of payment.", [6]),
+        ("pressure", "Asks for the order to be shipped today, before the payment is confirmed.", [6, 8]),
+    ],
+    "Kim Navarro": [
+        ("changed_payment_details", "Wants to pay by Maya instead of GCash.", [3]),
+        ("account_request", "Asks you to open a Maya account and send them the 6-digit code that arrives on your number.", [3, 5]),
+    ],
+    "Ramon Aquino": [
+        ("payment_claim", "Says they sent ₱500 to your GCash.", [3]),
+        ("account_request", "Asks you to log in through a link they will send and share the OTP to receive the payment.", [3, 4]),
+    ],
+    "Lito Mendoza": [],
+    "Carla Villamor": [],
+}
+
+# A delivered order whose refund went through this week: one of the damage reports before Bea's.
+LITO = ("Lito Mendoza", [(False, "Got the refund, thanks for sorting it out so fast!")])
+
+# A parcel carried by Sample Rider 3 that arrived with nothing in it: she has not opened it until today. The third such report
+# on that rider once the seller opens it; her photo is in the chat.
+CONTENTS = (
+    "Carla Villamor",
+    [
+        (False, "Hi! I only opened the box today and there's no candle inside, just crumpled paper 😟"),
+        (False, "The tape looked untouched from the outside. Can you check what happened?"),
     ],
 )
 
@@ -288,22 +424,12 @@ def repeat(
 
 
 def damaged(
-    owner: str,
-    conversation_id: str,
-    order_id: str,
-    now: datetime,
-    packed: tuple[dict, dict],
-    sent: tuple[dict, dict],
-    claim_id: str,
-    claim_media: list[dict],
-    pay_to: dict,
-    reference: str,
+    owner: str, conversation_id: str, order_id: str, now: datetime, packed: tuple[dict, dict], sent: tuple[dict, dict], pay_to: dict, reference: str
 ) -> tuple[dict, dict]:
     """Her chat and order, two days ago: confirmed by her in the chat, a GCash payment the seller found in their own history, packed
     with the mug checked by hand and filmed, sent by a courier the seller reports and delivered. Today she says in the chat it
-    arrived cracked, with a photo and her unboxing video, and the seller opens a claim from those messages.
-    packed: the stored packing photo and packing video. sent: her photo and video as chat attachments. claim_media: the same
-    photo and video as stored with the report."""
+    arrived cracked, with a photo and her unboxing video; the claim is left for the seller to open from those messages.
+    packed: the stored packing photo and packing video. sent: her photo and video as chat attachments."""
     name, earlier, later = DAMAGED
     old = thread(name, earlier, owner, now - timedelta(days=2))
     new = thread(name, later, owner, now - timedelta(hours=2 * len(SEED) + 4))
@@ -326,19 +452,6 @@ def damaged(
     order |= delivery.start(order, f"f_{order_id}", "other", SHOP, at(5) + timedelta(seconds=10), tracking="Shop rider")
     order |= delivery.step(order, "picked_up", "seller_reported", SHOP, at(5) + timedelta(hours=1))
     order |= delivery.step(order, "delivered", "seller_reported", SHOP, at(6) - timedelta(minutes=30))
-    # Opened by the seller from her two messages, as Open claim from the chat does: her words, her photo and video.
-    said = new["messages"][:2]
-    narrative = "\n".join(m["text"] for m in said)
-    order |= cases.open_claim(
-        order,
-        claim_id,
-        cases.ClaimIn(type="damage", narrative=narrative),
-        "customer_chat",
-        SHOP,
-        at(8) - timedelta(seconds=30),
-        claim_media,
-        [m["id"] for m in said],
-    )
     return chat, order
 
 
@@ -360,6 +473,75 @@ def to_pack(owner: str, conversation_id: str, now: datetime, photo: dict, pay_to
     return chat, order
 
 
+def checks(messages: list[dict], found: list[tuple[str, str, list[int]]]) -> list[dict]:
+    """Checks as the checks step records them, from (kind, summary, message numbers from 1)."""
+    return [
+        {
+            "kind": kind,
+            "summary": summary,
+            "sources": [messages[n - 1]["id"] for n in numbers],
+            "check": risk.SUGGESTED[kind],
+            "times": [messages[n - 1]["created_time"] for n in numbers],
+        }
+        for kind, summary, numbers in found
+    ]
+
+
+def misfit(owner: str, conversation_id: str, spec: tuple, now: datetime, attach, pay_to: dict) -> tuple[dict, dict]:
+    """A chat whose receipt did not fit, and its order: confirmed in the chat, the GCash request sent, and the receipt read and
+    checked by the same code as a live one (what Gemini read is given here). attach(png) -> (chat attachment, stored image)."""
+    name, days, product, variant, qty, kind, lines = spec
+    price = PRICES[product]
+    total = price * qty
+    lines = [(p, t.format(total=f"{total // 100:,}")) for p, t in lines]
+    chat = thread(name, lines, owner, now - timedelta(days=days))
+    messages = chat["messages"]
+    at = lambda n: datetime.fromisoformat(messages[n]["created_time"])
+    item = extraction.Item(
+        name=NAMES[product],
+        variant=variant,
+        quantity=qty,
+        unit_price_php=price // 100,
+        price_source=2,
+        sources=[1],
+        catalog=catalog.line(product, variant),
+    )
+    phone, address = lines[2][1].split(", ", 2)[1:]
+    order = confirmed(owner, conversation_id, messages[:4], item, [name, phone, address], 3, at(3))
+    order |= gcash.request(order, pay_to, SHOP, at(4))
+    received = at(5)
+    amount = total - min(10000, total // 2) if kind == "wrong_amount" else total
+    paid = received - timedelta(days=3) if kind == "old" else received
+    to = (samples.OTHER_NAME, samples.OTHER_MOBILE) if kind == "wrong_recipient" else (samples.PAY_TO_NAME, samples.PAY_TO_MOBILE)
+    ref = samples.new_reference()
+    attachment, image = attach(samples.receipt_png(amount, ref, paid, *to))
+    messages[5]["attachments"] = [attachment]
+    receipt = gcash.Receipt(
+        readable=True,
+        outcome="successful",
+        amount_php=amount / 100,
+        reference=" ".join([ref[:4], ref[4:7], ref[7:]]),
+        paid_at=f"{paid.astimezone(gcash.PHT):%Y-%m-%dT%H:%M}",
+        recipient_name=to[0],
+        recipient_mobile=to[1],
+    )
+    m = order["manual_payment"]
+    start, since = gcash.window(m)
+    claim = {
+        "id": image["sha256"][:16],
+        "message_id": messages[5]["id"],
+        "received_at": received,
+        "image": image,
+        "receipt": receipt.model_dump(),
+        "reference": ref,
+        "checks": gcash.check_receipt(receipt, m["amount"], start, received, m["pay_to"], set(), since=since),
+        "read_at": received + timedelta(minutes=2),
+        "model": "demo_seed",
+    }
+    order |= gcash.add_claims(order, [claim])
+    return chat, order
+
+
 def parse(chat: str) -> list[tuple[bool, str]]:
     """Pasted chat to messages. "Customer:" or "Seller:" starts a message; other lines continue the one before."""
     out: list[tuple[bool, str]] = []
@@ -377,12 +559,14 @@ def parse(chat: str) -> list[tuple[bool, str]]:
     return out
 
 
-# Earlier orders for every demo chat except Ana's and Dan's, so Orders and Patterns have history to show. Ana and Dan are
-# first-time customers: Dan's crypto scam is the classic new contact. Each goes through the same
-# rules as a real one: drafted from its own messages, confirmed in the chat, paid, packed, sent by Lalamove's sandbox with a
-# simulated rider, received, and some with a claim decided and refunded. All within the last 26 days. Sample Rider 2 carried
-# three of the parcels that arrived crushed, so the Patterns tab has a driver card to show; the others carried one between them.
-# A chat's newest earlier order never has a claim: messages after it would be read as part of the order the demo drafts next.
+# Earlier orders for the demo chats, so Orders and Patterns have history to show. Ana and Dan are first-time customers: Dan's
+# request to open a wallet is the classic new contact. Each goes through the same rules as a real one: drafted from its own
+# messages, confirmed in the chat, paid, packed, sent by Lalamove's sandbox with a simulated rider, received, and some with a
+# claim decided and refunded. All within the last 26 days. Sample Rider 2 carried four of the parcels that arrived crushed,
+# two of them this week, so Patterns has a driver card and, once Bea's report is opened, a rise in damage reports. Sample
+# Rider 3 carried two parcels whose contents were missing or replaced; Carla's makes the third.
+# A chat's newest earlier order never has a claim when the demo drafts its next order from the messages after it.
+# A claim flow takes 77 hours, so an order with a claim is at least 4 days old.
 # (days ago, product, variant, quantity, rider (0-2), sandbox outcome, claim or None)
 # claim: (type, the customer's words, cause the seller recorded, action, partial amount in centavos, returned item or None)
 CUSTOMERS = {
@@ -392,6 +576,8 @@ CUSTOMERS = {
     "Rico Bautista": ("0917 555 0166", "23 Kalayaan Ave., Brgy. Pinyahan, Quezon City"),
     "Bea Villanueva": ("0917 555 0188", "31 Molave St., Brgy. Bagong Ilog, Pasig City"),
     "Nico Ramos": ("0918 555 0133", "9 Acacia Lane, Brgy. Kapitolyo, Pasig City"),
+    "Lito Mendoza": ("0919 555 0145", "40 Narra Ave., Brgy. Bagumbayan, Taguig City"),
+    "Carla Villamor": ("0927 555 0109", "3 Jasmin St., Brgy. Valenzuela, Makati City"),
 }
 HISTORY = {
     "Mark Dizon": [
@@ -439,12 +625,28 @@ HISTORY = {
         (14, "candle", "Vanilla", 1, 0, "delivered", None),
     ],
     "Rico Bautista": [
-        (25, "mug", "Blue", 1, 1, "damaged", ("damage", "The mug arrived chipped and the box was dented.", "courier_transit", "refund", None, None)),
-        (18, "tote", "Cream", 1, 1, "delivered", None),
+        (25, "mug", "Blue", 1, 1, "delivered", None),
+        (
+            18,
+            "tote",
+            "Cream",
+            1,
+            2,
+            "delivered",
+            (
+                "wrong_item",
+                "The box had an old, faded tote inside, not the new cream one I ordered. The tape looked fine.",
+                "unknown",
+                "refund",
+                None,
+                None,
+            ),
+        ),
     ],
     "Bea Villanueva": [
+        (23, "tote", "Black", 1, 0, "delivered", None),
         (
-            23,
+            15,
             "mug",
             "Blue",
             1,
@@ -452,13 +654,34 @@ HISTORY = {
             "damaged",
             ("damage", "The mug arrived with a chipped rim, and the box was crushed at one corner.", "courier_transit", "refund", None, None),
         ),
-        (15, "tote", "Black", 1, 0, "delivered", None),
         (6, "pouch", None, 1, 2, "delivered", None),
     ],
     "Nico Ramos": [
         (21, "mug", "Blue", 2, 0, "delivered", None),
-        (11, "candle", "Vanilla", 1, 1, "delivered", None),
+        (11, "candle", "Vanilla", 1, 0, "delivered", None),
+        (
+            4,
+            "mug",
+            "Blue",
+            1,
+            1,
+            "damaged",
+            ("damage", "The mug arrived in pieces and the box was crushed on one side.", "courier_transit", "refund", None, None),
+        ),
     ],
+    "Lito Mendoza": [
+        (
+            5,
+            "mug",
+            "Blue",
+            1,
+            1,
+            "damaged",
+            ("damage", "The mug came with the handle snapped off, and the box was crushed.", "courier_transit", "refund", None, None),
+        ),
+    ],
+    # Delivered two days ago by Sample Rider 3 and received; today she opened it (CONTENTS).
+    "Carla Villamor": [(2, "candle", "Vanilla", 1, 2, "delivered", None)],
 }
 NOUNS = {
     "mug": ("ceramic mug", "ceramic mugs"),

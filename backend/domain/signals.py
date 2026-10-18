@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from . import extraction
 from . import orders as rules
 
-Kind = Literal["pressure", "payment_claim", "changed_payment_details", "inconsistent_details", "receipt_image", "account_request"]
+Kind = Literal["pressure", "payment_claim", "changed_payment_details", "inconsistent_details", "receipt_image", "account_request", "threat"]
 
 SUGGESTED = {
     "pressure": "Do not pack or ship until the payment is confirmed: verified by PayMongo, or found in your own GCash history.",
@@ -22,6 +22,8 @@ SUGGESTED = {
     "receipt_image": "Treat the image as a claim, not proof. Only a PayMongo-verified payment, or a GCash payment you found in your own GCash history, counts.",
     # Never settled by a payment: a verified payment does not make sharing a code or opening someone's link safe.
     "account_request": "You don't need a new account, app or link to get paid. Never share a code, OTP or PIN. Use your usual GCash or the PayMongo link.",
+    # Never settled by a payment either: a threat does not change what has to be checked.
+    "threat": "A threat doesn't change what you check before shipping. Reply politely and in writing, and keep this chat. You never need a new account, link or code to get paid.",
     # From Model Armor (integrations.armor), not Gemini: never in Kind, so Gemini cannot raise them
     "instructions": "Read this message yourself and compare the draft order and checks with the chat. Text written to steer an AI never changes what was agreed.",
     "unsafe_link": "Don't open the link or sign in through it. You never need a link to receive payment.",
@@ -48,10 +50,13 @@ Only these kinds, and only when a CUSTOMER message concretely shows it:
 - account_request: asking the SELLER to open, install, sign up for, log in to or verify an account, wallet, app or link, or to
   share a code, OTP, PIN or password, in order to receive payment or "confirm" one. Report it even when it is said to be easy
   or the only way, and also report changed_payment_details if the customer is changing how they pay.
+- threat: saying they will post about the seller, leave a bad review, report the page or shop, or go to the authorities, to
+  make the seller do something now (ship, refund, open an account, share a code, change how they get paid).
 
 Rules:
 - Ordinary questions, polite urgency with no link to payment ("kailangan ko bukas" alone), and a clear single correction are not signals.
   Asking whether another payment method is accepted ("pwede po bank transfer?") is not account_request: nothing is asked of the seller's accounts.
+  Saying they are unhappy, or asking how to complain, with nothing the seller must do to stop it, is not a threat.
 - Urgency that comes with a claim of having paid ("already paid, please ship today") is pressure as well as a payment_claim:
   the payment is not verified yet, so it is a request to ship first. Report both.
 - Describe what was said in neutral English. Never judge the customer's honesty, intent or character, and never use words like scam, fraud or suspicious.

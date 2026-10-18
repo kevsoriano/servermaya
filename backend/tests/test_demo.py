@@ -127,12 +127,10 @@ def test_damaged_and_to_pack_seeds():
     pay_to = {"name": "Juan Dela Cruz", "mobile": "639171234567", "qr": None, "demo": True}
     photo, film = {"id": "p1"}, {"id": "v1", "content_type": "video/mp4"}
     sent = {"kind": "image", "url": "/d"}, {"kind": "video", "url": "/v"}
-    claim_photo, claim_video = {"id": "c1"}, {"id": "c2", "content_type": "video/mp4"}
-    chat, bea = demo.damaged("u1", "demo_cccccccccccc", "o1", now, (photo, film), sent, "k1", [claim_photo, claim_video], pay_to, "1012345678901")
-    # Delivered but not yet received, so her report after delivery is still about this order, and it waits for review.
+    chat, bea = demo.damaged("u1", "demo_cccccccccccc", "o1", now, (photo, film), sent, pay_to, "1012345678901")
+    # Delivered but not yet received, so her report after delivery is still about this order; the seller opens the claim.
     assert bea["fulfillment"]["status"] == "delivered" and "receipt" not in bea and not rules.done(bea)
-    assert (bea["claims"][0]["status"], bea["claims"][0]["photos"], bea["claims"][0]["review"]) == ("open", [claim_photo], None)
-    assert bea["claims"][0]["videos"] == [claim_video] and bea["packing"]["videos"] == [film]  # her unboxing video; the seller's packing video
+    assert "claims" not in bea and bea["packing"]["videos"] == [film]  # the seller's packing video
     assert bea["draft"]["total"] == 18000 and [m["attachments"] for m in chat["messages"][6:8]] == [[sent[0]], [sent[1]]]
     assert max(m["created_time"] for m in chat["messages"]) < (now - timedelta(hours=2 * len(demo.SEED) + 2)).isoformat()  # listed after Rico
 
@@ -239,6 +237,7 @@ def test_customer_personas_match_the_seed_and_scripts():
     from seed import demo
 
     seeded = [n for n, _ in demo.SEED] + [demo.RETURNING[0], demo.REPEAT[0], demo.DAMAGED[0], demo.TO_PACK[0]]
+    seeded += [m[0] for m in demo.MISFITS] + [a[0] for a in demo.ACCOUNTS] + [demo.LITO[0], demo.CONTENTS[0]]
     assert set(agent.PERSONAS) == set(seeded)  # every seeded customer has a persona, and only they do
     mark = agent.persona("Mark Dizon")
     assert [agent.receipt_kind(mark, n) for n in range(3)] == ["wrong_recipient", "matching", "matching"]
@@ -256,3 +255,28 @@ def test_customer_personas_match_the_seed_and_scripts():
     }
     messages = [msg(False, -5, "image"), msg(True, 1, "image"), msg(False, 2), msg(False, 3, "image")]
     assert agent.receipts_sent(messages, at) == 1  # only the customer's images since the request
+
+
+def test_seeded_receipts_fail_the_check_each_one_is_for():
+    from datetime import datetime
+
+    from seed import demo
+
+    now = datetime.now(UTC)
+    pay_to = {"name": "Juan Dela Cruz", "mobile": "639171234567", "qr": None, "demo": True}
+    attach = lambda data: ({"kind": "image", "url": "/r"}, {"path": "p", "sha256": "ab" * 32, "content_type": "image/png", "size": len(data)})
+    failed = {}
+    for spec in demo.MISFITS:
+        chat, order = demo.misfit("u1", "demo_eeeeeeeeeeee", spec, now, attach, pay_to)
+        claim = order["manual_payment"]["claims"][0]
+        failed[spec[0]] = {c["check"] for c in claim["checks"] if c["result"] == "fail"}
+        assert order["manual_payment"]["status"] == "claimed" and claim["message_id"] == chat["messages"][5]["id"]
+        assert chat["messages"][5]["attachments"] and chat["messages"][4]["text"].startswith(f"Please send ₱{order['draft']['total'] // 100}")
+        # The seeded checks cite real customer messages, so they settle and list like ones Gemini found.
+        found = demo.checks(chat["messages"], demo.CHECKS[spec[0]])
+        assert {s["kind"] for s in found} == {"payment_claim", "receipt_image", "pressure"}
+        assert all(not chat["messages"][int(n) - 1]["from_page"] for _, _, ns in demo.CHECKS[spec[0]] for n in ns)
+    assert failed == {"Paolo Garcia": {"recipient_name", "recipient_mobile"}, "Grace Lim": {"amount"}, "Jerome Tan": {"time"}}
+    for name, _, lines in demo.ACCOUNTS:  # and in the chats that ask to open an account
+        assert "account_request" in {k for k, _, _ in demo.CHECKS[name]}
+        assert all(not lines[n - 1][0] for _, _, ns in demo.CHECKS[name] for n in ns)

@@ -13,6 +13,7 @@ MIN_SHIPMENTS = 5  # below this, a rate is labelled insufficient history and nev
 MIN_INCIDENTS = 2
 ELEVATED = 2.0  # a group's rate at least this many times the rest of the store's
 LOSS = ("damage", "nonreceipt")
+CONTENTS = ("missing_item", "wrong_item")  # the parcel arrived, but not with what was packed
 # Only these causes count against a courier, vehicle or driver. A seller error never does; a customer cause never does.
 CARRIER_CAUSES = (None, "unknown", "courier_transit")
 CARRIER_KINDS = ("courier", "vehicle", "driver", "area")
@@ -26,6 +27,12 @@ ALTERNATIVES = {
         "The customer may simply order often, or have had genuinely bad deliveries",
         "Earlier claims may have been resolved as the store's or courier's error",
         "A shared Messenger account can be several people",
+    ],
+    "contents_concentration": [
+        "An item may have been left out at packing; compare the packing photo with the order",
+        "Someone else at the address may have opened the parcel first",
+        "An assigned driver is not proof of who handled the parcel",
+        "Lalamove assigns its drivers, so one driver carrying several of these parcels can be chance",
     ],
     "loss_concentration": [
         "This group may carry more fragile or high-value items",
@@ -60,6 +67,8 @@ def incidents(orders: list[dict], since: datetime) -> list[dict]:
                     "outcome": (c.get("decision") or {}).get("action"),
                     "cause": (c.get("decision") or {}).get("cause"),
                     "status": c["status"],
+                    "conversation_id": (o.get("source") or {}).get("conversation_id"),
+                    "name": ((o.get("draft") or {}).get("recipient_name") or {}).get("value"),
                 }
             )
     return out
@@ -71,7 +80,7 @@ def rate(n: int, d: int) -> float | None:
 
 def card(rule: str, kind: str, value: str, label: str, linked: list[dict], **fields) -> dict:
     key = f"{rule}:{kind}:{value}"
-    digest = hashlib.sha256("|".join(sorted(i["claim_id"] if "claim_id" in i else i["order_id"] for i in linked)).encode()).hexdigest()[:16]
+    digest = hashlib.sha256("|".join(sorted(i.get("claim_id") or i.get("id") or i["order_id"] for i in linked)).encode()).hexdigest()[:16]
     return {
         "key": key,
         "rule": rule,
@@ -79,7 +88,7 @@ def card(rule: str, kind: str, value: str, label: str, linked: list[dict], **fie
         "entity": {"kind": kind, "value": value, "label": label},
         "incidents": linked,
         "incidents_hash": digest,
-        "alternatives": ALTERNATIVES[rule],
+        "alternatives": ALTERNATIVES.get(rule, []),
         **fields,
     }
 
@@ -138,7 +147,7 @@ def recurring_claims(orders: list[dict], since: datetime, found: list[dict]) -> 
                 "recurring_customer_claims",
                 "customer",
                 who,
-                "One customer's Messenger thread",
+                next((f"{i['name']}'s chat" for i in mine if i.get("name")), "One customer's Messenger thread"),
                 mine,
                 numerator=len(mine),
                 denominator=d,
@@ -167,11 +176,13 @@ DRIVER_LIMITS = {
 }
 
 
-def loss_concentration(orders: list[dict], since: datetime, found: list[dict]) -> list[dict]:
-    """Damage and non-receipt reports per delivered shipment, grouped by courier, vehicle, area, driver and product. Only
-    claims whose recorded cause is transit or unknown count against a courier, vehicle, area or driver."""
+def loss_concentration(
+    orders: list[dict], since: datetime, found: list[dict], types=LOSS, rule="loss_concentration", kinds: tuple[str, ...] | None = None
+) -> list[dict]:
+    """Damage and non-receipt reports (types) per delivered shipment, grouped by courier, vehicle, area, driver and product,
+    or only the given kinds. Only claims whose recorded cause is transit or unknown count against a courier, vehicle, area or driver."""
     rows = []  # one per delivered shipment: its groups, whether it had a loss, and whether that loss can count against its carrier
-    by_shipment = {i["fulfillment_id"]: i for i in found if i["type"] in LOSS}
+    by_shipment = {i["fulfillment_id"]: i for i in found if i["type"] in types}
     labels, sources = {}, {}
     for o in orders:
         items = [f"{i['name']}" + (f" ({i['variant']})" if i.get("variant") else "") for i in o["draft"]["items"]]
@@ -203,6 +214,8 @@ def loss_concentration(orders: list[dict], since: datetime, found: list[dict]) -
     without_driver = sum(1 for r in rows if not r["has_driver"])
     out = []
     for kind, value in {g for r in rows for g in r["groups"]}:
+        if kinds and kind not in kinds:
+            continue
         key = "carrier_lost" if kind in CARRIER_KINDS else "lost"
         total_n = sum(r[key] for r in rows)
         mine = [r for r in rows if (kind, value) in r["groups"]]
@@ -233,7 +246,7 @@ def loss_concentration(orders: list[dict], since: datetime, found: list[dict]) -
             label += " (simulated)"
         out.append(
             card(
-                "loss_concentration",
+                rule,
                 kind,
                 value,
                 label,
@@ -244,10 +257,16 @@ def loss_concentration(orders: list[dict], since: datetime, found: list[dict]) -
                 baseline={"numerator": rest_n, "denominator": rest_d, "rate": rate(rest_n, rest_d), "of": "other delivered shipments"},
                 elevated=elevated,
                 limitations=limitations,
-                suggested_review="Compare the packing records, pickup and drop-off photos of these parcels, and what they had in common.",
+                suggested_review=SUGGESTED_REVIEW[rule],
             )
         )
     return out
+
+
+SUGGESTED_REVIEW = {
+    "loss_concentration": "Compare the packing records, pickup and drop-off photos of these parcels, and what they had in common.",
+    "contents_concentration": "Compare the packing photos and pickup photos of these parcels: were they complete and sealed when they left you?",
+}
 
 
 RETURN_ACTIONS = ("refund", "partial_refund", "replacement", "redelivery")
@@ -291,10 +310,149 @@ def returns_summary(orders: list[dict], now: datetime, days: int) -> dict:
     return {"days": days, "delivered": delivered, "causes": causes, "by": by}
 
 
-def analyse(orders: list[dict], now: datetime, days: int = 30) -> list[dict]:
+# Rising: one kind of case in the last 7 days against the 3 weeks before. Counted from orders and from the chat checks.
+TREND_WEEKS = 4
+TREND_MIN = 3  # cases in the last 7 days before a rise is shown
+# Receipt checks that show the screenshot does not fit the order or the seller's account. "outcome" (a failed or pending
+# transfer on screen) and "screening" (text aimed at the AI) are other matters.
+RECEIPT_MISFITS = ("amount", "time", "reference", "recipient_name", "recipient_mobile", "duplicate")
+THEMES = {
+    "receipt_misfit": {
+        "label": "Receipts that don't fit the order or your GCash account",
+        "unit": "chats",
+        "suggested_review": "Ship only once you find the payment in your own GCash history, or PayMongo verifies it. A screenshot is a claim, not proof.",
+        "limitations": ["Counts receipts whose checks did not fit, one per order; a receipt sent to an old number by mistake counts too."],
+        "alternatives": [
+            "A customer may have paid an old or saved number by mistake",
+            "A receipt can be resent from an earlier order by mistake",
+            "A partial payment may have been agreed in the chat",
+        ],
+    },
+    "account_request": {
+        "label": "Asked you to open an account or share a code",
+        "unit": "chats",
+        "suggested_review": "You never need a new account, app, link or code to receive payment. Never share a code, OTP or PIN; reply with your usual GCash or PayMongo link.",
+        "limitations": ["Counts chats where the checks found this request; a request written another way can be missed."],
+        "alternatives": [
+            "A customer may honestly not have GCash and be asking what else works",
+            "Several of these chats may be the same person on different accounts",
+        ],
+    },
+    "damage_reports": {
+        "label": "Damage reports",
+        "unit": "reports",
+        "suggested_review": "Look at what these parcels had in common: product, packing, courier and driver. The concentration cards below may show it.",
+        "limitations": ["Counts reports made, not damage found: see each report's outcome."],
+        "alternatives": [
+            "A batch of stock may be more fragile than usual",
+            "Packing may have changed this month",
+            "Busier weeks bring more reports; compare with your order count",
+        ],
+    },
+}
+
+
+def when(value) -> datetime | None:
+    return datetime.fromisoformat(value) if isinstance(value, str) else value
+
+
+def trend_cases(orders: list[dict], chats: list[dict], since: datetime) -> dict[str, list[dict]]:
+    """Each theme's cases since `since`. chats: [{conversation_id, name, signals}], the stored checks of the seller's chats."""
+    names = {c["conversation_id"]: c.get("name") for c in chats}
+    pressure = {c["conversation_id"] for c in chats if any(s["kind"] == "pressure" for s in c.get("signals") or [])}
+    who = lambda o: ((o.get("draft") or {}).get("recipient_name") or {}).get("value")
+    out: dict[str, list[dict]] = {k: [] for k in THEMES}
+    for o in orders:
+        cid = (o.get("source") or {}).get("conversation_id")
+        name = names.get(cid) or who(o)
+        misfits = [
+            c
+            for m in filter(None, [o.get("manual_payment")] + o.get("manual_payment_history", []))
+            for c in m.get("claims", [])
+            if any(k["check"] in RECEIPT_MISFITS and k["result"] == "fail" for k in c.get("checks", []))
+        ]
+        if misfits and (at := when(misfits[0]["received_at"])) and at >= since:  # one per order: its first receipt that did not fit
+            out["receipt_misfit"].append(
+                {"id": f"receipt:{o['id']}", "order_id": o["id"], "conversation_id": cid, "name": name, "at": at, "pressure": cid in pressure}
+            )
+        for c in o.get("claims", []):
+            if c["type"] == "damage" and when(c["created_at"]) >= since:
+                out["damage_reports"].append(
+                    {"id": c["id"], "claim_id": c["id"], "order_id": o["id"], "conversation_id": cid, "name": name, "at": when(c["created_at"])}
+                )
+    for chat in chats:
+        for s in chat.get("signals") or []:
+            at = when((s.get("times") or [None])[0])
+            if s["kind"] == "account_request" and at and at >= since:
+                out["account_request"].append(
+                    {
+                        "id": f"{chat['conversation_id']}:{s['sources'][0]}",
+                        "conversation_id": chat["conversation_id"],
+                        "name": chat.get("name"),
+                        "at": at,
+                    }
+                )
+    return out
+
+
+def rising(orders: list[dict], chats: list[dict], now: datetime) -> list[dict]:
+    """A theme with at least TREND_MIN cases in the last 7 days, and at least ELEVATED times its weekly average before."""
+    since = now - timedelta(weeks=TREND_WEEKS)
+    week = lambda at: min(int((now - at) / timedelta(weeks=1)), TREND_WEEKS - 1)
+    volume = [0] * TREND_WEEKS  # orders made each week, oldest first, for scale
+    for o in orders:
+        if (at := when(o.get("created_at"))) and since <= at <= now:
+            volume[TREND_WEEKS - 1 - week(at)] += 1
+    out = []
+    for theme, cases in trend_cases(orders, chats, since).items():
+        weeks = [0] * TREND_WEEKS
+        for c in cases:
+            weeks[TREND_WEEKS - 1 - week(c["at"])] += 1
+        recent, before = weeks[-1], sum(weeks[:-1]) / (TREND_WEEKS - 1)
+        if recent < TREND_MIN or recent < ELEVATED * before:
+            continue
+        t = THEMES[theme]
+        linked = sorted((c for c in cases if week(c["at"]) == 0), key=lambda c: c["at"], reverse=True)
+        out.append(
+            card(
+                "rising",
+                "theme",
+                theme,
+                t["label"],
+                linked,
+                numerator=recent,
+                denominator=None,
+                rate=None,
+                baseline=None,
+                elevated=True,
+                weeks=weeks,
+                weekly_before=round(before, 1),
+                volume=volume,
+                unit=t["unit"],
+                with_pressure=sum(1 for c in linked if c.get("pressure")) if theme == "receipt_misfit" else None,
+                limitations=t["limitations"]
+                + [
+                    f"Counts, not rates: you had {volume[-1]} new order(s) this week against {sum(volume[:-1]) / (TREND_WEEKS - 1):.1f} a week before."
+                ],
+                alternatives=t["alternatives"],
+                suggested_review=t["suggested_review"],
+            )
+        )
+    return out
+
+
+def analyse(orders: list[dict], now: datetime, days: int = 30, chats: list[dict] | None = None) -> list[dict]:
+    """chats: the stored checks of the seller's chats, for the rising cards. Those always compare the last 7 days with the
+    3 weeks before, whatever the window."""
     since = now - timedelta(days=days)
     found = incidents(orders, since)
-    return reference_reuse(orders, since) + recurring_claims(orders, since, found) + loss_concentration(orders, since, found)
+    return (
+        rising(orders, chats or [], now)
+        + reference_reuse(orders, since)
+        + recurring_claims(orders, since, found)
+        + loss_concentration(orders, since, found)
+        + loss_concentration(orders, since, found, CONTENTS, "contents_concentration", ("driver",))
+    )
 
 
 def with_review(cards: list[dict], reviews: dict[str, dict]) -> list[dict]:
