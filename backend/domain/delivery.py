@@ -181,7 +181,6 @@ def apply_event(
 # rider the seller names, such as a Favourite Driver booked in Lalamove's own app or one hired outside Lalamove). Lalamove's
 # driver is never replaced by another source; a different driver is added to the history, because who carried a parcel
 # matters for delivery patterns.
-DRIVER_SOURCES = ("provider", "simulated", "seller_reported")
 
 
 def driver_record(source: str, driver_id: str, name: str | None = None, plate: str | None = None, at: datetime | None = None) -> dict:

@@ -1,0 +1,11 @@
+# What `gcloud run deploy --source backend` leaves out of the upload to the build bucket. Without this file it uploads the
+# whole folder, .env (every secret) and .venv included. Keep in step with .dockerignore.
+.gcloudignore
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+tests/
+evals/
+seed/videos/raw-*.mp4

@@ -57,9 +57,12 @@ function SampleHistory() {
     <p className="demo-banner" role="note">
       <button type="button" onClick={download}>
         Download a sample history PDF
-      </button>{' '}
-      (password <code>delacruz4567</code>). It lists every matching sample receipt you sent, so their GCash payments get confirmed when you
-      upload it.
+      </button>
+      . Its password is in the{' '}
+      <a href="https://github.com/kevsoriano/servermaya#try-it" target="_blank" rel="noreferrer">
+        Try it section of the project's README
+      </a>
+      . It lists every matching sample receipt you sent, so their GCash payments get confirmed when you upload it.
       {error && <span role="alert"> {error}</span>}
     </p>
   )

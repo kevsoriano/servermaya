@@ -25,7 +25,6 @@ TYPES = {
     "cancellation": "Cancellation",
     "other": "Other",
 }
-ACTIONS = ("clarification", "refund", "partial_refund", "replacement", "redelivery", "escalation")
 CLOSED = ("resolved",)
 MAX_PHOTOS = 4
 MAX_VIDEOS = 2

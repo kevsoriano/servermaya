@@ -117,9 +117,11 @@ def chat_claim(order_id: str, body: ChatClaimIn, user: dict = Depends(auth.curre
 
 @router.get("/api/orders/{order_id}/claims/{cid}/photos/{photo_id}")
 def claim_photo_file(order_id: str, cid: str, photo_id: str, user: dict = Depends(auth.current_user)):
+    """A claim's photo or video: videos are kept in their own list but served here too."""
     _, order = db.loaded(order_id)
     try:
-        photo = next(p for p in cases.claim(order, cid)["photos"] if p["id"] == photo_id)
+        c = cases.claim(order, cid)
+        photo = next(p for p in c["photos"] + c.get("videos", []) if p["id"] == photo_id)
     except (rules.Refused, StopIteration):
         raise HTTPException(404, "Photo not found")
     return Response(

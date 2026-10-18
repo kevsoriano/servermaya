@@ -7,6 +7,7 @@ examples. Memory is a convenience: when Memory Bank is off or does not answer, r
 Run `make memory-bank` once: it creates the bank (print the name into backend/.env as MEMORY_BANK) and writes the demo examples.
 """
 
+import logging
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
@@ -15,6 +16,7 @@ import agentplatform
 
 from core import config
 
+log = logging.getLogger(__name__)
 APP = "claim_decisions"
 DEMO_SHOP = "demo_shop"  # the shared examples every demo visitor can recall; written by setup, never by a visitor
 DEMO_TTL = "2592000s"  # 30 days: a demo visitor's decisions are kept that long, even across a demo reset
@@ -53,7 +55,7 @@ def remember(order: dict, fact: str) -> None:
     try:
         client().memory_banks.memories.create(name=config.MEMORY_BANK, fact=fact, scope=scope(order), config=tags)
     except Exception as e:
-        print(f"Memory Bank write failed: {e}")
+        log.warning("Memory Bank write failed: %r", e)
 
 
 def same_order(m, order: dict) -> bool:
@@ -77,7 +79,7 @@ def recall(order: dict, query: str) -> list[str] | None:
         with ThreadPoolExecutor(len(scopes)) as pool:  # about 3 s each from here: a demo visitor's two scopes at once
             found = [m for got in pool.map(search, scopes) for m in got if not same_order(m, order)]
     except Exception as e:
-        print(f"Memory Bank search failed: {e}")
+        log.warning("Memory Bank search failed: %r", e)
         return None
     found.sort(key=lambda m: m.distance if m.distance is not None else float("inf"))
     return [f"Decided {m.memory.update_time:%Y-%m-%d}: {m.memory.fact}" if m.memory.update_time else m.memory.fact for m in found[:TOP_K]]

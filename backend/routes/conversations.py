@@ -35,7 +35,7 @@ def conversations(user: dict = Depends(auth.current_user)):
             fields="id,updated_time,snippet,participants,messages.limit(1){from,created_time}",
         )
     except HTTPException as e:
-        print(f"Messenger thread list failed: {e.detail}")  # demo chats still load, so the app stays usable
+        log.warning("Messenger thread list failed: %s", e.detail)  # demo chats still load, so the app stays usable
         data = {}
     threads = data.get("data", [])
     seen, actions = read_marks(user), order_actions([c["id"] for c in threads])

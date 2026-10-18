@@ -1,6 +1,8 @@
 PROJECT := servermaya-ai-builder-cup
 REGION  := asia-southeast1
-RUN_SA  := 628763008062-compute@developer.gserviceaccount.com
+# The backend's own identity on Cloud Run, with only the roles it needs (runtime-sa). Not the default compute account, which has Editor.
+RUN_SA  := api-runtime@$(PROJECT).iam.gserviceaccount.com
+EVIDENCE_BUCKET := $(PROJECT)-evidence
 # 1 keeps one instance warm through judging; deploy with MIN_INSTANCES=0 afterwards to scale to zero again
 MIN_INSTANCES ?= 1
 # read from backend/.env, but sent to Cloud Run through Secret Manager instead of as plain env vars
@@ -13,7 +15,7 @@ comma := ,
 empty :=
 space := $(empty) $(empty)
 
-.PHONY: help setup dev dev-backend dev-frontend test eval memory-bank deploy deploy-backend deploy-frontend secrets messenger-webhook
+.PHONY: help setup dev dev-backend dev-frontend test eval memory-bank deploy deploy-backend deploy-frontend secrets runtime-sa messenger-webhook
 
 help:
 	@echo "make setup            install dependencies, create backend/.env"
@@ -25,6 +27,7 @@ help:
 	@echo "make deploy-backend   backend only"
 	@echo "make deploy-frontend  frontend only"
 	@echo "make secrets          copy the keys in backend/.env to Secret Manager (deploy-backend runs it)"
+	@echo "make runtime-sa       create the backend's service account and grant its roles (deploy-backend runs it)"
 	@echo "make messenger-webhook subscribe the Page to the Messenger webhook's message events (once, after it is set up in Meta)"
 
 setup: backend/.env
@@ -57,11 +60,21 @@ memory-bank: backend/.env
 deploy: deploy-backend deploy-frontend
 
 # ^;^ switches gcloud's list delimiter to ';' so the comma-separated allowlist survives
-deploy-backend: secrets
+deploy-backend: runtime-sa secrets
 	gcloud run deploy api --source backend --project $(PROJECT) --region $(REGION) \
-		--allow-unauthenticated --min-instances $(MIN_INSTANCES) \
+		--service-account $(RUN_SA) --allow-unauthenticated --min-instances $(MIN_INSTANCES) \
 		--set-env-vars "^;^$$(grep -v '^#' backend/.env | grep . | grep -v $(patsubst %,-e ^%=,$(SECRETS) $(OPTIONAL_SECRETS)) | paste -sd';' -)" \
 		--set-secrets "$$(for k in $(SECRETS) $(OPTIONAL_SECRETS); do grep -q "^$$k=." backend/.env && printf '%s=%s:latest,' $$k $$k; done | sed 's/,$$//')"
+
+# Firestore, the evidence bucket's objects, Vertex AI (Gemini, the claim agent, Memory Bank). Each secret is granted to it
+# on its own by `secrets`. Add roles/modelarmor.user here if MODEL_ARMOR_TEMPLATE is set.
+runtime-sa:
+	@gcloud iam service-accounts describe $(RUN_SA) --project $(PROJECT) >/dev/null 2>&1 || \
+		gcloud iam service-accounts create api-runtime --project $(PROJECT) --display-name "Cloud Run backend (api)"
+	@for r in roles/datastore.user roles/aiplatform.user roles/aiplatform.memoryUser; do \
+		gcloud projects add-iam-policy-binding $(PROJECT) --member serviceAccount:$(RUN_SA) --role $$r --condition None --quiet >/dev/null || exit 1; \
+	done
+	@gcloud storage buckets add-iam-policy-binding gs://$(EVIDENCE_BUCKET) --member serviceAccount:$(RUN_SA) --role roles/storage.objectUser --quiet >/dev/null
 
 # adds a new version only when the value in backend/.env changed; values are never echoed
 secrets: backend/.env

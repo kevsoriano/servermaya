@@ -399,6 +399,9 @@ def test_demo_seed_puts_a_claim_review_and_a_shaky_photo_one_click_away(monkeypa
         if m["attachments"] and not m["from_page"]
     ]
     bea = client.post(f"/api/orders/{bea['id']}/claims/from-chat", json={"type": "damage", "message_ids": said[-2:]}, headers=SELLER).json()
+    video = bea["claims"][0]["videos"][0]  # her unboxing video, served like a photo for the claim card
+    shown = client.get(f"/api/orders/{bea['id']}/claims/{bea['claims'][0]['id']}/photos/{video['id']}", headers=SELLER)
+    assert shown.status_code == 200 and shown.headers["content-type"] == "video/mp4" and len(shown.content) == video["size"]
     rise = {c["key"]: c for c in client.get("/api/patterns", headers=SELLER).json()}["rising:theme:damage_reports"]
     assert rise["numerator"] == 3 and rise["incidents"][0]["name"] == "Bea Villanueva"
     asked.clear()
