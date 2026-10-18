@@ -31,7 +31,6 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import httpx
 from google import genai
 from google.adk.models import Gemini
 from google.genai import types
@@ -1413,8 +1412,7 @@ def run_receipt(client, case: dict) -> dict:
             "response_mime_type": "application/json",
             "response_schema": gcash.Receipt,
             "temperature": 0,
-            "thinking_config": {"thinking_level": "minimal"},
-            "http_options": {"timeout": extraction.QUICK_TIMEOUT},
+            "thinking_config": {"thinking_level": "low"},
         },
     )
     seconds = time.monotonic() - start
@@ -1474,19 +1472,12 @@ def count_usage(client) -> None:
 def safely(fn, *args) -> dict:
     """One failed call fails its case, not the run. Vertex rate limits (429), cancellations (499) and server errors are retried
     with backoff; they say nothing about the model's answer. Each result carries the Gemini calls and tokens it used."""
-    lost = 0.0  # seconds spent on attempts the app would also have cut off and retried (the quick calls' timeout)
     for attempt in range(5):
         _usage.now = {"calls": 0, "in": 0, "out": 0}  # a refused (429) attempt is not billed
-        start = time.monotonic()
         try:
-            result = fn(*args)
-            return {**result, "seconds": result["seconds"] + lost, "usage": _usage.now} if "seconds" in result else {**result, "usage": _usage.now}
+            return {**fn(*args), "usage": _usage.now}
         except Exception as e:
-            if isinstance(e, httpx.TimeoutException):
-                lost += time.monotonic() - start
-            transient = isinstance(e, genai.errors.ServerError | httpx.TimeoutException) or any(
-                t in str(e) for t in ("RESOURCE_EXHAUSTED", "429", "499 CANCELLED")
-            )
+            transient = isinstance(e, genai.errors.ServerError) or any(t in str(e) for t in ("RESOURCE_EXHAUSTED", "429", "499 CANCELLED"))
             if not transient or attempt == 4:
                 return {"case": args[-1], "error": f"{type(e).__name__}: {e}"[:200]}
             time.sleep(5 * 2**attempt)

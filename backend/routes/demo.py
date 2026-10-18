@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field
 
 from core import auth, config, db
 from domain import customer_agent as agent
-from domain import extraction
 from domain import orders as rules
 from domain import receipts as gcash
 from seed import demo, samples
@@ -188,7 +187,6 @@ def write_turn(prompt: str) -> agent.Turn:
             response_schema=agent.Turn,
             temperature=0.7,
             thinking_config=types.ThinkingConfig(thinking_level="MINIMAL"),
-            http_options=types.HttpOptions(timeout=extraction.QUICK_TIMEOUT),
         ),
     )
     return agent.Turn.model_validate_json(r.text)

@@ -224,7 +224,6 @@ def write_brief(prompt: str) -> str:
             response_schema=brief.Brief,
             temperature=0,
             thinking_config=types.ThinkingConfig(thinking_level="LOW"),
-            http_options=types.HttpOptions(timeout=extraction.QUICK_TIMEOUT),
         ),
     )
     summary = brief.Brief.model_validate_json(r.text).summary.strip()

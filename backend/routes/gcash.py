@@ -15,7 +15,6 @@ from google.genai import types
 from pydantic import BaseModel, Field
 
 from core import auth, config, db
-from domain import extraction
 from domain import orders as rules
 from domain import packing as pack
 from domain import receipts as gcash
@@ -157,14 +156,13 @@ def transcribe(data: bytes, content_type: str, system: str, schema: type[BaseMod
             response = db.clients()[0].models.generate_content(
                 model=config.GEMINI_MODEL,
                 contents=["Screenshot:", types.Part.from_bytes(data=data, mime_type=content_type)],
-                # MINIMAL: reading a screenshot is transcription; code does every check
+                # LOW: gemini-3.8-flash does not accept MINIMAL; reading a screenshot is transcription, and code does every check
                 config={
                     "system_instruction": system,
                     "response_mime_type": "application/json",
                     "response_schema": schema,
                     "temperature": 0,
-                    "thinking_config": {"thinking_level": "minimal"},
-                    "http_options": {"timeout": extraction.QUICK_TIMEOUT},
+                    "thinking_config": {"thinking_level": "low"},
                 },
             )
             return schema.model_validate_json(response.text)
